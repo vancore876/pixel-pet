@@ -371,7 +371,7 @@ class NotepadWindow(QDialog):
         self.import_pdf_button = QPushButton('Choose PDF…')
         self.import_pdf_button.clicked.connect(lambda: self.import_pdf())
         pdf_row.addWidget(self.import_pdf_button)
-        pdf_hint = QLabel('Text PDFs are supported. Scanned pages need OCR first.')
+        pdf_hint = QLabel('Text PDFs up to 500 MB are supported. Scanned pages need OCR first.')
         pdf_hint.setObjectName('hint')
         pdf_hint.setWordWrap(True)
         pdf_row.addWidget(pdf_hint, 1)

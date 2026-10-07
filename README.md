@@ -121,8 +121,11 @@ In **Notepad → Sources / Import**, select a text-based PDF or enter a public
 HTTP/HTTPS webpage. Reading runs in the background with progress and Cancel.
 Review and edit the extracted text before **Save to notebook**. Long documents
 are kept as multiple sections with their source label; imports preserve your
-current writing draft. Text PDFs up to 12 MB/120 pages are supported, with a
-120,000-character text limit and a visible truncation notice. Scanned PDFs need
+current writing draft. Text PDFs up to 500 MB are supported, without the former
+120-page rejection. Imports read from disk instead of first copying the whole
+file into memory. The notebook preview retains up to 120,000 characters and
+shows a visible truncation notice; this does not save an entire large PDF.
+Large or complex documents can take longer and use more memory. Scanned PDFs need
 OCR first; encrypted PDFs need an unlocked copy. Website login pages and pages
 requiring JavaScript may not provide useful readable text.
 

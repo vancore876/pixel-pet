@@ -1,5 +1,11 @@
 # Jeffery 6.0 verification
 
+The 500 MB PDF update passed 127 desktop unit tests and the import-window GUI
+workflow. A valid synthetic PDF exactly 500 × 1024 × 1024 bytes was imported
+without a whole-file read; one byte over the limit was rejected before parsing.
+Checks also cover 121-page documents and cancellation during parser I/O with
+the file handle closed. The saved-text preview limit remains 120,000 characters.
+
 Windows memory/document/monitor update validated in the cloud workspace:
 124 desktop unit tests and seven Qt GUI workflows passed, along with runtime
 dependency checks and the desktop startup smoke test. New checks exercise

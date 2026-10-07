@@ -42,6 +42,42 @@ def create_pdf(path, texts=("Bring the order at 9 AM.",), encrypted=False):
     writer.write(path)
 
 
+def create_sparse_pdf(path, size):
+    """A valid PDF with a large unused stream and correct final xref offsets."""
+    content = b"BT /F1 12 Tf 20 240 Td (A 500 MB document.) Tj ET"
+    objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] "
+        b"/Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        b"<< /Length " + str(len(content)).encode() + b" >>\nstream\n" + content + b"\nendstream",
+    ]
+    with path.open('wb') as handle:
+        handle.write(b'%PDF-1.4\n')
+        offsets = [0]
+        for index, body in enumerate(objects, 1):
+            offsets.append(handle.tell())
+            handle.write(str(index).encode() + b' 0 obj\n' + body + b'\nendobj\n')
+        offsets.append(handle.tell())
+        handle.write(b'6 0 obj\n<< /Length 0000000000 >>\nstream\n')
+        padding_start = handle.tell()
+        end_stream = b'\nendstream\nendobj\n'
+        entries = b'0000000000 65535 f \n' + b''.join(f'{offset:010d} 00000 n \n'.encode() for offset in offsets[1:])
+        xref = b'xref\n0 7\n' + entries + b'trailer\n<< /Size 7 /Root 1 0 R >>\nstartxref\n'
+        # All offsets use ten digits, so the final trailer length is stable here.
+        xref_start = size - len(end_stream) - len(xref) - len(str(size).encode()) - len(b'\n%%EOF\n')
+        actual_xref = xref_start + len(end_stream)
+        tail = xref + str(actual_xref).encode() + b'\n%%EOF\n'
+        actual_xref = size - len(tail)
+        padding_end = actual_xref - len(end_stream)
+        handle.seek(offsets[-1] + len(b'6 0 obj\n<< /Length '))
+        handle.write(f'{padding_end - padding_start:010d}'.encode())
+        handle.seek(padding_end)
+        handle.write(end_stream + tail)
+    assert path.stat().st_size == size
+
+
 class FakeResponse:
     def __init__(self, body=b"<title>Public article</title><p>Remember the appointment.</p>",
                  url="https://example.org/article", mime="text/html", **headers):
@@ -84,14 +120,56 @@ class PDFTests(unittest.TestCase):
         with self.assertRaisesRegex(intake.IntakeError, "unlocked"):
             intake.extract_pdf(self.path)
 
-    def test_file_and_page_limits_are_checked(self):
+    def test_oversized_file_is_rejected_before_parsing(self):
         create_pdf(self.path, ("one", "two"))
-        with patch.object(intake, "MAX_PDF_PAGES", 1):
-            with self.assertRaisesRegex(intake.IntakeError, "split"):
-                intake.extract_pdf(self.path)
         with patch.object(intake, "MAX_PDF_BYTES", 16):
-            with self.assertRaisesRegex(intake.IntakeError, "smaller"):
+            with patch('pypdf.PdfReader') as reader, self.assertRaisesRegex(intake.IntakeError, "500 MB"):
                 intake.extract_pdf(self.path)
+            reader.assert_not_called()
+
+    def test_500_mb_boundary_is_accepted_without_a_whole_file_read(self):
+        create_sparse_pdf(self.path, 500 * 1024 * 1024)
+        handle = self.path.open('rb')
+
+        class ReadGuard:
+            def __getattr__(self, name): return getattr(handle, name)
+            def __enter__(self): return self
+            def __exit__(self, *args): handle.close()
+            def read(self, size=-1):
+                if size < 0 or size > 1024 * 1024:
+                    raise AssertionError('A valid large PDF must not be copied wholesale into memory.')
+                return handle.read(size)
+
+        with patch.object(Path, 'open', return_value=ReadGuard()):
+            result = intake.extract_pdf(self.path)
+        self.assertTrue(handle.closed)
+        self.assertIn('A 500 MB document.', result['text'])
+        self.assertFalse(result['truncated'])
+        with self.path.open('ab') as output:
+            output.write(b'\n')
+        with patch('pypdf.PdfReader') as reader, self.assertRaisesRegex(intake.IntakeError, '500 MB'):
+            intake.extract_pdf(self.path)
+        reader.assert_not_called()
+
+    def test_documents_over_120_pages_are_supported(self):
+        create_pdf(self.path, ('',) * 120 + ('The final appointment is Friday.',))
+        result = intake.extract_pdf(self.path)
+        self.assertEqual(result['pages'], 121)
+        self.assertIn('Page 121\nThe final appointment is Friday.', result['text'])
+
+    def test_cancel_during_parser_io_closes_the_file(self):
+        create_pdf(self.path)
+        canceled = threading.Event()
+        handle = self.path.open('rb')
+
+        def parsing(stream, **kwargs):
+            canceled.set()
+            stream.read(1)
+
+        with patch.object(Path, 'open', return_value=handle), patch('pypdf.PdfReader', side_effect=parsing):
+            with self.assertRaises(intake._Canceled):
+                intake.extract_pdf(self.path, canceled)
+        self.assertTrue(handle.closed)
 
     def test_text_limit_marks_truncation(self):
         create_pdf(self.path, ("A long list of groceries and appointments.", "More text."))

@@ -7,7 +7,6 @@ its plain-text sections. Requests use normal verified TLS and system proxy rules
 from __future__ import annotations
 
 import atexit
-import io
 import http.client
 import ipaddress
 from html.parser import HTMLParser
@@ -24,8 +23,7 @@ import zlib
 
 from PySide6.QtCore import QObject, QThread, Signal, Slot
 
-MAX_PDF_BYTES = 12 * 1024 * 1024
-MAX_PDF_PAGES = 120
+MAX_PDF_BYTES = 500 * 1024 * 1024
 MAX_WEB_BYTES = 2 * 1024 * 1024
 MAX_TEXT = 120_000
 SECTION_SIZE = 5500
@@ -45,6 +43,33 @@ class _Canceled(Exception):
 def _check_cancel(cancel):
     if cancel is not None and cancel.is_set():
         raise _Canceled()
+
+
+class _PDFStream:
+    """Keep PDF parsing file-backed and check cancellation during parser I/O."""
+
+    def __init__(self, handle, cancel):
+        self.handle, self.cancel = handle, cancel
+
+    def read(self, size=-1):
+        _check_cancel(self.cancel)
+        result = self.handle.read(size)
+        _check_cancel(self.cancel)
+        return result
+
+    def readline(self, size=-1):
+        _check_cancel(self.cancel)
+        result = self.handle.readline(size)
+        _check_cancel(self.cancel)
+        return result
+
+    def seek(self, offset, whence=0):
+        _check_cancel(self.cancel)
+        return self.handle.seek(offset, whence)
+
+    def tell(self):
+        _check_cancel(self.cancel)
+        return self.handle.tell()
 
 
 def _is_public_address(value):
@@ -102,43 +127,48 @@ def extract_pdf(path, cancel=None):
     path = Path(path)
     if path.suffix.casefold() != ".pdf":
         raise IntakeError("Choose a PDF file (.pdf).")
-    try:
-        with path.open("rb") as handle:
-            raw = handle.read(MAX_PDF_BYTES + 1)
-    except OSError:
-        raise IntakeError("The PDF could not be opened. Check that the file still exists and is readable.") from None
-    if len(raw) > MAX_PDF_BYTES:
-        raise IntakeError("Choose a PDF smaller than 12 MB, or split it into smaller documents.")
-    if not raw.startswith(b"%PDF-"):
-        raise IntakeError("This file does not appear to be a valid PDF.")
     _check_cancel(cancel)
     try:
-        reader = PdfReader(io.BytesIO(raw), strict=False)
-        if reader.is_encrypted:
-            raise IntakeError("This PDF is encrypted. Save an unlocked copy before importing it.")
-        pages = len(reader.pages)
-        if pages > MAX_PDF_PAGES:
-            raise IntakeError("This PDF has more than 120 pages. Import a shorter document or split it first.")
-        text, length, truncated = [], 0, False
-        for index, page in enumerate(reader.pages):
-            _check_cancel(cancel)
-            content = normalize_text(page.extract_text() or "")
-            if not content:
-                continue
-            section = f"Page {index + 1}\n{content}"
-            remaining = MAX_TEXT - length - (2 if text else 0)
-            if len(section) > remaining:
-                text.append(section[:max(0, remaining)])
-                truncated = True
-                break
-            text.append(section)
-            length += len(section) + (2 if len(text) > 1 else 0)
-        if not text:
-            raise IntakeError("No selectable text was found. This may be a scanned PDF; run OCR and import the text-enabled copy.")
-        metadata = reader.metadata
-        title = str(metadata.title) if metadata and metadata.title else path.stem
+        handle = path.open("rb")
+    except OSError:
+        raise IntakeError("The PDF could not be opened. Check that the file still exists and is readable.") from None
+    try:
+        with handle:
+            stream = _PDFStream(handle, cancel)
+            size = stream.seek(0, 2)
+            if size > MAX_PDF_BYTES:
+                raise IntakeError("Choose a PDF up to 500 MB, or split it into smaller documents.")
+            stream.seek(0)
+            if stream.read(5) != b"%PDF-":
+                raise IntakeError("This file does not appear to be a valid PDF.")
+            stream.seek(0)
+            reader = PdfReader(stream, strict=False)
+            if reader.is_encrypted:
+                raise IntakeError("This PDF is encrypted. Save an unlocked copy before importing it.")
+            pages = len(reader.pages)
+            text, length, truncated = [], 0, False
+            for index, page in enumerate(reader.pages):
+                _check_cancel(cancel)
+                content = normalize_text(page.extract_text() or "")
+                _check_cancel(cancel)
+                if not content:
+                    continue
+                section = f"Page {index + 1}\n{content}"
+                remaining = MAX_TEXT - length - (2 if text else 0)
+                if len(section) > remaining:
+                    text.append(section[:max(0, remaining)])
+                    truncated = True
+                    break
+                text.append(section)
+                length += len(section) + (2 if len(text) > 1 else 0)
+            if not text:
+                raise IntakeError("No selectable text was found. This may be a scanned PDF; run OCR and import the text-enabled copy.")
+            metadata = reader.metadata
+            title = str(metadata.title) if metadata and metadata.title else path.stem
     except IntakeError:
         raise
+    except MemoryError:
+        raise IntakeError("There is not enough memory to read this PDF. Close other apps or split the document and try again.") from None
     except (PdfReadError, ValueError, TypeError, KeyError, OSError, OverflowError, RecursionError):
         raise IntakeError("The PDF could not be read. Try opening and exporting it as a new PDF.") from None
     return _result("pdf", title, "\n\n".join(text), truncated=truncated,
