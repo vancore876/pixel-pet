@@ -1,5 +1,17 @@
 # Jeffery 6.0 verification
 
+Windows memory/document/monitor update validated in the cloud workspace:
+124 desktop unit tests and seven Qt GUI workflows passed, along with runtime
+dependency checks and the desktop startup smoke test. New checks exercise
+memory persistence, preference conflicts and older-reply rejection, sharing
+controls, full-document recall, editable PDF/web imports, atomic save failures,
+cancel/close behavior, and the medieval monitor's real readings and animation
+lifecycle. Public Node.js and GitHub webpage extraction passed with verified
+TLS and source URLs. Groq replies were scripted; a live Groq key is still needed
+for online answers. DuckDuckGo search was blocked by the cloud proxy until its
+saved network additions are applied. Windows native integration and EXE builds
+still need native validation. Mobile behavior was unchanged in this update.
+
 Validated in the development workspace on 2026-10-07.
 
 | Check | Result |

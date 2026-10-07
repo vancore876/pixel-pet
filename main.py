@@ -29,6 +29,9 @@ from ai_brain import AutonomousBrain
 from smart_notes import SmartNoteAssistant
 from business_voice import BusinessVoice
 from characters import ANIMATION_STATES
+from memory import MemoryStore
+from memory_window import MemoryWindow
+from memory_learning import MemoryLearner
 
 
 class BuddyApp(QObject):
@@ -47,6 +50,7 @@ class BuddyApp(QObject):
         self.focus = FocusSession(self)
         self.stickies = {}
         self.notes_store = NoteStore(self.settings.path.parent / "notes.json")
+        self.memory_store = MemoryStore(self.settings.path.parent / "memory.json")
         self.note_service = NoteService(self.notes_store, self.settings, lambda: not self.note_popup.isVisible(), self)
         self.note_popup = ReminderPopup(self.settings)
         self.notepad = NotepadWindow(self.note_service, self.settings)
@@ -57,8 +61,21 @@ class BuddyApp(QObject):
         self.desktop = RealDesktopPlay(self.pet, self.settings, self)
         self.desktop.leave_other = lambda: self.folders.emerge(silent=True)
         self.credentials = CredentialStore()
+        self.memory_window = MemoryWindow(self.memory_store, self.settings)
+        self.memory_learner = MemoryLearner(self.memory_store, self.settings, self.credentials, self)
         self.latest_snapshot = None
-        self.chat = ChatWindow(self.settings, self.credentials, self.ai_context, self.run_buddy_action)
+        self.chat = ChatWindow(self.settings, self.credentials, self.ai_context, self.run_buddy_action,
+            memory_store=self.memory_store, notebook_store=self.notes_store)
+        self.chat.user_message.connect(self.memory_learner.observe)
+        self.chat.notepad_requested.connect(self.show_notepad)
+        self.chat.memory_requested.connect(self.show_memory)
+        self.chat.document_ready.connect(self.review_web_source)
+        self.memory_learner.changed.connect(self.memory_window.refresh)
+        self.memory_learner.status_changed.connect(self.chat.memory_hint.setText)
+        self.memory_window.preferences_changed.connect(self.apply_ai_preferences)
+        self.memory_window.changed.connect(self.memory_learner.reset)
+        self.notepad.chat_requested.connect(self.show_chat)
+        self.chat.connection_changed.connect(self.memory_learner.reset)
         self.chat.preferences_changed.connect(self.apply_ai_preferences)
         self.chat.reply_ready.connect(self.pet.say)
         self.chat.client.busy_changed.connect(lambda busy: self.pet.perform("THINK" if busy else "TALK", 3))
@@ -70,6 +87,7 @@ class BuddyApp(QObject):
         self.chat.connection_changed.connect(self.brain.reset)
         self.chat.behavior_requested.connect(self.brain.request)
         self.smart_notes = SmartNoteAssistant(self.note_service, self.settings, self.credentials, self)
+        self.smart_notes.memory_context = lambda query: self.memory_store.context(query)["memories"] if self.settings["ai_share_memory"] else []
         self.smart_notes.status_changed.connect(self.notepad.ai_status.setText)
         self.smart_notes.guidance_ready.connect(self.smart_note_ready)
         self.chat.connection_changed.connect(self.smart_notes.reset)
@@ -96,6 +114,7 @@ class BuddyApp(QObject):
         self.notepad.open_text_requested.connect(self.open_linked_notepad)
         self.notepad.reading.connect(lambda: self.pet.perform("READ", 3))
         self.note_service.changed.connect(self.sync_stickies)
+        self.note_service.changed.connect(self.sync_task_memory)
         self.note_service.notification.connect(self.deliver_note)
         self.note_service.error.connect(self.note_error)
         self.note_popup.open_requested.connect(self.open_note)
@@ -144,6 +163,7 @@ class BuddyApp(QObject):
         if self.notes_store.warning:
             self.note_error(self.notes_store.warning)
         self.sync_stickies()
+        self.sync_task_memory()
         self.note_service.start()
 
     def build_menu(self, menu):
@@ -271,6 +291,9 @@ class BuddyApp(QObject):
         self.note_popup.configure()
         self.launcher_window.configure()
         self.chat.configure()
+        self.memory_window.configure()
+        if not self.settings["memory_enabled"] or not self.settings["memory_ai"] or not self.settings["ai_share_memory"]:
+            self.memory_learner.reset()
         self.letters.configure()
         self.folders.refresh()
         self.desktop.configure()
@@ -312,6 +335,9 @@ class BuddyApp(QObject):
             self.smart_notes.configure()
             self.voice.configure()
             self.notepad.configure()
+            self.memory_window.configure()
+            if any(key in changes for key in ("memory_enabled", "memory_ai", "ai_share_memory")):
+                self.memory_learner.reset()
             with QSignalBlocker(self.chat.notes):
                 self.chat.notes.setChecked(self.settings['ai_share_notes'])
             current = self.notes_store.find(self.note_popup.identifier)
@@ -346,7 +372,36 @@ class BuddyApp(QObject):
                 "note_saved_at": datetime.fromtimestamp(n['updated']).astimezone().isoformat(),
                 "next_reminder": datetime.fromtimestamp(n['next_due']).astimezone().isoformat() if n['next_due'] else None,
                 "next_step": current_guidance(n).get('next_step', '')} for n in ordered[:20]]
+        if self.settings["ai_share_memory"]:
+            result["user_memory"] = self.memory_store.context()["memories"]
         return result
+
+    def show_memory(self):
+        self.memory_window.refresh()
+        self.memory_window.show()
+        self.memory_window.raise_()
+        self.memory_window.activateWindow()
+
+    def review_web_source(self, result):
+        self.show_notepad()
+        self.notepad.review_document(result)
+
+    def sync_task_memory(self):
+        daily = {"task:" + note["id"]: note for note in self.notes_store.notes
+                 if not note["done"] and note["repeat_minutes"] == 1440 and not note.get("document_source") and not note.get("source")}
+        try:
+            for entry in self.memory_store.entries():
+                source = entry["source"]
+                if source.startswith("task:") and (source not in daily or entry["text"] != daily[source]["title"]):
+                    self.memory_store.forget(entry["id"])
+            known = {entry["source"] for entry in self.memory_store.entries()}
+            for source, note in daily.items():
+                if source not in known and self.settings["memory_enabled"]:
+                    # Task cleanup must never delete an equivalent user-owned routine.
+                    self.memory_store.remember("routine", note["title"], source=source, preserve_existing=True)
+            self.memory_window.refresh()
+        except (OSError, ValueError) as exc:
+            self.chat.memory_hint.setText("Could not save task memory: " + str(exc))
 
     def show_chat(self):
         self.chat.show()
@@ -689,6 +744,11 @@ class BuddyApp(QObject):
         if self.shutting_down:
             return
         self.shutting_down = True
+        self.overlay.stop_animation()
+        self.notepad.shutdown()
+        self.chat.shutdown()
+        self.memory_learner.stop()
+        self.memory_window.hide()
         self.pet.timer.stop()
         self.chat.client.cancel()
         self.chat.transcript.stop()

@@ -10,11 +10,12 @@ from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (QApplication, QDialog, QWidget, QVBoxLayout, QHBoxLayout,
     QFormLayout, QSplitter, QListWidget, QListWidgetItem, QLabel, QLineEdit,
     QPlainTextEdit, QPushButton, QCheckBox, QSpinBox, QDateTimeEdit, QFileDialog,
-    QMessageBox, QComboBox, QTabWidget, QTableWidget, QTableWidgetItem, QAbstractItemView, QHeaderView, QScrollArea)
+    QMessageBox, QComboBox, QTabWidget, QTableWidget, QTableWidgetItem, QAbstractItemView, QHeaderView, QScrollArea, QProgressBar)
 from config import clamp_position
 from themes import palette
 from notes import current_guidance, ORDER_STATUSES, business_summary, note_search_text
 from sliding_text import SlidingText
+from content_intake import IntakeService
 
 
 def reminder_time(note):
@@ -66,6 +67,7 @@ class NotepadWindow(QDialog):
     ai_preferences_requested = Signal(object)
     ai_requested = Signal(str)
     connection_requested = Signal()
+    chat_requested = Signal()
 
     def __init__(self, service, settings):
         super().__init__()
@@ -73,6 +75,13 @@ class NotepadWindow(QDialog):
         self.editing_id = None
         self.loading = False
         self.dirty = False
+        self.import_result = None
+        self.import_saved = False
+        self.import_loading = False
+        self.intake = IntakeService(self)
+        self.intake.completed.connect(self.imported)
+        self.intake.failed.connect(self.import_failed)
+        self.intake.busy_changed.connect(self.set_import_busy)
         self.setWindowTitle("Jeffery's Notepad")
         self.resize(880, min(700, QApplication.primaryScreen().availableGeometry().height() - 60))
         self.setMinimumSize(680, 540)
@@ -82,6 +91,9 @@ class NotepadWindow(QDialog):
         title = QLabel("Jeffery's Notepad")
         title.setStyleSheet("font-size: 21px; font-weight: 600;")
         header.addWidget(title, 1)
+        self.talk_button = QPushButton("Talk to Jeffery")
+        self.talk_button.clicked.connect(self.chat_requested.emit)
+        header.addWidget(self.talk_button)
         new = QPushButton("+ New note")
         new.clicked.connect(self.new_note)
         header.addWidget(new)
@@ -141,6 +153,13 @@ class NotepadWindow(QDialog):
         self.body.setPlaceholderText("What do you need to remember? Include any date, time or useful details.")
         self.body.setMinimumHeight(100)
         form.addWidget(self.title)
+        self.document_origin = QLabel('')
+        self.document_origin.setObjectName('hint')
+        self.document_origin.setTextFormat(Qt.PlainText)
+        self.document_origin.setWordWrap(True)
+        self.document_origin.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.document_origin.hide()
+        form.addWidget(self.document_origin)
         form.addWidget(self.body, 1)
         schedule = QFormLayout()
         self.repeat = QSpinBox()
@@ -292,6 +311,7 @@ class NotepadWindow(QDialog):
         business_scroll.setWidgetResizable(True)
         business_scroll.setWidget(business_page)
         self.editor_tabs.addTab(business_scroll, 'Checklist and order')
+        self.build_import_tab()
         self.kind.currentIndexChanged.connect(self.kind_changed)
         self.kind_changed()
         splitter.addWidget(editor)
@@ -326,7 +346,7 @@ class NotepadWindow(QDialog):
         self.status.setWordWrap(True)
         layout.addWidget(self.status)
         self.shortcuts = [QShortcut(QKeySequence.Save, self), QShortcut(QKeySequence.New, self)]
-        self.shortcuts[0].activated.connect(self.save_note)
+        self.shortcuts[0].activated.connect(self.save_current_tab)
         self.shortcuts[1].activated.connect(self.new_note)
         for signal in (self.title.textChanged, self.body.textChanged, self.repeat.valueChanged,
                        self.scheduled.toggled, self.due.dateTimeChanged, self.kind.currentIndexChanged,
@@ -338,6 +358,191 @@ class NotepadWindow(QDialog):
         self.configure()
         self.refresh()
         self.update_buttons()
+
+    def build_import_tab(self):
+        page = QWidget()
+        page.setObjectName('notePage')
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(12, 14, 12, 12)
+        heading = QLabel('Read a PDF or webpage, review its text, then save it for Jeffery.')
+        heading.setWordWrap(True)
+        layout.addWidget(heading)
+        pdf_row = QHBoxLayout()
+        self.import_pdf_button = QPushButton('Choose PDF…')
+        self.import_pdf_button.clicked.connect(lambda: self.import_pdf())
+        pdf_row.addWidget(self.import_pdf_button)
+        pdf_hint = QLabel('Text PDFs are supported. Scanned pages need OCR first.')
+        pdf_hint.setObjectName('hint')
+        pdf_hint.setWordWrap(True)
+        pdf_row.addWidget(pdf_hint, 1)
+        layout.addLayout(pdf_row)
+        web_row = QHBoxLayout()
+        self.web_address = QLineEdit()
+        self.web_address.setPlaceholderText('https://example.com/article')
+        self.web_address.setMaxLength(2048)
+        self.web_address.returnPressed.connect(self.read_webpage)
+        self.read_web_button = QPushButton('Read webpage')
+        self.read_web_button.clicked.connect(self.read_webpage)
+        web_row.addWidget(self.web_address, 1)
+        web_row.addWidget(self.read_web_button)
+        layout.addLayout(web_row)
+        progress_row = QHBoxLayout()
+        self.import_progress = QProgressBar()
+        self.import_progress.setRange(0, 0)
+        self.import_progress.setTextVisible(False)
+        self.import_progress.hide()
+        self.cancel_import_button = QPushButton('Cancel')
+        self.cancel_import_button.clicked.connect(self.cancel_import)
+        self.cancel_import_button.hide()
+        progress_row.addWidget(self.import_progress, 1)
+        progress_row.addWidget(self.cancel_import_button)
+        layout.addLayout(progress_row)
+        self.import_status = QLabel('Nothing imported yet. Reading stays on your computer until you save and share notes with Groq.')
+        self.import_status.setObjectName('hint')
+        self.import_status.setTextFormat(Qt.PlainText)
+        self.import_status.setWordWrap(True)
+        layout.addWidget(self.import_status)
+        self.import_title = QLineEdit()
+        self.import_title.setMaxLength(100)
+        self.import_title.setPlaceholderText('Title for the saved document')
+        layout.addWidget(self.import_title)
+        self.import_review = QPlainTextEdit()
+        self.import_review.setPlaceholderText('Extracted text appears here. Edit or remove anything before saving.')
+        self.import_review.setMinimumHeight(140)
+        self.import_review.textChanged.connect(self.update_import_save)
+        layout.addWidget(self.import_review, 1)
+        self.import_sources = QLabel('')
+        self.import_sources.setObjectName('hint')
+        self.import_sources.setTextFormat(Qt.PlainText)
+        self.import_sources.setWordWrap(True)
+        self.import_sources.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        layout.addWidget(self.import_sources)
+        self.save_import_button = QPushButton('Save to notebook')
+        self.save_import_button.setObjectName('primary')
+        self.save_import_button.setEnabled(False)
+        self.save_import_button.clicked.connect(self.save_import)
+        layout.addWidget(self.save_import_button)
+        reminder_hint = QLabel('Imports have timed reminders off. Open a saved section to schedule a reminder or review Jeffery’s advice. Groq uses saved notes when smarter reminders is enabled.')
+        reminder_hint.setObjectName('hint')
+        reminder_hint.setWordWrap(True)
+        layout.addWidget(reminder_hint)
+        self.editor_tabs.addTab(page, 'Sources / Import')
+
+    def set_import_busy(self, busy, status=''):
+        self.import_loading = busy
+        self.import_pdf_button.setEnabled(not busy)
+        self.read_web_button.setEnabled(not busy)
+        self.web_address.setEnabled(not busy)
+        self.import_review.setEnabled(not busy)
+        self.import_title.setEnabled(not busy)
+        self.import_progress.setVisible(busy)
+        self.cancel_import_button.setVisible(busy)
+        if status:
+            self.import_status.setText(status)
+        self.update_import_save()
+
+    def update_import_save(self):
+        self.save_import_button.setEnabled(bool(self.import_result and not self.import_saved and
+            not self.import_loading and not self.intake.busy and self.import_review.toPlainText().strip()))
+
+    def may_replace_import(self):
+        if not self.import_result or self.import_saved:
+            return True
+        return QMessageBox.question(self, 'Unsaved import',
+            'Replace the current document preview? It has not been saved to your notebook.',
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No) == QMessageBox.Yes
+
+    def import_pdf(self, path=None):
+        if self.intake.busy:
+            return
+        if path is None:
+            path, _ = QFileDialog.getOpenFileName(self, 'Read a PDF', '', 'PDF documents (*.pdf)')
+        if not path or not self.may_replace_import():
+            return
+        self.set_import_busy(True, 'Reading PDF… You can cancel while Jeffery extracts its text.')
+        try:
+            if not self.intake.import_pdf(str(path)):
+                self.set_import_busy(False, 'Reading could not start. Try again when the current import finishes.')
+        except (OSError, ValueError) as exc:
+            self.import_failed(str(exc))
+
+    def read_webpage(self):
+        if self.intake.busy:
+            return
+        address = self.web_address.text().strip()
+        if not address:
+            self.import_status.setText('Enter an http:// or https:// webpage address.')
+            return
+        if not self.may_replace_import():
+            return
+        self.set_import_busy(True, 'Reading webpage… Review the extracted text before saving.')
+        try:
+            if not self.intake.fetch_url(address):
+                self.set_import_busy(False, 'Reading could not start. Try again when the current import finishes.')
+        except (OSError, ValueError) as exc:
+            self.import_failed(str(exc))
+
+    def imported(self, result):
+        if not isinstance(result, dict) or not isinstance(result.get('text'), str) or not result['text'].strip():
+            self.import_failed('No readable text was found. Your notebook was left unchanged.')
+            return
+        self.import_result = result
+        self.import_saved = False
+        self.import_title.setText(str(result.get('title') or 'Imported document')[:100])
+        self.import_review.setPlainText(result['text'])
+        sources = result.get('sources') or []
+        self.import_sources.setText('\n'.join(str(source.get('url') or source.get('title') or '')
+            for source in sources[:10] if isinstance(source, dict)))
+        warning = ' Only part of the document was extracted; review the included text.' if result.get('truncated') else ''
+        self.set_import_busy(False, 'Ready to review. Nothing has been added to your notebook yet.' + warning)
+
+    def review_document(self, result):
+        """Accept a source read by chat without replacing an unsaved preview."""
+        if not self.may_replace_import():
+            return False
+        if self.intake.busy:
+            self.cancel_import()
+        self.imported(result)
+        self.editor_tabs.setCurrentIndex(3)
+        return True
+
+    def import_failed(self, message):
+        self.set_import_busy(False, 'Could not read the source: ' + str(message))
+
+    def cancel_import(self):
+        self.intake.cancel()
+        self.set_import_busy(False, 'Reading cancelled. Your notebook was left unchanged.')
+
+    def save_import(self):
+        if not self.import_result or self.import_saved or self.intake.busy:
+            return False
+        text = self.import_review.toPlainText().strip()
+        title = self.import_title.text().strip() or 'Imported document'
+        result = self.import_result
+        # Keep original page/section titles when the review text is unchanged.
+        sections = result.get('sections') if (text == result['text'].strip() and
+            title == str(result.get('title') or 'Imported document')[:100]) else None
+        if not isinstance(sections, list) or not sections:
+            sections = [{'title': title, 'body': text}]
+        source = result.get('url') or str(result.get('filename') or result.get('title') or title)
+        try:
+            added = self.service.add_documents(sections, source)
+        except (OSError, ValueError) as exc:
+            self.import_status.setText('Nothing was saved: ' + str(exc))
+            return False
+        self.import_saved = True
+        self.update_import_save()
+        self.import_status.setText(f'Saved {len(added)} document section(s). Timed reminders are off until you choose a schedule.')
+        self.status.setText('Document saved. Your current note or writing draft is unchanged.')
+        return True
+
+    def save_current_tab(self):
+        if self.editor_tabs.currentIndex() == 3:
+            return self.save_import()
+        return self.save_note()
+
+    def shutdown(self):
+        self.intake.shutdown()
 
     def configure(self):
         self.setStyleSheet(notes_style(self.settings))
@@ -471,6 +676,9 @@ class NotepadWindow(QDialog):
 
     def refresh_advice(self):
         note = self.service.store.find(self.editing_id)
+        source = note.get('document_source', '') if note else ''
+        self.document_origin.setText('Document source: ' + source if source else '')
+        self.document_origin.setVisible(bool(source))
         guidance = current_guidance(note) if note else {}
         self.refresh_ai.setEnabled(bool(note and not note["done"] and not self.dirty and self.settings["ai_share_notes"]))
         self.use_time.setVisible(bool(guidance.get("suggested_due") and guidance["suggested_due"] > time.time()))

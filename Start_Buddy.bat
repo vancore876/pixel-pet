@@ -9,12 +9,8 @@ if not exist ".venv\Scripts\python.exe" (
         if errorlevel 1 goto :no_python
     )
 )
-if not exist ".venv\ready.txt" (
-    echo Installing the two app dependencies. Internet is needed on first run.
-    ".venv\Scripts\python.exe" -m pip install -r requirements.txt
-    if errorlevel 1 goto :install_error
-    echo ready>".venv\ready.txt"
-)
+".venv\Scripts\python.exe" runtime_setup.py
+if errorlevel 1 goto :install_error
 start "" ".venv\Scripts\pythonw.exe" "%~dp0main.py"
 exit /b 0
 :no_python

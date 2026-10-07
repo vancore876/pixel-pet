@@ -13,8 +13,9 @@ play remain available.
 2. Run **Start_Buddy.bat**. Python 3.11 or newer, 64-bit, is needed.
 3. Right-click Jeffery to open his menu.
 
-The launcher installs PySide6 and psutil into its own virtual environment on the
-first run. Python 3.14 is supported by the pinned PySide6 6.11.2 dependency.
+The launcher installs PySide6, psutil and pypdf into its own virtual environment
+on the first run, and refreshes missing or changed dependencies after updates.
+Python 3.14 is supported by the pinned PySide6 6.11.2 dependency.
 No dedicated GPU or locally downloaded AI model is needed.
 
 To upgrade: exit the old copy, extract this one into a new folder, and copy your
@@ -57,8 +58,16 @@ and generated build outputs are excluded from Git.
 
 ## What changed
 
+The new memory, PDF/web imports, and medieval monitor features below are for
+the Windows desktop app. The mobile companion keeps its existing workflow.
+
 | Upgrade | How to use it |
 | --- | --- |
+| Preferences and daily-task memory | Talk to Jeffery → Memory; tell him "I like mint tea" or "Remember that my birthday is June 6" |
+| Notebook recall in chat | Talk to Jeffery → Connection → Use my saved notes; completed notes and document excerpts can also be recalled |
+| PDF and website references | Notepad → Sources / Import → Choose PDF or enter a public webpage → review → Save to notebook |
+| Web search and source-grounded replies | Talk to Jeffery → Web sources → Read / search; enable Use web sources for my next reply |
+| Animated medieval system monitor | Settings → Overlay → Monitor style → Medieval; choose Classic for the previous look |
 | Varied Groq greetings and interaction remarks | Talk to Jeffery → Connection → Use Groq for varied greetings and interactions |
 | Business-minded personality | Connection → Business name and Business-minded greetings and advice |
 | Customer orders with preparation progress | Notepad → + Order → Checklist and order |
@@ -83,6 +92,72 @@ and generated build outputs are excluded from Git.
 
 All existing monitor, notes, sticky notes, launcher, focus timer, themes, mouse
 play, character options, and parachute features remain available.
+
+## Memory, documents, and browsing on Windows
+
+Jeffery stores preferences separately in `data/memory.json` beside his notebook,
+or in the existing per-user data fallback when that folder is read-only. Groq
+helps identify preferences; it does not host the memory or train a personal
+model. Direct likes/dislikes, explicit "remember" statements, and personal
+daily routines can be learned locally without a key. Saved daily tasks are
+connected to memory and are removed from current routines when completed or
+deleted. Updated preferences replace conflicting older ones.
+
+Open **Talk to Jeffery → Memory** to inspect, add, edit, search, forget, or clear
+memories. Its three controls separately govern automatic learning, optional
+Groq enrichment, and whether preferences are included in Groq replies. Turning
+learning off stops collecting new memories; turn sharing off to keep saved
+preferences out of Groq. Imported documents are references, not statements of
+your likes/dislikes. API keys and credential-like input are excluded from
+preference memory. Conversation history itself stays in the current session.
+
+The Chat **Notepad** shortcut and notebook **Talk to Jeffery** button connect
+the two windows. With saved-note sharing enabled, chat searches the full saved
+notebook for relevant excerpts, including completed notes and facts near the
+end of imported documents. It reads only saved notes, not an unsaved editor
+draft or arbitrary open files on your computer.
+
+In **Notepad → Sources / Import**, select a text-based PDF or enter a public
+HTTP/HTTPS webpage. Reading runs in the background with progress and Cancel.
+Review and edit the extracted text before **Save to notebook**. Long documents
+are kept as multiple sections with their source label; imports preserve your
+current writing draft. Text PDFs up to 12 MB/120 pages are supported, with a
+120,000-character text limit and a visible truncation notice. Scanned PDFs need
+OCR first; encrypted PDFs need an unlocked copy. Website login pages and pages
+requiring JavaScript may not provide useful readable text.
+
+Imported sections start with timed reminders off. Open a saved section, review
+**Jeffery's advice**, and use the existing scheduling controls to choose when
+you want a reminder. Groq can suggest dates and useful next steps, but does not
+silently schedule them. Background advice and notebook chat require the
+existing saved-note sharing control.
+
+**Talk to Jeffery → Web sources** accepts a website address or search topic.
+Enable **Use web sources for my next reply** to fetch information before an
+answer; with an empty address box, Jeffery searches for your current question.
+Search uses DuckDuckGo snippets and source links. Choose **Read selected page**
+to read an actual result, and **Review in Notepad** to keep useful information.
+Replies are prompted to cite supplied URLs and distinguish snippets from full
+pages. Pages are fetched only on request, with verified HTTPS, bounded reads,
+and cancellation. Source text is treated as reference data, not instructions.
+Chat and advice need your working Groq key; PDF extraction and webpage reading
+work without one. The cloud's restricted network must allow Groq/search hosts
+and any website you choose; this is separate from ordinary Windows networking.
+
+The compact monitor defaults to parchment readings, a brass/wood frame, and a
+small torch animated using real CPU activity. It retains CPU/RAM/disk/network
+labels and graphs. Quiet mode, low power, and hiding the monitor stop the flame
+animation. **Settings → Overlay → Monitor style → Classic** restores the
+previous appearance. Chat now scrolls new lines smoothly and resumes unfinished
+reply animations when reopened.
+
+Screenshots: [Memory](preview/memory.png), [notebook imports](preview/pdf-import.png),
+and [medieval monitor](preview/medieval-monitor.png). Preview notes and replies
+are temporary test examples.
+
+To update an existing Windows checkout, exit Jeffery, run `git pull`, and run
+`Start_Buddy.bat` again. The launcher refreshes the required dependency versions
+while preserving your local notebook and memory files.
 
 ## Business orders and varied greetings
 

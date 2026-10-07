@@ -86,6 +86,7 @@ class SmartNoteAssistant(QObject):
         self.failures = 0
         self.next_request = 0
         self.status = ""
+        self.memory_context = None
         self.timer = QTimer(self)
         self.timer.setInterval(1000)
         self.timer.timeout.connect(self.pump)
@@ -178,7 +179,15 @@ class SmartNoteAssistant(QObject):
             if note and not note["done"] and (force or not current_guidance(note)):
                 self.pending = {"id": identifier, "fingerprint": note_fingerprint(note)}
                 self.set_status("Groq is reading your saved note…")
-                accepted = self.client.send(self.settings["ai_model"], note_prompt(note, occasion=self.occasions.pop(identifier, 'saved')), tools=False, json_mode=True)
+                messages = note_prompt(note, occasion=self.occasions.pop(identifier, 'saved'))
+                if self.memory_context:
+                    memories = self.memory_context(note["title"])
+                    if memories:
+                        messages[0]["content"] += " Use supplied user_memory preferences for helpful phrasing and next steps. Never change the user's dates or assume missing facts."
+                        payload = json.loads(messages[1]["content"])
+                        payload["user_memory"] = memories
+                        messages[1]["content"] = json.dumps(payload, ensure_ascii=False)
+                accepted = self.client.send(self.settings["ai_model"], messages, tools=False, json_mode=True)
                 if not accepted and self.pending:
                     self.pending = None
                     self.queue[identifier] = force

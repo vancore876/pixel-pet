@@ -13,6 +13,8 @@ import uuid
 from PySide6.QtCore import QObject, QTimer, Signal, QFileSystemWatcher
 
 MAX_NOTES = 2000
+MAX_DOCUMENT_NOTES = 200
+MAX_DOCUMENT_CHARACTERS = 500000
 ORDER_STATUSES = ('new', 'preparing', 'ready', 'delivered', 'cancelled')
 BUSINESS_FIELDS = ('kind', 'customer', 'contact', 'order_ref', 'order_status', 'order_due', 'checklist')
 
@@ -173,6 +175,7 @@ class NoteStore:
                 "done": done, "pinned": data.get("pinned") is True,
                 "pin_position": pos, "unannounced": data.get("unannounced") is True,
                 "source": clean_text(data.get("source"), 4096),
+                "document_source": clean_text(data.get("document_source"), 300),
                 "ai_guidance": validate_guidance(data.get("ai_guidance")),
                 "kind": kind, "customer": clean_text(data.get('customer'), 100), 'contact': clean_text(data.get('contact'), 100),
                 'order_ref': clean_text(data.get('order_ref'), 80), 'order_status': status, 'order_due': timestamp('order_due'),
@@ -218,6 +221,51 @@ class NoteStore:
         def change():
             self.notes.append(note)
             return note
+        return self.transaction(change)
+
+    def add_documents(self, sections, source_label="", now=None):
+        """Save a reviewed import in one write, without creating timed reminders.
+
+        Document provenance is separate from the watched text-file source. Long
+        sections become separate notes rather than losing text to validation.
+        """
+        if not isinstance(sections, list) or not sections or len(sections) > MAX_DOCUMENT_NOTES:
+            raise ValueError("Import from 1 to 200 document sections at a time.")
+        now = time.time() if now is None else now
+        label = clean_text(source_label, 300)
+        # Local imports identify the document, never its private directory.
+        if label and not label.lower().startswith(("https://", "http://")):
+            label = label.replace("\\", "/").rsplit("/", 1)[-1]
+        prepared = []
+        characters = 0
+        for section in sections:
+            if not isinstance(section, dict) or not isinstance(section.get("body"), str):
+                raise ValueError("The document contains an invalid section. Nothing was saved.")
+            body = section["body"].strip()
+            if not body:
+                continue
+            characters += len(body)
+            if characters > MAX_DOCUMENT_CHARACTERS:
+                raise ValueError("Import up to 500,000 characters at a time. Review a smaller selection.")
+            title = clean_text(section.get("title"), 100) or "Imported document"
+            parts = [body[start:start + 10000] for start in range(0, len(body), 10000)]
+            for index, part in enumerate(parts, 1):
+                suffix = f" · part {index}" if len(parts) > 1 else ""
+                prepared.append((title[:100 - len(suffix)] + suffix, part))
+                if len(prepared) > MAX_DOCUMENT_NOTES:
+                    raise ValueError("Import up to 200 notes at a time. Review a smaller selection.")
+        if not prepared:
+            raise ValueError("The reviewed document has no text to save.")
+        if len(self.notes) + len(prepared) > MAX_NOTES:
+            raise ValueError("Your notebook is full. Nothing from this import was saved.")
+        def change():
+            added = []
+            for title, body in prepared:
+                note = self.new_note(title, body, 0, None, now,
+                                     details={"document_source": label, "unannounced": False})
+                self.notes.append(note)
+                added.append(note)
+            return added
         return self.transaction(change)
 
     def edit(self, identifier, title, body, repeat, due=None, now=None, details=None):
@@ -450,6 +498,11 @@ class NoteService(QObject):
         note = self.store.edit(identifier, title, body, repeat, due, details=details) if identifier else self.store.add(title, body, repeat, due, details=details)
         self.changed.emit(note["id"])
         return note
+
+    def add_documents(self, sections, source_label=""):
+        notes = self.store.add_documents(sections, source_label)
+        self.changed.emit("")
+        return notes
 
     def modify(self, identifier, **changes):
         note = self.store.modify(identifier, **changes)

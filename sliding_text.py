@@ -163,6 +163,9 @@ class SlideTranscript(QScrollArea):
         self.reflow_timer = QTimer(self)
         self.reflow_timer.setSingleShot(True)
         self.reflow_timer.timeout.connect(self.reflow)
+        self.scroll_animation = QPropertyAnimation(self.verticalScrollBar(), b"value", self)
+        self.scroll_animation.setDuration(160)
+        self.scroll_animation.setEasingCurve(QEasingCurve.OutCubic)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -204,12 +207,26 @@ class SlideTranscript(QScrollArea):
     def scroll_if_reading_latest(self):
         bar = self.verticalScrollBar()
         if bar.maximum() - bar.value() < 100:
-            QTimer.singleShot(0, lambda: bar.setValue(bar.maximum()))
+            QTimer.singleShot(0, self.scroll_latest)
+
+    def scroll_latest(self):
+        bar = self.verticalScrollBar()
+        if bar.maximum() - bar.value() < 100:
+            self.scroll_animation.stop()
+            self.scroll_animation.setStartValue(bar.value())
+            self.scroll_animation.setEndValue(bar.maximum())
+            self.scroll_animation.start()
 
     def toPlainText(self):
         return "\n\n".join(self.messages)
 
+    def resume(self):
+        for body in self.bodies:
+            if body.cursor < len(body.lines):
+                body.timer.start(body.interval)
+
     def clear(self):
+        self.scroll_animation.stop()
         for body in self.bodies:
             body.stop()
         for card in self.cards:
@@ -217,6 +234,7 @@ class SlideTranscript(QScrollArea):
         self.messages, self.cards, self.bodies = [], [], []
 
     def stop(self):
+        self.scroll_animation.stop()
         self.reflow_timer.stop()
         for body in self.bodies:
             body.stop()

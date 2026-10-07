@@ -13,3 +13,10 @@ show the actual Qt customer/order/checklist UI with temporary customer data
 and scripted Groq replies. Mobile previews show the running Expo web app at a
 phone-size viewport. They verify the implemented layout and notebook flow;
 they do not demonstrate native phone notification delivery or a live Groq key.
+
+Windows memory/PDF update: memory.png and memory-chat.png show the actual local
+memory and chat UI with temporary preferences/tasks and a scripted Groq reply.
+pdf-import.png shows a reviewed test PDF import with a synthetic appointment.
+medieval-monitor.png shows real Linux workspace readings in the medieval Qt HUD.
+These demonstrate UI and local persistence, not a live Groq or native Windows
+session. The monitor's torch animates in the running application.

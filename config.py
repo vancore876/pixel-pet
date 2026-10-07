@@ -26,10 +26,11 @@ DEFAULTS = {
     "note_reminders": True, "note_repeat_minutes": 30,
     "mouse_mode": "watch", "hide_seconds": 12, "folder_play": True,
     "ai_model": "openai/gpt-oss-20b", "ai_share_metrics": True, "ai_share_notes": True,
-    "mini_hud": True, "desktop_enabled": True, "desktop_random": True,
+    "mini_hud": True, "monitor_style": "medieval", "desktop_enabled": True, "desktop_random": True,
     "portal_toys": False,
     "ai_autonomy": True, "ai_interval_seconds": 120, "ai_share_desktop_names": False,
     "business_mode": True, "business_name": "", "ai_greetings": True,
+    "memory_enabled": True, "memory_ai": True, "ai_share_memory": True,
 }
 
 

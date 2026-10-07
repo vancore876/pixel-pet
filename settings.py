@@ -41,6 +41,7 @@ class AppSettings:
                   "ai_interval_seconds": (60, 1800)}
         options = {"theme": ("midnight", "forest", "plum"), "pet_palette": ("mint", "sky", "amber", "rose"),
                    "roaming_mode": ("bottom", "free"), "character": ("robot", "cat", "knight"),
+                   "monitor_style": ("medieval", "classic"),
                    "mouse_mode": ("off", "watch", "chase", "shy")}
         for key, default in DEFAULTS.items():
             value = raw.get(key, default)
