@@ -1,0 +1,11 @@
+{
+  "expo": {
+    "name": "Jeffery Business", "slug": "jeffery-business", "version": "6.0.0",
+    "orientation": "portrait", "userInterfaceStyle": "dark", "scheme": "jeffery",
+    "icon": "./assets/icon.png",
+    "ios": {"supportsTablet": true, "bundleIdentifier": "com.jeffery.business", "infoPlist": {"ITSAppUsesNonExemptEncryption": false}},
+    "android": {"package": "com.jeffery.business", "adaptiveIcon": {"foregroundImage": "./assets/icon.png", "backgroundColor": "#101924"}},
+    "plugins": ["expo-secure-store", "expo-notifications", "@react-native-community/datetimepicker"],
+    "web": {"bundler": "metro", "favicon": "./assets/icon.png"}
+  }
+}

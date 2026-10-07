@@ -1,0 +1,411 @@
+# PixelSystem Buddy 6.0 — Jeffery
+
+Jeffery is a Windows desktop companion with a small system HUD, an animated
+character, a notebook and reminders, and optional Groq chat. Version 6 adds
+business-minded greetings, fresh reminders grounded in outstanding work,
+customer orders with quantities and checklists, and an Android/iPhone companion
+in the mobile folder. Sliding replies, the tiny HUD, and real Windows desktop
+play remain available.
+
+## Start or update
+
+1. Extract the complete ZIP.
+2. Run **Start_Buddy.bat**. Python 3.11 or newer, 64-bit, is needed.
+3. Right-click Jeffery to open his menu.
+
+The launcher installs PySide6 and psutil into its own virtual environment on the
+first run. Python 3.14 is supported by the pinned PySide6 6.11.2 dependency.
+No dedicated GPU or locally downloaded AI model is needed.
+
+To upgrade: exit the old copy, extract this one into a new folder, and copy your
+old data folder's JSON files into the new data folder. Keep the old copy as a
+backup. Run the new launcher. New settings get defaults automatically.
+The protected Groq key stays with your Windows account. Re-link a text file if
+its path changed. If Start with Windows was enabled, disable it in the old copy
+and enable it again in the new one so it points to this folder.
+If your old settings disabled note sharing, enable **Use Groq for smarter
+reminders** in the notebook. Your existing notes and schedules are preserved.
+The notebook migrates automatically to version 2; keep your old data backup.
+
+For the phone app, open **mobile/README.md** or run **Start_Mobile.bat**.
+The download includes runnable Expo source and build instructions. It does not
+include a signed APK, IPA, or published store release.
+
+Manual start, from this directory:
+
+```powershell
+py -3 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe main.py
+```
+
+## What changed
+
+| Upgrade | How to use it |
+| --- | --- |
+| Varied Groq greetings and interaction remarks | Talk to Jeffery → Connection → Use Groq for varied greetings and interactions |
+| Business-minded personality | Connection → Business name and Business-minded greetings and advice |
+| Customer orders with preparation progress | Notepad → + Order → Checklist and order |
+| Checklists and item quantities | Notepad → + List; check prepared items and Save |
+| Pickup deadlines and status | Checklist and order → Deadline; New / Preparing / Ready / Delivered / Cancelled |
+| Fresh reminders of remaining work | Due reminders request new Groq wording and filter repeated phrases |
+| Android and iPhone app | mobile/README.md; Today, Orders, Notes, Chat, Settings |
+| Desktop-to-phone notebook transfer | Desktop Mobile backup / Import backup; phone Settings → Move your notebook |
+| Groq reads saved notes and linked Notepad lines | Notepad → Use Groq for smarter reminders → Set up Groq |
+| Helpful reminder and one concrete next step | Reminder card and Notepad → Jeffery's advice |
+| Suggested times from note details | Jeffery's advice → Use this time → Save note |
+| Easier note management | Search, To do / Done filters, repeat presets and quick time buttons |
+| Flexible snooze | Reminder card → 5, 15, 30 or 60 min → Later |
+| Plain replies slide down one line at a time | Chat and Jeffery's speech bubbles |
+| Tiny HUD, 224 pixels wide | On by default; Settings → Overlay → Tiny HUD |
+| 49 animation states, including 24 new moves | Random play; Play with Jeffery → More Moves |
+| Actual visible folder icons | Desktop Play → Real Folders, Tabs and Windows |
+| Actual browser or Explorer tab controls | Choose a tab → Jump / ride, or Select tab |
+| Selected letters from an editor | Select text → Ctrl+Alt+J → drag letters → Apply to editor |
+| Groq chooses occasional actions and remarks | Talk to Jeffery → Connection → Let Groq choose occasional moves |
+| Window following | Riding or hiding follows the detected target as the window moves |
+
+All existing monitor, notes, sticky notes, launcher, focus timer, themes, mouse
+play, character options, and parachute features remain available.
+
+## Business orders and varied greetings
+
+Open **Connection**, save and test a working Groq key, set your business name,
+and enable **Business-minded greetings and advice** and **Use Groq for varied
+greetings and interactions**. Enable saved-note sharing so greetings and chat
+can refer to current orders. Jeffery passes recent phrases to Groq and replaces
+exact repeats with varied local wording. Greeting requests have a one-minute
+cooldown. Startup, mouse greetings, and everyday interactions use this voice;
+random Groq moves retain their separate interval.
+
+In Notepad, **+ Order** opens **Checklist and order**. Enter the customer,
+optional contact and order number, then add each item and quantity. Check items
+as you prepare them and save. **Ready** keeps the order open for collection;
+**Delivered**, **Cancelled**, or **Done** stops reminders. Restoring a completed
+order returns it to New. Use **Write and schedule** for a title, details, and
+repeat settings. Search also finds customers, order numbers, and checklist items.
+
+The pickup deadline and next reminder are separate. **Remind at deadline** copies
+the deadline into the reminder schedule; save to apply it. Checking an item or
+changing status invalidates old advice. Groq receives what is still unchecked
+and prompts focus on preparation, customer follow-up, or handover. It is told
+not to invent stock, payments, customer promises, or completed work.
+
+**+ List** creates a checklist without customer fields. Both lists and orders
+can be exported with **Mobile backup** and merged back with **Import backup**.
+Matching IDs keep the newer entry. Import preserves existing local sticky-note
+positions and text-file links; it never deletes entries merely absent from a
+backup. Transfers are manual, without automatic cloud synchronization.
+
+## Replies and the small HUD
+
+Chat displays separate messages with readable plain text. New lines slide in
+from above instead of dumping a Markdown table. Jeffery's speech bubble uses
+the same effect with a rolling four-line view. Replies are prompted to be brief;
+ask for more detail when you want it. Ordinary questions do not offer play tools
+to Groq, so asking about a car part does not also trigger a wave.
+
+The default HUD shows CPU, RAM, disk, and network in narrow rows with small
+60-second graphs. GPU and battery appear when supported. Uptime and process
+count fit in the footer; a focus countdown takes priority there. Drag it to move.
+Double-click opens Overlay Settings. Right-click opens the menu.
+
+Turn off **Tiny HUD** to return to the larger detailed layout. The old Compact
+layout option controls that larger view. Graphs, opacity, metrics, refresh rate,
+click-through, and visibility are still configurable.
+
+## Real folders, tabs, and windows
+
+Open **Desktop Play → Real Folders, Tabs and Windows**. The list comes from
+Windows Shell and UI Automation; it contains visible real controls.
+
+- Keep a folder icon visible on the desktop or in File Explorer. Select it in
+  the list and click **Jump / ride**. Jeffery hops to its screen position, hides,
+  peeks, and returns after the configured hide duration.
+- Drag Jeffery onto a detected folder or tab and release to visit it.
+- Select a real tab and click **Jump / ride** to perch and balance on its edge.
+  **Select tab** is a separate requested operation that actually selects the
+  tab through Windows.
+- Select a window to let Jeffery hang from its top edge.
+- When an active target moves, Jeffery follows it. When it closes or becomes
+  unavailable, he comes out. Note reminders also bring him out.
+- Choose **Come Out / Stop Play** to stop the current visit.
+
+Folders are matched to their real Shell items. Hiding is an animation positioned
+at the actual icon; it does not rename, move, delete, or open the directory.
+The peek sprite is a small transparent overlay aligned with the icon.
+
+Windows automation support varies by application. Explorer and compatible
+Chromium/Firefox tab controls are detected when they expose accessibility
+elements. A covered icon, minimized window, unsupported control, or app running
+with higher privileges may be unavailable. Refresh the list after changes.
+General scans run about every eight seconds; an active window gets lightweight
+position updates every 300 milliseconds. Low power slows the general scan.
+Tree depth, target count, request size, queue length, and response time are bounded.
+
+**Randomly visit visible folders and tab edges** is enabled by default in Buddy
+Settings. Switch it off to keep random tricks without desktop visits.
+**Interact with real Windows folders, tabs and text** disables all native play.
+The native helper uses the Windows PowerShell and UI Automation components
+already on Windows; there are no new Python dependencies.
+
+Separate folder portals and letter tiles from version 4 are retained under
+**Optional Toys**. Portal toys are hidden by default. These are separate toys;
+the real desktop list is the new interaction path.
+
+## Move actual selected letters
+
+1. In Notepad, Word, or another compatible editor, select up to 120 characters.
+2. Press **Ctrl+Alt+J**. If another app owns that shortcut, use **Selected Letters**
+   in Jeffery's menu, then focus the selection during the three-second countdown.
+3. The Selected letters window shows the exact captured text as draggable chips.
+   Spaces, tabs, and line breaks have visible markers and are preserved.
+4. Drag a letter to another position. **Jeffery pushes** moves the first letter
+   one place in the preview. **Reset** restores the captured order.
+5. Click **Apply to editor** to replace the selection with the new letter order.
+   Check the editor result. Ctrl+Z in the editor normally undoes the edit.
+
+This applies to the original editor, not a generated HELLO toy. The Windows
+helper checks the original window, process, control, password status, editability,
+and current selected text before sending the replacement. If the selection
+changed or moved to another occurrence, capture it again. The persistent helper
+keeps at most four original selection ranges to compare their endpoints.
+It uses Unicode keyboard input and does not borrow
+or overwrite your clipboard.
+
+Read-only page text can be captured when its app exposes a text selection.
+**Walk on selection** lets Jeffery hop to that actual line on the screen.
+Apply stays disabled for read-only text. Arbitrary words painted into screenshots,
+videos, games, or applications without accessible text cannot be edited this way.
+
+Selected editor text stays local; it is not included in Groq's context.
+The helper is not elevated. Use an ordinary, non-administrator editor.
+Release modifier keys before Apply. Windows foreground restrictions or a
+provider losing its selection can block the edit; recapture rather than applying
+to another control.
+
+## Groq: chat, actions, and remarks
+
+1. Right-click → **Talk to Jeffery · Groq** → **Connection**.
+2. Paste a working key in the masked field and click **Save key**.
+3. Click **Test connection**.
+4. Enable **Let Groq choose occasional moves and remarks**.
+5. Set **Between AI moves**; the default is 120 seconds, with a 60-second minimum.
+
+Use **Let Groq pick a move now** for an immediate try when Jeffery is free.
+Background requests wait while he is paused, being dragged, parachuting, hopping,
+performing an interaction, or handling a chat request. Quiet mode suspends them.
+Groq can choose a pose, a real folder visit, a tab or window perch, a peek, a
+return, or mouse watching, plus one short remark. It cannot autonomously select
+tabs, edit text, save notes, run programs, or move the system cursor.
+
+Chat can perform the requested actions and draft a note for review. Examples:
+
+- “Hide in the visible Projects folder.”
+- “Ride a browser tab.”
+- “Wave to me.”
+- “Do a juggling trick.”
+- “Help me rearrange the selected letters.”
+- “Draft a note to review my project in 30 minutes.”
+
+A draft appears in Jeffery's Notepad; click Save yourself. An unsaved draft is
+protected. Only validated companion actions are accepted. There is no shell
+command tool. One chat turn can run up to four requested actions with one
+follow-up response.
+
+The default model is openai/gpt-oss-20b; Connection also offers
+openai/gpt-oss-120b and an editable model field. Model availability and limits
+depend on your Groq account. **Send**, **Test**, enabled background behavior, and
+smart note generation make network requests. Requests time out after 25 seconds; Cancel or closing
+chat stops that chat request. Background behavior has its own connection and
+backs off after errors. A rejected key pauses background requests until you save
+or test a replacement. Local animations continue without a key.
+
+CPU/RAM readings and saved-note sharing are enabled by default in new installs.
+The notebook checkbox and **Use my saved notes for chat and smart reminders** in
+Connection control the same preference. Switch it off to stop pending and future
+note requests. Chat includes the next scheduled time and up to 20 incomplete notes,
+with the soonest reminders first. **Include visible folder and tab names** is off by default. With it
+off, Groq receives target IDs and types, without their titles or paths.
+Screenshots, directory contents, and captured editor selections are not sent.
+Conversation stays in this session. Clear conversation removes local history.
+
+On Windows, Remember for my Windows account protects the key with DPAPI at
+%LOCALAPPDATA%\PixelSystemBuddy\groq.key, separately from portable settings.
+Unchecked means session-only storage. GROQ_API_KEY is supported too; a saved
+session value takes priority, then the environment, then protected storage.
+Forget does not remove an environment variable. No personal API key is bundled.
+
+Local slash commands work without Groq:
+`/wave`, `/hide`, `/peek`, `/comeout`, `/chase`, `/shy`, `/watch`,
+`/tab`, `/letters` (selected text), and `/tiles HELLO` (optional toy).
+
+## More life and mouse play
+
+Choose Robot, Cat, or Knight and Mint, Sky, Amber, or Rose. New poses include
+stretching, spinning, flipping, rolling, sneezing, surprise, laughing, sitting,
+balancing, tiptoeing, running, climbing, sliding, skating, bouncing, magic,
+an umbrella, juggling, grooming, saluting, facepalming, leaning, hanging, and sneaking.
+These use original code-drawn sprites with visible transforms and props.
+Random tricks happen every few seconds when Jeffery is free. Groq adds choices
+and remarks at its slower configured interval.
+
+Click Jeffery to pet him. Use his menu to feed, wave, dance, jump, or nap.
+Drag him upwards and release away from a detected target to deploy his parachute,
+descend gently, and play a landing. A queued interaction runs after landing.
+Disable parachuting to keep a dragged height in free roaming.
+
+Mouse Play has Watch and greet, Chase cursor, Shy/run away, and Off.
+His gaze follows the real mouse. Chase and shy move Jeffery's own window.
+The system cursor is not moved. Watch preserves his spontaneous trick animations.
+Pause Buddy stops roaming; manual interactions remain available.
+
+## Notes, reminders, and quick launch
+
+Jeffery's Notepad stores individual notes with their own reminder intervals.
+Every saved new note gets an acknowledgment; reminders continue until Done.
+Choose **One time / no repeat** with a specific time for a single timed reminder;
+without a time it only acknowledges the note. Repeat presets offer 15 minutes,
+30 minutes, hourly, daily, and a custom interval. Quick buttons choose **In 15
+min**, **In 1 hour**, or **Tomorrow 9 AM**, using your computer's local time.
+Pin creates a movable sticky note. Search matches titles, bodies, customers,
+order numbers and checklist items; filters include Orders and Lists.
+Ctrl+S saves; Ctrl+N creates a note.
+Quiet mode holds the queue and releases notes individually when disabled.
+
+Enable **Use Groq for smarter reminders**, then **Set up Groq** to save and test
+a working key. Each new or edited saved note is read asynchronously. Groq writes
+a short reminder based on the note and a useful next step. These slide into the
+reminder card and appear in **Jeffery's advice**. A date stated in a note can
+produce a suggested time; missing or ambiguous times remain unscheduled
+suggestions. Click **Use this time**, then **Save note**, to adopt a suggestion.
+AI advice does not silently change your chosen times, repeats, or note contents.
+Relative dates use when the note was written; snoozing does not move an old
+"tomorrow" forward. Groq is prompted to use absolute dates in saved advice.
+
+Reminders appear immediately, including without Internet or a key. When Groq
+advice arrives for the visible note, it updates that card. Advice is saved in
+notes.json for offline use. Each actual reminder requests fresh Groq wording;
+recent reminders help avoid repeats. Edits and checklist changes invalidate
+old advice, while snoozing preserves the original date context.
+Completed/deleted notes and late replies to an older draft cannot receive new
+advice. Requests use JSON mode, bounded text and queues, and back off on errors;
+a rejected key pauses requests until the connection is reset.
+
+Choose **5, 15, 30, or 60 min → Later** on a reminder card to snooze. **Open**
+opens that note; **Done** stops its reminders. Cards remain for 20 seconds and
+pause dismissal while the pointer is over them.
+
+**Open Linked Text File** opens a linked .txt file in Windows Notepad.
+**Link .txt file** can connect an existing file. Each newly added nonblank line
+becomes a note; existing lines form a baseline. Reordered lines do not create
+duplicates, and deleting a line does not delete a saved note.
+UTF-8 and UTF-16 with a BOM are supported, up to 1 MiB.
+Imported lines also receive smart reminders when enabled. The assistant sends
+the saved note's title, up to 6,000 body characters, schedule, and local time;
+it does not send the source file path or unsaved editor draft. Linked lines
+are imported into the notebook; the assistant does not rewrite the .txt file.
+Reminders require the app to remain running; this is not an OS scheduled service.
+
+Quick Launch provides Browser, VS Code when found, Jeffery's Notepad, Documents,
+and up to 30 saved app, folder, or HTTP/HTTPS website shortcuts.
+Apps require an executable path; batch files and shell scripts are not accepted.
+Shortcuts launch when you click them.
+
+## Other controls
+
+- Top Apps shows live CPU/memory processes only while its window is open.
+- Focus Timer supports start, pause, resume, reset, and a break reminder.
+- General Settings has quiet mode, low power, settings import/export, and Windows
+  startup for your account.
+- Imported settings remain a draft until Apply. Startup and saved positions stay local.
+- Click-through unlocks through the buddy or tray menu.
+- Reset Positions brings the monitor and pet back into view across monitors.
+- Exit stops timers, the native helper, Groq requests, and the statistics worker.
+
+## Build and troubleshooting
+
+**Debug_Buddy.bat** runs with a console to expose startup errors.
+**Build_EXE.bat** uses PyInstaller on Windows to create
+dist\PixelSystemBuddy.exe. No prebuilt Windows EXE is included.
+The assets directory, including the native bridge script, is bundled automatically.
+
+If native targets are empty, keep an Explorer folder or browser tab visible and
+Refresh. Confirm native play is enabled. The status reports blocked or timed-out
+Windows providers. Try a non-administrator app. A Windows policy that blocks
+PowerShell or UI Automation can prevent this feature.
+If Ctrl+Alt+J is unavailable, use the countdown button.
+If Groq fails, Test connection and replace a rejected key or choose an available
+model. Play continues offline.
+
+Data is stored beside the app when writable, with a per-user fallback.
+Settings, notes, shortcuts, and optional portal locations use separate JSON files.
+Corrupt note/settings files are preserved when possible. buddy.log holds diagnostic
+errors. No automatic installation at login occurs unless Start with Windows is enabled.
+
+## Validation and practical limits
+
+The 6.0 update was checked with Python 3.12, PySide6 6.11.2, psutil 7.2.2, and Linux
+offscreen Qt. The suite contains 65 unit tests and six GUI checks. Native Windows
+controls and Groq replies in the GUI checks were scripted.
+
+Coverage includes line reveal timing, the small HUD, hopping to target coordinates,
+folder hiding/peeking, following moved targets, disappearing targets, reminder
+recovery, separate tab riding/selection, selected-letter reorder/apply payloads,
+read-only text guards, context sharing, Groq-chosen poses, rejected-key pausing,
+note persistence, text-file watching, mouse reactions, parachuting, process
+monitoring, settings, focus, cancellation, and cleanup.
+The new notes workflow covers personalized advice, persisted caching, invalid
+and late AI replies, relative-time context, reviewed time suggestions, offline
+delivery, multiple snooze intervals, filtering, sharing controls, linked-file
+imports, and protection of unsaved drafts.
+Business checks cover customer fields, quantities, preparation progress,
+separate deadlines, terminal status, varied greetings, fresh reminders, and
+atomic backup merging. Mobile checks and native-build limits are documented
+in mobile/README.md.
+
+The Windows helper is implemented against Microsoft's Shell, UI Automation,
+window, and input APIs, but could not be executed on Windows in this workspace.
+Native icon/tab detection, mixed-DPI behavior, foreground restoration, selected
+text edits, DPAPI, registry startup, optional Windows GPU sampling, and the EXE
+build still need checking on your PC. Provider support varies across apps.
+Live Groq requests could not be verified here; a working key must be tested in
+Connection. Preview examples do not demonstrate a live API connection.
+
+Screenshots and an animation GIF are in preview. The folder/tab examples there
+use scripted target data and the notebook examples use temporary test notes.
+
+## Source guide
+
+| File | Purpose |
+| --- | --- |
+| main.py | Coordinates windows, notes, native play, and AI |
+| pet.py, characters.py, motion.py | Character drawing, movement, parachute and hops |
+| sliding_text.py | Plain replies and per-line slide/fade |
+| overlay.py, system_stats.py | Small HUD and asynchronous system readings |
+| desktop_bridge.py | Persistent asynchronous Windows helper transport |
+| assets/windows_desktop.ps1 | Shell/UI Automation detection, tab selection, guarded text input |
+| real_desktop.py | Native target visits, selection capture, draggable letter preview |
+| ai_chat.py, ai_brain.py, credentials.py | Groq chat, occasional behaviors, protected keys |
+| smart_notes.py | Grounded Groq reminders, next steps, time suggestions and caching |
+| business_voice.py | Varied business greetings and interaction remarks |
+| notes.py, notepad_window.py | Notebook, linked-file watcher, reminders, sticky notes |
+| mobile | Expo Android/iPhone companion, phone notifications and notebook transfer |
+| launcher.py | Saved quick-launch buttons |
+| settings.py, settings_window.py | Validated preferences and UI |
+| folder_play.py, letter_play.py | Optional separate toys |
+| tests | Unit checks and six offscreen Qt workflows |
+
+## API references
+
+- [Microsoft UI Automation elements](https://learn.microsoft.com/en-us/dotnet/api/system.windows.automation.automationelement)
+- [Microsoft selected text ranges](https://learn.microsoft.com/en-us/dotnet/api/system.windows.automation.textpattern.getselection)
+- [Microsoft text bounding rectangles](https://learn.microsoft.com/en-us/dotnet/api/system.windows.automation.text.textpatternrange.getboundingrectangles)
+- [Microsoft text endpoint comparison](https://learn.microsoft.com/en-us/dotnet/api/system.windows.automation.text.textpatternrange.compareendpoints)
+- [Microsoft tab selection](https://learn.microsoft.com/en-us/dotnet/api/system.windows.automation.selectionitempattern.select)
+- [Microsoft Shell folder items](https://learn.microsoft.com/en-us/windows/win32/shell/folderitem)
+- [Microsoft Unicode keyboard input](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-sendinput)
+- [Microsoft foreground access](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setforegroundwindow)
+- [Groq local tool calling](https://console.groq.com/docs/tool-use/local-tool-calling)
+- [Groq GPT-OSS 20B](https://console.groq.com/docs/model/openai/gpt-oss-20b)
+- [Groq JSON mode](https://console.groq.com/docs/structured-outputs)

@@ -1,0 +1,31 @@
+# Local dependencies and generated output
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+mobile/node_modules/
+mobile/.expo/
+mobile/dist/
+mobile/native-bundles/
+build/
+dist/
+*.spec
+
+# Machine-local state and credentials
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.keystore
+*.jks
+*.p12
+*.mobileprovision
+data/
+
+# Editor and OS files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
