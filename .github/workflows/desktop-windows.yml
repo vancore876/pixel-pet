@@ -1,0 +1,125 @@
+name: Windows desktop checks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-windows-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  desktop:
+    runs-on: windows-latest
+    timeout-minutes: 35
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      GROQ_API_KEY: ""
+      QT_QPA_PLATFORM: offscreen
+      PYTHONUTF8: "1"
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          architecture: x64
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-build.txt
+            requirements-dev.txt
+
+      - name: Install pinned desktop and build dependencies
+        run: |
+          python -m venv .venv
+          if ($LASTEXITCODE -ne 0) { throw "Virtual environment creation failed." }
+          & .\.venv\Scripts\python.exe -m pip install --disable-pip-version-check -r requirements-build.txt -r requirements-dev.txt
+          if ($LASTEXITCODE -ne 0) { throw "Dependency installation failed." }
+          & .\.venv\Scripts\python.exe -m pip check
+          if ($LASTEXITCODE -ne 0) { throw "Installed dependencies are incompatible." }
+
+      - name: Require the native PDF engine
+        run: |
+          & .\.venv\Scripts\python.exe -c "import pypdfium2; document = pypdfium2.PdfDocument.new(); document.close()"
+          if ($LASTEXITCODE -ne 0) { throw "Native PDFium validation failed." }
+
+      - name: Run desktop regression tests
+        # Real OCR tests explicitly skip when optional Tesseract is absent.
+        run: |
+          & .\.venv\Scripts\python.exe -m unittest discover -s tests -p "test_*.py" -v
+          if ($LASTEXITCODE -ne 0) { throw "Desktop regression tests failed." }
+
+      - name: Run all seven GUI integration checks
+        run: |
+          $checks = @(
+            "check_gui.py",
+            "check_jeffery.py",
+            "check_smart_gui.py",
+            "check_desktop_gui.py",
+            "check_notes_gui.py",
+            "check_business_gui.py",
+            "check_imports_gui.py"
+          )
+          foreach ($check in $checks) {
+            $env:BUDDY_QA_DIR = Join-Path $env:RUNNER_TEMP ("pixel-pet-qa-" + [IO.Path]::GetFileNameWithoutExtension($check))
+            New-Item -ItemType Directory -Force -Path $env:BUDDY_QA_DIR | Out-Null
+            & .\.venv\Scripts\python.exe (Join-Path "tests" $check)
+            if ($LASTEXITCODE -ne 0) { throw "$check failed with exit code $LASTEXITCODE." }
+          }
+
+      - name: Build the Windows executable
+        run: |
+          $dist = Join-Path $env:RUNNER_TEMP "pixel-pet-dist"
+          $work = Join-Path $env:RUNNER_TEMP "pixel-pet-build"
+          $spec = Join-Path $env:RUNNER_TEMP "pixel-pet-spec"
+          New-Item -ItemType Directory -Force -Path $dist, $work, $spec | Out-Null
+          # Match the core build in Build_EXE.bat without its interactive pauses.
+          $buildArgs = @(
+            "--noconfirm", "--clean", "--noconsole", "--onefile",
+            "--name", "PixelSystemBuddy",
+            "--add-data", "assets;assets",
+            "--add-data", "THIRD_PARTY_NOTICES.md;.",
+            "--collect-all", "pypdfium2",
+            "--collect-all", "pypdfium2_raw",
+            "--copy-metadata", "pypdfium2",
+            "--collect-data", "trafilatura",
+            "--collect-data", "justext",
+            "--collect-all", "rapidfuzz",
+            "--copy-metadata", "RapidFuzz",
+            "--copy-metadata", "Pillow",
+            "--copy-metadata", "trafilatura",
+            "--exclude-module", "sentence_transformers",
+            "--exclude-module", "torch",
+            "--exclude-module", "transformers",
+            "--distpath", $dist,
+            "--workpath", $work,
+            "--specpath", $spec,
+            "main.py"
+          )
+          & .\.venv\Scripts\python.exe -m PyInstaller @buildArgs
+          if ($LASTEXITCODE -ne 0) { throw "Windows executable build failed." }
+          if (!(Test-Path (Join-Path $dist "PixelSystemBuddy.exe"))) { throw "The expected executable was not built." }
+
+      - name: Smoke-test the packaged desktop app
+        timeout-minutes: 2
+        run: |
+          $dist = Join-Path $env:RUNNER_TEMP "pixel-pet-dist"
+          $exe = Join-Path $dist "PixelSystemBuddy.exe"
+          # Portable application data stays beside this temporary executable.
+          $process = Start-Process -FilePath $exe -ArgumentList "--smoke-test" -WorkingDirectory $dist -PassThru
+          if (!$process.WaitForExit(45000)) {
+            $process.Kill()
+            throw "The packaged smoke test did not exit within 45 seconds."
+          }
+          if ($process.ExitCode -ne 0) { throw "Packaged smoke test failed with exit code $($process.ExitCode)." }

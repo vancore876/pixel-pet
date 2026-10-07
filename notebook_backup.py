@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import codecs
 import copy
+import errno
 import hashlib
 import json
 import os
@@ -24,6 +25,7 @@ MAX_METADATA_BYTES = 128 * 1024 * 1024
 MAX_NOTES = 2000
 MAX_PREVIEW_CHARACTERS = 10000
 CHUNK_BYTES = 65536
+_WINDOWS_CREATE_ONLY_RENAME = os.name == "nt"
 _DOCUMENT_ID = re.compile(r"[0-9a-f]{32}\Z")
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 _DOCUMENT_ENTRY = re.compile(r"documents/([0-9a-f]{32})\.txt\Z")
@@ -307,6 +309,62 @@ def _reusable_documents(store, cancel):
     return matches
 
 
+def _merge_plan(store, payload):
+    """Mirror new-or-newer note merging without changing the live notebook."""
+    existing = {note["id"]: note for note in notebook_snapshot(store)["notes"]}
+    incoming = {note["id"]: note for note in payload["notes"]
+                if note["id"] not in existing or note["updated"] > existing[note["id"]]["updated"]}
+    retained = [note for identifier, note in existing.items() if identifier not in incoming]
+    return incoming, retained
+
+
+def _restore_cleanup(store, restore_id, prepared_ids):
+    """A late cleanup must preserve text already referenced by saved notes."""
+    manifest = store._document_manifest()
+    if set(prepared_ids).intersection(manifest):
+        store.documents.finish_restore(manifest, store.inline_character_count())
+    else:
+        store.documents.abort_restore(restore_id)
+
+
+def _ensure_restore_baseline(store):
+    """Give a first restore an authoritative empty manifest for crash recovery."""
+    if store.path.exists():
+        return
+    if (store.notes or store.blocked_write or not store._restore_recovery_allowed):
+        raise ValueError("The original notebook metadata could not be verified. Its document text was preserved.")
+    baseline = notebook_snapshot(store)
+    store.path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = _temporary_output(store.path)
+    try:
+        with temporary.open("w", encoding="utf-8") as output:
+            json.dump(baseline, output, ensure_ascii=False, allow_nan=False)
+            output.write("\n")
+            output.flush()
+            os.fsync(output.fileno())
+        try:
+            # Create only: a GUI save may have installed the first valid notes
+            # after our snapshot. Linking an already complete file is atomic on
+            # Windows NTFS and never overwrites that newer manifest.
+            os.link(temporary, store.path)
+        except FileExistsError:
+            pass
+        except OSError as exc:
+            unsupported = (exc.errno in (errno.EPERM, errno.EINVAL, errno.ENOTSUP, errno.EOPNOTSUPP)
+                           or getattr(exc, "winerror", None) in (1, 50))
+            if not _WINDOWS_CREATE_ONLY_RENAME or not unsupported:
+                raise
+            try:
+                # FAT/exFAT cannot hard-link. Windows rename also refuses an
+                # existing destination, so it preserves a concurrent GUI save.
+                # POSIX rename replaces destinations and must never be used.
+                os.rename(temporary, store.path)
+            except FileExistsError:
+                pass
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
 def prepare_backup(argument, cancel=None):
     """Validate and stage an import; the caller applies its payload transactionally.
 
@@ -326,6 +384,7 @@ def prepare_backup(argument, cancel=None):
         return {"kind": "backup_prepared", "payload": payload, "prepared_ids": []}
 
     prepared_ids = []
+    restore_id = None
     try:
         with zipfile.ZipFile(path, "r") as archive, tempfile.TemporaryDirectory(prefix="jeffery-restore-") as directory:
             entries, document_entries = {}, {}
@@ -358,12 +417,16 @@ def prepare_backup(argument, cancel=None):
                 _spool_document(archive, document_entries[identifier], target, descriptor, cancel)
                 staged[identifier] = target
 
+            incoming, retained = _merge_plan(store, payload)
+            ignored_ids = {note["id"] for note in payload["notes"]} - incoming.keys()
+            ignored_notes = [copy.deepcopy(note) for note in retained if note["id"] in ignored_ids]
+            payload["notes"] = list(incoming.values())
+            needed, _ = _references(payload)
             remapped = {}
             reusable = _reusable_documents(store, cancel)
             verified_existing = {}
-            for identifier, target in staged.items():
+            for identifier, expected in references.items():
                 _check_cancel(cancel)
-                expected = references[identifier]
                 existing = reusable.get(expected)
                 if existing:
                     if existing not in verified_existing:
@@ -372,12 +435,25 @@ def prepare_backup(argument, cancel=None):
                         # no additional copy or whole-document allocation.
                         _stream_document(store, existing, expected, lambda chunk: None, cancel)
                         verified_existing[existing] = store.documents.metadata(existing)
-                    remapped[identifier] = verified_existing[existing]
+                    if identifier in needed:
+                        remapped[identifier] = verified_existing[existing]
+
+            unneeded = {note.get("document_id") for note in store.notes if note.get("document_id")}
+            retained_ids = {note.get("document_id") for note in retained if note.get("document_id")}
+            retained_ids.update(document["document_id"] for document in remapped.values())
+            retired_ids = unneeded - retained_ids
+            inline = sum(len(note["body"]) for note in [*retained, *payload["notes"]] if not note.get("document_id"))
+            if needed.keys() - remapped.keys():
+                _ensure_restore_baseline(store)
+                restore_id = store.documents.begin_restore(retired_ids, inline)
+            for identifier, expected in needed.items():
+                _check_cancel(cancel)
+                if identifier in remapped:
                     continue
                 source_note = next(n for n in payload["notes"] if n.get("document_id") == identifier)
                 prepared = store.documents.prepare_import({
-                    "text_file": str(target), "title": source_note["title"],
-                    "other_note_characters": store.inline_character_count(),
+                    "text_file": str(staged[identifier]), "title": source_note["title"],
+                    "other_note_characters": inline, "restore_id": restore_id,
                 }, cancel)
                 new_identifier = prepared["document_id"]
                 prepared_ids.append(new_identifier)
@@ -390,11 +466,25 @@ def prepare_backup(argument, cancel=None):
                     prepared = remapped[note["document_id"]]
                     note.update({key: prepared[key] for key in
                                  ("document_id", "body_characters", "body_sha256", "body")})
+            # Keep ignored IDs in the returned payload for compatibility, using
+            # their current local document references rather than staging text
+            # which the new-or-newer merge would immediately discard.
+            payload["notes"].extend(ignored_notes)
             _check_cancel(cancel)
-            return {"kind": "backup_prepared", "payload": payload, "prepared_ids": prepared_ids}
+            result = {"kind": "backup_prepared", "payload": payload, "prepared_ids": prepared_ids}
+            if restore_id:
+                result["restore_id"] = restore_id
+                result["_cleanup"] = lambda: _restore_cleanup(store, restore_id, prepared_ids)
+            return result
     except (zipfile.BadZipFile, RuntimeError, EOFError) as exc:
-        _cleanup_prepared(store, prepared_ids)
+        if restore_id:
+            store.documents.abort_restore(restore_id)
+        else:
+            _cleanup_prepared(store, prepared_ids)
         raise ValueError("The notebook backup is damaged or unsupported. Nothing was imported.") from exc
     except BaseException:
-        _cleanup_prepared(store, prepared_ids)
+        if restore_id:
+            store.documents.abort_restore(restore_id)
+        else:
+            _cleanup_prepared(store, prepared_ids)
         raise

@@ -1,0 +1,2 @@
+# Optional developer profiling tools; the desktop launcher does not install these.
+py-spy==0.4.2

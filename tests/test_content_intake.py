@@ -168,7 +168,7 @@ class PDFTests(unittest.TestCase):
 
         with patch.object(Path, 'open', return_value=handle), patch('pypdf.PdfReader', side_effect=parsing):
             with self.assertRaises(intake._Canceled):
-                intake.extract_pdf(self.path, canceled)
+                intake.extract_pdf(self.path, canceled, engine="pypdf")
         self.assertTrue(handle.closed)
 
     def test_text_limit_marks_truncation(self):

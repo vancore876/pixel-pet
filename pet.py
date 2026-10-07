@@ -93,7 +93,7 @@ class PixelPet(QWidget):
         self.real_x, self.real_y = float(self.x()), float(self.y())
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.animate)
-        self.timer.start(200 if settings["low_power"] else 100)
+        self.timer.setInterval(200 if settings["low_power"] else 100)
 
     def load_sprites(self):
         base = ASSETS / self.settings["character"]
@@ -262,7 +262,7 @@ class PixelPet(QWidget):
         if now >= self.bubble_expiry:
             self.bubble.hide()
         if not self.isVisible():
-            self.timer.setInterval(1000)
+            self.timer.stop()
             return
         self.frame += 1
         if self.hop_motion:
@@ -300,7 +300,8 @@ class PixelPet(QWidget):
                 self.perform(state, seconds)
                 return
         if self.paused:
-            self.timer.setInterval(1000)
+            if self.timer.interval() != 1000:
+                self.timer.setInterval(1000)
             self.update()
             return
         rect = self.monitor_rect()
@@ -382,7 +383,9 @@ class PixelPet(QWidget):
             else:
                 self.say(random.choice(["I'm still here.", "Taking a tiny walk.", "Your notes are safe with me."]))
         interval = 200 if self.settings["low_power"] else 100
-        self.timer.setInterval(max(interval, 300) if self.state in ("IDLE", "SLEEP") else interval)
+        interval = max(interval, 300) if self.state in ("IDLE", "SLEEP") else interval
+        if self.timer.interval() != interval:
+            self.timer.setInterval(interval)
         self.update()
 
     def set_paused(self, paused):
@@ -458,12 +461,20 @@ class PixelPet(QWidget):
 
     def hideEvent(self, event):
         self.bubble.hide()
+        if hasattr(self, "timer"):
+            self.timer.stop()
         super().hideEvent(event)
 
     def showEvent(self, event):
         if hasattr(self, "timer"):
             self.last_tick = time.monotonic()
-            self.timer.setInterval(1000 if self.paused and not self.action_state else 200 if self.settings["low_power"] else 100)
+            if self.drop_motion or self.hop_motion:
+                interval = 160 if self.settings["low_power"] else 80
+            elif self.paused and not self.action_state:
+                interval = 1000
+            else:
+                interval = 200 if self.settings["low_power"] else 100
+            self.timer.start(interval)
         super().showEvent(event)
 
     def closeEvent(self, event):

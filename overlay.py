@@ -4,7 +4,7 @@ from __future__ import annotations
 from collections import deque
 import math
 from PySide6.QtCore import Qt, Signal, QRectF, QPointF, QTimer
-from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen, QFont, QLinearGradient
+from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen, QFont, QLinearGradient, QPixmap
 from PySide6.QtWidgets import QApplication, QWidget
 from config import clamp_position
 from system_stats import Snapshot, format_bytes
@@ -28,6 +28,8 @@ class StatsOverlay(QWidget):
         self.focus_label = ""
         self.effective_compact = settings["compact"]
         self.animation_phase = 0.0
+        self._keep_layers = None
+        self._keep_layers_key = None
         self.animation_timer = QTimer(self)
         self.animation_timer.setInterval(120)
         self.animation_timer.timeout.connect(self.animate_decoration)
@@ -42,6 +44,7 @@ class StatsOverlay(QWidget):
         self.move(clamp_position(position, self.width(), self.height(), QApplication.screens()))
 
     def configure(self):
+        self.invalidate_keep_layers()
         flags = Qt.FramelessWindowHint | Qt.Tool
         if self.settings["always_on_top"]:
             flags |= Qt.WindowStaysOnTopHint
@@ -74,6 +77,32 @@ class StatsOverlay(QWidget):
 
     def stop_animation(self):
         self.animation_timer.stop()
+
+    def invalidate_keep_layers(self):
+        self._keep_layers = None
+        self._keep_layers_key = None
+
+    def keep_layers(self):
+        """Keep torch animation from rebuilding every metric and graph."""
+        scale = self.devicePixelRatioF()
+        key = (self.width(), self.height(), scale)
+        if self._keep_layers is None or self._keep_layers_key != key:
+            layers = []
+            # The parchment covers the bottom of the torch in the tiny HUD.
+            # Keep that original drawing order when caching the static work.
+            for draw in (self.paint_keep_frame, self.paint_keep_content):
+                image = QPixmap(self.size() * scale)
+                image.setDevicePixelRatio(scale)
+                image.fill(Qt.transparent)
+                painter = QPainter(image)
+                try:
+                    draw(painter)
+                finally:
+                    painter.end()
+                layers.append(image)
+            self._keep_layers = tuple(layers)
+            self._keep_layers_key = key
+        return self._keep_layers
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -122,11 +151,13 @@ class StatsOverlay(QWidget):
 
     def set_focus_label(self, text):
         self.focus_label = text
+        self.invalidate_keep_layers()
         if self.isVisible():
             self.update()
 
     def accept_snapshot(self, snapshot):
         self.snapshot = snapshot
+        self.invalidate_keep_layers()
         self.history.append(snapshot)
         while self.history and snapshot.timestamp - self.history[0].timestamp > 60:
             self.history.popleft()
@@ -163,7 +194,11 @@ class StatsOverlay(QWidget):
     def paintEvent(self, event):
         p = QPainter(self)
         if self.settings["monitor_style"] == "medieval":
-            self.paint_keep(p)
+            frame, content = self.keep_layers()
+            p.drawPixmap(0, 0, frame)
+            p.setRenderHint(QPainter.Antialiasing)
+            self.paint_torch(p)
+            p.drawPixmap(0, 0, content)
             p.end()
             return
         colors = palette(self.settings)
@@ -278,15 +313,17 @@ class StatsOverlay(QWidget):
                 parts.append(f"{s.process_count} processes")
         return " · ".join(parts) or ("Drag · Right-click" if mini else "")
 
-    def paint_keep(self, p):
+    def paint_keep(self, p, include_torch=True):
         """Legible parchment readings inside a carved wood and brass frame."""
+        self.paint_keep_frame(p)
+        if include_torch:
+            self.paint_torch(p)
+        self.paint_keep_content(p)
+
+    def paint_keep_frame(self, p):
         p.setRenderHint(QPainter.Antialiasing)
         width, height = self.width(), self.height()
         mini = self.settings["mini_hud"]
-        rows = self.rows()
-        compact = self.effective_compact
-        row_height = 28 if mini else 53 if compact else 80
-        row_start = 33 if mini else 73
         wood = QLinearGradient(0, 0, width, height)
         wood.setColorAt(0, QColor("#4b352a"))
         wood.setColorAt(0.5, QColor("#32261f"))
@@ -297,7 +334,15 @@ class StatsOverlay(QWidget):
         p.setPen(QPen(QColor("#6e5135"), 1))
         p.setBrush(Qt.NoBrush)
         p.drawRoundedRect(QRectF(4, 4, width - 8, height - 8), 8 if mini else 12, 8 if mini else 12)
-        self.paint_torch(p)
+
+    def paint_keep_content(self, p):
+        p.setRenderHint(QPainter.Antialiasing)
+        width, height = self.width(), self.height()
+        mini = self.settings["mini_hud"]
+        rows = self.rows()
+        compact = self.effective_compact
+        row_height = 28 if mini else 53 if compact else 80
+        row_start = 33 if mini else 73
         p.setPen(QColor("#f4dfb2"))
         p.setFont(QFont("Georgia", 8 if mini else 10, QFont.Bold))
         p.drawText(QRectF(32, 7 if mini else 13, 104 if mini else 145, 22), Qt.AlignVCenter, "SYSTEM KEEP")

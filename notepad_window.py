@@ -404,11 +404,15 @@ class NotepadWindow(QDialog):
         self.import_pdf_button = QPushButton('Choose PDF…')
         self.import_pdf_button.clicked.connect(lambda: self.import_pdf())
         pdf_row.addWidget(self.import_pdf_button)
-        pdf_hint = QLabel('Text PDFs up to 500 MB are supported. Scanned pages need OCR first.')
+        pdf_hint = QLabel('PDFs up to 500 MB are supported. Turn on OCR to read scanned pages.')
         pdf_hint.setObjectName('hint')
         pdf_hint.setWordWrap(True)
         pdf_row.addWidget(pdf_hint, 1)
         layout.addLayout(pdf_row)
+        self.import_ocr = QCheckBox('Read scanned pages with OCR (slower)')
+        self.import_ocr.setChecked(self.settings['pdf_ocr'])
+        self.import_ocr.setToolTip('Requires Tesseract. OCR runs locally; use Documents & memory settings to choose languages and its executable.')
+        layout.addWidget(self.import_ocr)
         web_row = QHBoxLayout()
         self.web_address = QLineEdit()
         self.web_address.setPlaceholderText('https://example.com/article')
@@ -468,6 +472,7 @@ class NotepadWindow(QDialog):
     def set_import_busy(self, busy, status=''):
         self.import_loading = busy
         self.import_pdf_button.setEnabled(not busy)
+        self.import_ocr.setEnabled(not busy)
         self.read_web_button.setEnabled(not busy)
         self.web_address.setEnabled(not busy)
         self.import_review.setEnabled(not busy)
@@ -504,7 +509,8 @@ class NotepadWindow(QDialog):
             return
         self.set_import_busy(True, 'Reading PDF… You can cancel while Jeffery extracts its text.')
         try:
-            if not self.intake.import_pdf(str(path)):
+            if not self.intake.import_pdf(str(path), engine=self.settings['pdf_engine'], ocr=self.import_ocr.isChecked(),
+                    ocr_language=self.settings['ocr_language'], tesseract_path=self.settings['tesseract_path']):
                 self.set_import_busy(False, 'Reading could not start. Try again when the current import finishes.')
         except (OSError, ValueError) as exc:
             self.import_failed(str(exc))
@@ -642,6 +648,8 @@ class NotepadWindow(QDialog):
 
     def configure(self):
         self.setStyleSheet(notes_style(self.settings))
+        if not self.intake.busy:
+            self.import_ocr.setChecked(self.settings['pdf_ocr'])
         with QSignalBlocker(self.smart_enabled):
             self.smart_enabled.setChecked(self.settings["ai_share_notes"])
         self.refresh_advice()
@@ -846,7 +854,11 @@ class NotepadWindow(QDialog):
         with QSignalBlocker(self.list):
             self.list.clear()
             search = self.search.text().strip().casefold()
-            matched = self.service.store.search_ids(search) if search else None
+            try:
+                matched = self.service.store.search_ids(search) if search else None
+            except (ValueError, OSError) as exc:
+                matched = set()
+                self.status.setText('Search could not finish: ' + str(exc))
             mode = self.filter.currentIndex()
             for note in sorted(self.service.store.notes, key=lambda n: (n["done"], -n["created"])):
                 if (matched is not None and note['id'] not in matched) or (mode == 1 and note["done"]) or (mode == 2 and not note["done"]) or (mode == 3 and note['kind'] != 'order') or (mode == 4 and note['kind'] != 'list'):

@@ -13,13 +13,16 @@ play remain available.
 2. Run **Start_Buddy.bat**. Python 3.11 or newer, 64-bit, is needed.
 3. Right-click Jeffery to open his menu.
 
-The launcher installs PySide6, psutil and pypdf into its own virtual environment
+The launcher installs PySide6, psutil, pypdf, PDFium, Pillow, Trafilatura, and
+RapidFuzz into its own virtual environment
 on the first run, and refreshes missing or changed dependencies after updates.
 Python 3.14 is supported by the pinned PySide6 6.11.2 dependency.
-No dedicated GPU or locally downloaded AI model is needed.
+No dedicated GPU or locally downloaded AI model is needed for standard features.
+Meaning-based recall is an optional CPU feature described below.
 
 To upgrade: exit the old copy, extract this one into a new folder, and copy your
-old data folder's JSON files into the new data folder. Keep the old copy as a
+complete old `data` folder into the new folder, including `documents.sqlite`.
+Keep the old copy as a
 backup. Run the new launcher. New settings get defaults automatically.
 The protected Groq key stays with your Windows account. Re-link a text file if
 its path changed. If Start with Windows was enabled, disable it in the old copy
@@ -125,9 +128,11 @@ kept as sections. Large imports show a bounded preview and **Save full document*
 stores all extracted text, including text beyond the preview. **Save only this
 preview** explicitly saves an editable selection instead. Imports preserve your
 current writing draft. Text PDFs up to 500 MB are supported, without the former
-120-page rejection. Imports read from disk instead of first copying the whole
-file into memory. Large or complex documents can take longer and use more memory. Scanned PDFs need
-OCR first; encrypted PDFs need an unlocked copy. Website login pages and pages
+120-page rejection. PDFium reads PDFs in a separate worker process; pypdf remains
+available as a fallback. Imports read from disk instead of first copying the whole
+file into memory. Large or complex documents can take longer and use more memory.
+Enable OCR to read scanned pages when Tesseract is installed; encrypted PDFs need
+an unlocked copy. Website login pages and pages
 requiring JavaScript may not provide useful readable text.
 
 The Windows notebook supports **1,000,000,000 saved text characters in total**.
@@ -183,6 +188,73 @@ labels and graphs. Quiet mode, low power, and hiding the monitor stop the flame
 animation. **Settings → Overlay → Monitor style → Classic** restores the
 previous appearance. Chat now scrolls new lines smoothly and resumes unfinished
 reply animations when reopened.
+
+## Faster reading and optional local recall
+
+PDFium adds native PDF text extraction in a separate process, so its native
+library is isolated from Jeffery's interface and concurrent imports. Trafilatura
+extracts article text from already-fetched web pages; existing public-URL checks,
+download limits, cancellation, and fallback HTML reading remain in place.
+RapidFuzz adds typo-tolerant notebook and memory matching. SQLite remains the
+local full-document store and exact-word index.
+Choose **Settings → Documents & memory → PDF reader** to use the compatibility
+reader for a difficult PDF. Automatic mode also retries compatibility extraction
+when PDFium detects an oversized text object, preserving the full text. OCR
+requires the native reader.
+
+For scanned PDFs, install [Tesseract for Windows](https://tesseract-ocr.github.io/tessdoc/Installation.html)
+and the language data you need. The official project links Windows installers;
+Jeffery does not download or install an executable. A typical installation is
+`C:\Program Files\Tesseract-OCR\tesseract.exe`. Jeffery also accepts an explicit
+executable path, `TESSERACT_CMD`, or an executable available on `PATH`. Enable OCR
+in the PDF importer and select a language such as `eng`; `eng+fra` combines two
+installed languages. Missing OCR support reports a setup message. Scanned pages
+take longer than selectable text, and recognition depends on scan quality.
+
+Sentence Transformers adds optional search by meaning. It needs large additional
+library/model downloads and extra CPU/RAM; standard notebook search continues
+to work without it. From the project folder, install CPU dependencies explicitly:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install "torch==2.14.1" --index-url https://download.pytorch.org/whl/cpu
+.\.venv\Scripts\python.exe -m pip install -r requirements-semantic.txt
+.\.venv\Scripts\python.exe tools\setup_semantic_model.py
+```
+
+The last command explicitly downloads `sentence-transformers/all-MiniLM-L6-v2`
+from Hugging Face into `data/models/all-MiniLM-L6-v2` (or the per-user data fallback).
+It keeps safe tensor files and validates the model locally. Use `--output-dir`
+for another folder and `--revision` to choose an immutable model commit. Enable
+**Settings → Documents & memory → Find related notebook memories by meaning**
+and select the local model directory.
+Jeffery loads models locally on the CPU and never downloads one during startup
+or chat. Notebook text stays local during embedding; the existing Groq sharing
+controls govern whether retrieved excerpts are included in a reply.
+
+To check a completed installation without network access:
+
+```powershell
+.\.venv\Scripts\python.exe tools\setup_semantic_model.py --check
+```
+
+If a model download is interrupted, choose an empty output folder or remove only
+the incomplete model folder before retrying. Removing the optional model does
+not remove notebook entries or preference memory.
+
+Developer profiling uses py-spy and writes to the SVG path you choose:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
+.\.venv\Scripts\python.exe tools\profile_desktop.py --launch --seconds 60 --output "$env:USERPROFILE\Desktop\jeffery-profile.svg"
+```
+
+Interact with chat, the notebook, and the monitor during recording, then open the
+SVG in a browser to see where CPU time goes. Use `--pid 1234` instead of `--launch`
+to attach to an existing Python process. The tool includes child-process samples
+and refuses to replace an existing report. Attaching to some Windows processes
+requires an administrator terminal. py-spy is a developer tool and is not loaded
+by the desktop app. Dependency and model notices are in
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 Screenshots: [Memory](preview/memory.png), [notebook imports](preview/pdf-import.png),
 the [large document reader](preview/large-notebook.png), and
@@ -455,6 +527,11 @@ Shortcuts launch when you click them.
 **Build_EXE.bat** uses PyInstaller on Windows to create
 dist\PixelSystemBuddy.exe. No prebuilt Windows EXE is included.
 The assets directory, including the native bridge script, is bundled automatically.
+The build also includes PDFium's native library and dependency license files.
+The standard executable excludes optional local AI libraries. To make a larger
+executable with meaning-based recall, run `Build_EXE.bat semantic`; this explicitly
+installs the CPU semantic dependencies. Download the model separately and select
+its local directory in Settings. Tesseract remains an optional external executable.
 
 If native targets are empty, keep an Explorer folder or browser tab visible and
 Refresh. Confirm native play is enabled. The status reports blocked or timed-out
@@ -471,9 +548,24 @@ errors. No automatic installation at login occurs unless Start with Windows is e
 
 ## Validation and practical limits
 
-The 6.0 update was checked with Python 3.12, PySide6 6.11.2, psutil 7.2.2, and Linux
-offscreen Qt. The suite contains 65 unit tests and six GUI checks. Native Windows
-controls and Groq replies in the GUI checks were scripted.
+The current desktop update passed 317 unit tests and all seven GUI workflows
+with Python 3.12 and Linux offscreen Qt. Real PDFium extraction, scanned-page
+Tesseract OCR, web extraction, fuzzy matching, and packaged worker cleanup were
+checked, including a frozen application startup and native PDF/OCR probe.
+Groq replies and Windows desktop automation in GUI checks were scripted.
+Sentence Transformers loading, local indexing, and query execution were checked
+with an offline tiny model; pretrained MiniLM retrieval quality could not be
+checked because this cloud's network blocked the model download.
+
+Regression coverage includes replacement restores near the notebook capacity,
+schema migration, cancellation, concurrent edits, crashes around restore commits,
+corrupt metadata recovery, Unicode PDF text, and stale semantic search results.
+The medieval monitor caches metric layers between torch animation frames, and
+hidden pet timers stop. A synthetic tiny-HUD torch redraw benchmark improved
+from 1.86 ms to 0.06 ms; this measures decoration repaint work, not overall app
+performance. A Windows GitHub Actions workflow runs tests, GUI checks, and a
+packaged build on pushes and pull requests. Its native Windows results still
+need verification. Full billion-character storage performance was not benchmarked.
 
 Coverage includes line reveal timing, the small HUD, hopping to target coordinates,
 folder hiding/peeking, following moved targets, disappearing targets, reminder

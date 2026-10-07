@@ -79,9 +79,7 @@ class MemoryWindow(QDialog):
         selected = self.editing_id
         blocked = self.list.blockSignals(True)
         self.list.clear()
-        for entry in self.store.entries(query=self.search.text()):
-            if self.search.text().strip().casefold() not in entry['text'].casefold():
-                continue
+        for entry in self.store.search_entries(query=self.search.text()):
             item = QListWidgetItem(f"{entry['kind'].title()}: {entry['text']}")
             item.setData(Qt.UserRole, entry['id'])
             self.list.addItem(item)

@@ -130,6 +130,35 @@ class SettingsWindow(QDialog):
         self.checkbox(notes, "note_reminders", "Remind me about notes")
         self.spinbox(notes, "note_repeat_minutes", "Default repeat interval", 0, 1440, " min", 5)
         self.hint(notes, "Open Jeffery's Notepad from his menu. New notes get an acknowledgment, then repeat at their own interval. Set 0 for an acknowledgment without repeats. Quiet mode holds reminders until you turn it off. Jeffery must stay running.")
+        documents = self.tab("Documents & memory")
+        self.combobox(documents, "pdf_engine", "PDF reader", [("Automatic", "auto"),
+            ("Native PDFium", "pdfium"), ("Compatibility (pypdf)", "pypdf")])
+        self.hint(documents, "Use Compatibility if a complex PDF cannot be read by the native reader. OCR requires the native reader.")
+        self.checkbox(documents, "pdf_ocr", "Read scanned PDF pages with OCR by default")
+        self.hint(documents, "You can choose OCR for each import in Notepad. Scanned pages take longer; install Tesseract and its language files first.")
+        for key, label, placeholder in (("ocr_language", "OCR languages", "eng or eng+fra"),
+                ("tesseract_path", "Tesseract executable", "Automatic detection, or select tesseract.exe"),
+                ("semantic_model_path", "Local memory model folder", "Default: data/models/all-MiniLM-L6-v2")):
+            control = QLineEdit()
+            control.setMaxLength(64 if key == "ocr_language" else 1024)
+            control.setPlaceholderText(placeholder)
+            self.controls[key] = control
+            if key == "ocr_language":
+                documents.addRow(label, control)
+            else:
+                row = QHBoxLayout()
+                row.addWidget(control, 1)
+                browse = QPushButton("Browse…")
+                browse.clicked.connect(lambda checked=False, field=key: self.choose_local_path(field))
+                row.addWidget(browse)
+                documents.addRow(label, row)
+        self.checkbox(documents, "semantic_memory_enabled", "Find related notebook memories by meaning")
+        self.semantic_status = QLabel("Meaning-based recall is optional. Choose a downloaded local model before enabling it.")
+        self.semantic_status.setObjectName("subtitle")
+        self.semantic_status.setTextFormat(Qt.PlainText)
+        self.semantic_status.setWordWrap(True)
+        documents.addRow(self.semantic_status)
+        self.hint(documents, "Optional local model: install the semantic dependencies and download the model using the README commands. No model downloads happen during chat. Indexing runs in the background; keyword search stays available while it catches up. Sharing notes with Groq also shares relevant recalled passages.")
         footer = QHBoxLayout()
         self.status = QLabel("")
         self.status.setObjectName("subtitle")
@@ -152,6 +181,14 @@ class SettingsWindow(QDialog):
         scroll.setWidget(page)
         self.tabs.addTab(scroll, label)
         return form
+
+    def choose_local_path(self, key):
+        if key == "semantic_model_path":
+            selected = QFileDialog.getExistingDirectory(self, "Choose downloaded memory model")
+        else:
+            selected, _ = QFileDialog.getOpenFileName(self, "Choose Tesseract executable", "", "Executables (*.exe);;All files (*)")
+        if selected:
+            self.controls[key].setText(selected)
 
     def configure(self):
         colors = palette(self.settings)

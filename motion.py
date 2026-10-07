@@ -26,8 +26,10 @@ class HopMotion:
     elapsed: float = 0.0
 
     def step(self, delta):
+        if self.duration <= 0:
+            return self.end_x, self.end_y, True
         self.elapsed = min(self.duration, self.elapsed + max(0, min(0.25, delta)))
-        t = self.elapsed / max(0.01, self.duration)
+        t = self.elapsed / self.duration
         if t >= 1:
             return self.end_x, self.end_y, True
         return (self.start_x + (self.end_x - self.start_x) * t,

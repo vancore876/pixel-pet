@@ -143,6 +143,11 @@ class SystemStats(QObject):
 
     @Slot()
     def start(self):
+        if self.timer and self.timer.isActive():
+            return
+        self.last_time = 0.0
+        self.last_network = self.last_disk = None
+        self.process_cache.clear()
         if sys.platform == "win32":
             try:
                 import winreg
@@ -154,16 +159,21 @@ class SystemStats(QObject):
             self.gpu = WindowsGPU()
         except (OSError, AttributeError, ValueError):
             self.gpu = None
-        psutil.cpu_percent(None)
+        try:
+            psutil.cpu_percent(None)
+        except (OSError, psutil.Error, NotImplementedError):
+            pass
         try:
             self.boot_time = psutil.boot_time()
         except (OSError, psutil.Error, NotImplementedError):
             pass
-        self.process_timer = QTimer(self)
-        self.process_timer.setInterval(2000)
-        self.process_timer.timeout.connect(self.sample_processes)
-        self.timer = QTimer(self)
-        self.timer.timeout.connect(self.sample)
+        if self.process_timer is None:
+            self.process_timer = QTimer(self)
+            self.process_timer.setInterval(2000)
+            self.process_timer.timeout.connect(self.sample_processes)
+        if self.timer is None:
+            self.timer = QTimer(self)
+            self.timer.timeout.connect(self.sample)
         self.timer.start(self.interval)
         self.sample()
 
@@ -179,14 +189,18 @@ class SystemStats(QObject):
             self.timer.stop()
         if self.process_timer:
             self.process_timer.stop()
+        self.process_cache.clear()
         if self.gpu:
             self.gpu.close()
+            self.gpu = None
 
     @Slot(bool)
     def set_process_monitor(self, enabled):
         if not self.process_timer:
             return
         if enabled:
+            if self.process_timer.isActive():
+                return
             self.process_cache.clear()
             self.sample_processes()
             self.process_timer.start()

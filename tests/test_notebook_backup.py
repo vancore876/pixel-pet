@@ -1,15 +1,19 @@
 import copy
+import errno
 import hashlib
 import json
+import sqlite3
 from pathlib import Path
 import tempfile
 import threading
+import time
 import unittest
 from unittest.mock import patch
 import warnings
 import zipfile
 
 import documents
+from content_intake import cleanup_result
 from notebook_backup import (BackupCancelled, export_backup, export_text,
                              notebook_snapshot, prepare_backup)
 from notes import NoteStore
@@ -223,6 +227,310 @@ class NotebookBackupTests(unittest.TestCase):
             self.assertEqual(self.store.import_backup(result["payload"], allow_documents=True), 0)
             self.assertEqual(self.store.documents.total_characters(), 100)
         self.assertEqual("".join(self.store.documents.iter_text(original["document_id"])), "a" * 100)
+
+    def revised_archive(self, current, text, *, updated=200, name="revised.zip"):
+        payload = copy.deepcopy(self.store.state)
+        revised = next(note for note in payload["notes"] if note["id"] == current["id"])
+        revised.update(document_id="e" * 32, body=text[:10000], body_characters=len(text),
+            body_sha256=hashlib.sha256(text.encode()).hexdigest(), updated=updated)
+        bodies = {note["document_id"]: "".join(self.store.documents.iter_text(note["document_id"]))
+                  for note in payload["notes"] if note.get("document_id") and note["id"] != current["id"]}
+        bodies[revised["document_id"]] = text
+        return self.archive(payload, bodies, name=name)
+
+    def test_newer_document_restore_counts_replacement_once_at_capacity(self):
+        original = copy.deepcopy(self.document("a" * 150))
+        path = self.revised_archive(original, "b" * 175)
+        with patch.object(documents, "MAX_NOTEBOOK_CHARACTERS", 200):
+            result = prepare_backup({"store": self.store, "path": path})
+            self.assertEqual("".join(self.store.documents.iter_text(original["document_id"])), "a" * 150)
+            self.assertEqual(self.store.notes[0]["document_id"], original["document_id"])
+            self.assertEqual(self.store.import_backup(result["payload"], allow_documents=True), 1)
+            self.assertEqual(self.store.character_count(), 175)
+            self.assertEqual(self.store.documents.total_characters(), 175)
+            self.assertEqual("".join(self.store.documents.iter_text(self.store.notes[0]["document_id"])), "b" * 175)
+
+    def test_shared_old_document_is_not_credited_when_another_note_keeps_it(self):
+        original = copy.deepcopy(self.document("a" * 150))
+        shared = copy.deepcopy(original)
+        shared["id"] = "shared-note"
+        self.store.notes.append(shared)
+        self.store.save()
+        path = self.revised_archive(original, "b" * 175)
+        before = copy.deepcopy(self.store.state)
+        with patch.object(documents, "MAX_NOTEBOOK_CHARACTERS", 200):
+            with self.assertRaisesRegex(ValueError, "capacity|full|limit"):
+                prepare_backup({"store": self.store, "path": path})
+        self.assertEqual(self.store.state, before)
+        self.assertEqual(self.store.documents.total_characters(), 150)
+
+    def test_older_document_backup_does_not_use_replacement_capacity(self):
+        original = copy.deepcopy(self.document("a" * 150))
+        path = self.revised_archive(original, "b" * 175, updated=99)
+        with patch.object(documents, "MAX_NOTEBOOK_CHARACTERS", 200):
+            result = prepare_backup({"store": self.store, "path": path})
+            self.assertEqual(result["prepared_ids"], [])
+            self.assertEqual(self.store.import_backup(result["payload"], allow_documents=True), 0)
+            self.assertEqual(self.store.documents.total_characters(), 150)
+        self.assertEqual("".join(self.store.documents.iter_text(original["document_id"])), "a" * 150)
+
+    def test_cancelled_replacement_keeps_original_text_and_releases_batch(self):
+        original = copy.deepcopy(self.document("a" * 150))
+        path = self.revised_archive(original, "b" * 175)
+        cancel = threading.Event()
+        prepare = self.store.documents.prepare_import
+        def cancel_after_stage(argument, event):
+            result = prepare(argument, event)
+            cancel.set()
+            return result
+        with patch.object(documents, "MAX_NOTEBOOK_CHARACTERS", 200), \
+                patch.object(self.store.documents, "prepare_import", side_effect=cancel_after_stage):
+            with self.assertRaises(BackupCancelled):
+                prepare_backup({"store": self.store, "path": path}, cancel)
+        self.assertEqual(self.store.documents.total_characters(), 150)
+        self.assertEqual("".join(self.store.documents.iter_text(original["document_id"])), "a" * 150)
+        with sqlite3.connect(self.store.documents.path) as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM restore_batches").fetchone()[0], 0)
+
+    def test_json_write_failure_rolls_back_notes_and_cleanup_keeps_original(self):
+        original = copy.deepcopy(self.document("a" * 150))
+        path = self.revised_archive(original, "b" * 175)
+        before, before_file = copy.deepcopy(self.store.state), self.store.path.read_bytes()
+        with patch.object(documents, "MAX_NOTEBOOK_CHARACTERS", 200):
+            result = prepare_backup({"store": self.store, "path": path})
+            with patch("notes.os.replace", side_effect=OSError("read-only folder")):
+                with self.assertRaises(OSError):
+                    self.store.import_backup(result["payload"], allow_documents=True)
+            cleanup_result(result)
+        self.assertEqual(self.store.state, before)
+        self.assertEqual(self.store.path.read_bytes(), before_file)
+        self.assertEqual(self.store.documents.total_characters(), 150)
+        self.assertEqual("".join(self.store.documents.iter_text(original["document_id"])), "a" * 150)
+
+    def test_added_document_between_staging_and_commit_rejects_projected_overflow(self):
+        original = copy.deepcopy(self.document("a" * 150))
+        path = self.revised_archive(original, "b" * 175)
+        with patch.object(documents, "MAX_NOTEBOOK_CHARACTERS", 200):
+            result = prepare_backup({"store": self.store, "path": path})
+            added = self.document("c" * 50, "Concurrent document")
+            before, before_file = copy.deepcopy(self.store.state), self.store.path.read_bytes()
+            with self.assertRaisesRegex(ValueError, "capacity"):
+                self.store.import_backup(result["payload"], allow_documents=True)
+            cleanup_result(result)
+            self.assertEqual(self.store.documents.total_characters(), 200)
+        self.assertEqual(self.store.state, before)
+        self.assertEqual(self.store.path.read_bytes(), before_file)
+        self.assertTrue(self.store.documents.exists(original["document_id"]))
+        self.assertTrue(self.store.documents.exists(added["document_id"]))
+
+    def test_added_shared_reference_after_staging_preserves_old_document(self):
+        original = copy.deepcopy(self.document("a" * 150))
+        path = self.revised_archive(original, "b" * 175)
+        with patch.object(documents, "MAX_NOTEBOOK_CHARACTERS", 200):
+            result = prepare_backup({"store": self.store, "path": path})
+            shared = copy.deepcopy(original)
+            shared["id"] = "concurrent-shared-note"
+            self.store.notes.append(shared)
+            self.store.save()
+            before = copy.deepcopy(self.store.state)
+            with self.assertRaisesRegex(ValueError, "capacity"):
+                self.store.import_backup(result["payload"], allow_documents=True)
+            cleanup_result(result)
+        self.assertEqual(self.store.state, before)
+        self.assertEqual(self.store.documents.total_characters(), 150)
+        self.assertTrue(self.store.documents.exists(original["document_id"]))
+
+    def test_new_inline_note_after_staging_is_counted_at_final_commit(self):
+        original = copy.deepcopy(self.document("a" * 150))
+        path = self.revised_archive(original, "b" * 175)
+        with patch.object(documents, "MAX_NOTEBOOK_CHARACTERS", 200):
+            result = prepare_backup({"store": self.store, "path": path})
+            self.store.add("New inline note", "c" * 50, 0, now=210)
+            before = copy.deepcopy(self.store.state)
+            with self.assertRaisesRegex(ValueError, "capacity"):
+                self.store.import_backup(result["payload"], allow_documents=True)
+            cleanup_result(result)
+        self.assertEqual(self.store.state, before)
+        self.assertEqual(self.store.character_count(), 200)
+        self.assertTrue(self.store.documents.exists(original["document_id"]))
+
+    def test_restart_before_json_commit_discards_only_uncommitted_staging(self):
+        original = copy.deepcopy(self.document("a" * 150))
+        path = self.revised_archive(original, "b" * 175)
+        with patch.object(documents, "MAX_NOTEBOOK_CHARACTERS", 200):
+            result = prepare_backup({"store": self.store, "path": path})
+            staged_id = result["prepared_ids"][0]
+            self.store.close()
+            reopened = NoteStore(self.store.path)
+            self.targets.append(reopened)
+            self.assertEqual(reopened.documents.total_characters(), 150)
+            self.assertFalse(reopened.documents.exists(staged_id))
+            self.assertTrue(reopened.documents.exists(original["document_id"]))
+
+    def test_first_restore_persists_empty_baseline_for_precommit_restart(self):
+        self.document("The first document")
+        path = self.root / "first.zip"
+        export_backup(self.store, path)
+        target = self.target()
+        self.assertFalse(target.path.exists())
+        result = prepare_backup({"store": target, "path": path})
+        self.assertEqual(json.loads(target.path.read_text())["notes"], [])
+        target.close()
+        reopened = NoteStore(target.path)
+        self.targets.append(reopened)
+        self.assertEqual(reopened.documents.total_characters(), 0)
+        self.assertFalse(reopened.documents.exists(result["prepared_ids"][0]))
+        retry = prepare_backup({"store": reopened, "path": path})
+        self.assertEqual(reopened.import_backup(retry["payload"], allow_documents=True), 1)
+
+    def test_create_only_restore_baseline_never_overwrites_concurrent_first_note(self):
+        import notebook_backup
+        target = self.target()
+        link = notebook_backup.os.link
+        def gui_save_before_baseline_install(source, destination):
+            target.add("First saved task", "Keep this task", 0, now=100)
+            return link(source, destination)
+        with patch("notebook_backup.os.link", side_effect=gui_save_before_baseline_install):
+            notebook_backup._ensure_restore_baseline(target)
+        saved = json.loads(target.path.read_text())["notes"]
+        self.assertEqual(len(saved), 1)
+        self.assertEqual(saved[0]["body"], "Keep this task")
+        self.assertEqual(target.notes, saved)
+        self.assertEqual(list(target.path.parent.glob(".jeffery-backup-*")), [])
+
+    def test_windows_no_hardlink_fallback_installs_complete_baseline_without_posix_overwrite(self):
+        import notebook_backup
+        target = self.target()
+        rename = notebook_backup.os.rename
+        def windows_rename(source, destination):
+            if Path(destination).exists():
+                raise FileExistsError(str(destination))
+            return rename(source, destination)
+        with patch.object(notebook_backup, "_WINDOWS_CREATE_ONLY_RENAME", True), \
+                patch("notebook_backup.os.link", side_effect=OSError(errno.ENOTSUP, "no hard links")), \
+                patch("notebook_backup.os.rename", side_effect=windows_rename) as fallback:
+            notebook_backup._ensure_restore_baseline(target)
+            fallback.assert_called_once()
+        self.assertEqual(json.loads(target.path.read_text()), target.state)
+        self.assertEqual(list(target.path.parent.glob(".jeffery-backup-*")), [])
+        other = NoteStore(self.root / "posix" / "notes.json")
+        self.targets.append(other)
+        with patch.object(notebook_backup, "_WINDOWS_CREATE_ONLY_RENAME", False), \
+                patch("notebook_backup.os.link", side_effect=OSError(errno.ENOTSUP, "no hard links")), \
+                patch("notebook_backup.os.rename") as forbidden:
+            with self.assertRaises(OSError):
+                notebook_backup._ensure_restore_baseline(other)
+            forbidden.assert_not_called()
+        self.assertFalse(other.path.exists())
+
+    def test_windows_no_hardlink_fallback_preserves_concurrent_first_gui_save(self):
+        import notebook_backup
+        target = self.target()
+        def gui_save_before_windows_rename(source, destination):
+            target.add("First saved task", "Keep this task", 0, now=100)
+            if Path(destination).exists():
+                raise FileExistsError(str(destination))
+            raise AssertionError("GUI save did not create the destination")
+        with patch.object(notebook_backup, "_WINDOWS_CREATE_ONLY_RENAME", True), \
+                patch("notebook_backup.os.link", side_effect=OSError(errno.ENOTSUP, "no hard links")), \
+                patch("notebook_backup.os.rename", side_effect=gui_save_before_windows_rename) as fallback:
+            notebook_backup._ensure_restore_baseline(target)
+            fallback.assert_called_once()
+        saved = json.loads(target.path.read_text())["notes"]
+        self.assertEqual(len(saved), 1)
+        self.assertEqual(saved[0]["body"], "Keep this task")
+        self.assertEqual(target.notes, saved)
+        self.assertEqual(list(target.path.parent.glob(".jeffery-backup-*")), [])
+
+    def test_busy_activation_after_json_commit_and_late_cleanup_are_restart_safe(self):
+        import notes
+        original = copy.deepcopy(self.document("a" * 150))
+        path = self.revised_archive(original, "b" * 175)
+        writer = sqlite3.connect(self.store.documents.path, isolation_level=None)
+        replace = notes.os.replace
+        def lock_after_json_replacement(source, destination):
+            replace(source, destination)
+            writer.execute("BEGIN IMMEDIATE")
+        try:
+            with patch.object(documents, "MAX_NOTEBOOK_CHARACTERS", 200):
+                result = prepare_backup({"store": self.store, "path": path})
+                staged_id = result["prepared_ids"][0]
+                started = time.monotonic()
+                with patch("notes.os.replace", side_effect=lock_after_json_replacement):
+                    self.assertEqual(self.store.import_backup(result["payload"], allow_documents=True), 1)
+                self.assertLess(time.monotonic() - started, 1)
+                self.assertEqual(json.loads(self.store.path.read_text())["notes"][0]["document_id"], staged_id)
+                cleanup_result(result)
+                self.assertTrue(self.store.documents.exists(staged_id))
+                self.assertTrue(self.store.documents.exists(original["document_id"]))
+                writer.execute("ROLLBACK")
+                self.store.close()
+                reopened = NoteStore(self.store.path)
+                self.targets.append(reopened)
+                self.assertEqual(reopened.documents.total_characters(), 175)
+                self.assertEqual("".join(reopened.documents.iter_text(staged_id)), "b" * 175)
+                self.assertFalse(reopened.documents.exists(original["document_id"]))
+        finally:
+            if writer.in_transaction:
+                writer.execute("ROLLBACK")
+            writer.close()
+
+    def test_corrupt_notebook_recovery_and_later_save_preserve_all_document_text(self):
+        original = copy.deepcopy(self.document("a" * 150))
+        path = self.revised_archive(original, "b" * 175)
+        result = prepare_backup({"store": self.store, "path": path})
+        staged_id = result["prepared_ids"][0]
+        self.store.close()
+        self.store.path.write_text("{broken", encoding="utf-8")
+        reopened = NoteStore(self.store.path)
+        self.targets.append(reopened)
+        self.assertTrue(reopened.documents.exists(original["document_id"]))
+        self.assertTrue(reopened.documents.exists(staged_id))
+        reopened.add("Fresh note", "Unrelated", 0, now=300)
+        self.assertTrue(reopened.documents.exists(original["document_id"]))
+        self.assertTrue(reopened.documents.exists(staged_id))
+
+    def test_transient_startup_writer_keeps_committed_recovery_retryable(self):
+        original = copy.deepcopy(self.document("a" * 150))
+        path = self.revised_archive(original, "b" * 175)
+        result = prepare_backup({"store": self.store, "path": path})
+        self.store.path.write_text(json.dumps(result["payload"]), encoding="utf-8")
+        staged_id = result["prepared_ids"][0]
+        self.store.close()
+        writer = sqlite3.connect(self.store.documents.path, isolation_level=None)
+        try:
+            writer.execute("BEGIN IMMEDIATE")
+            with patch.object(documents.DocumentStore, "_schedule_cleanup"):
+                reopened = NoteStore(self.store.path)
+                self.targets.append(reopened)
+                self.assertTrue(reopened.documents.exists(staged_id))
+                self.assertTrue(reopened._restore_recovery_pending)
+                writer.execute("ROLLBACK")
+                self.assertEqual(reopened.documents.total_characters(), 175)
+                self.assertFalse(reopened._restore_recovery_pending)
+                self.assertFalse(reopened.documents.exists(original["document_id"]))
+        finally:
+            if writer.in_transaction:
+                writer.execute("ROLLBACK")
+            writer.close()
+
+    def test_blocked_corrupt_metadata_never_deletes_staged_or_original_documents(self):
+        original = copy.deepcopy(self.document("a" * 150))
+        path = self.revised_archive(original, "b" * 175)
+        result = prepare_backup({"store": self.store, "path": path})
+        staged_id = result["prepared_ids"][0]
+        self.store.close()
+        self.store.path.write_text("{broken", encoding="utf-8")
+        with patch.object(Path, "replace", side_effect=OSError("read-only folder")):
+            reopened = NoteStore(self.store.path)
+        self.targets.append(reopened)
+        self.assertTrue(reopened.blocked_write)
+        self.assertTrue(reopened.documents.exists(staged_id))
+        self.assertTrue(reopened.documents.exists(original["document_id"]))
+        with self.assertRaises(OSError):
+            reopened.add("Fresh note", "Unrelated", 0, now=300)
+        self.assertTrue(reopened.documents.exists(staged_id))
+        self.assertTrue(reopened.documents.exists(original["document_id"]))
 
     def test_reused_document_is_verified_and_never_deleted_on_cancel(self):
         original = self.document("a" * 12000, "Keep document")

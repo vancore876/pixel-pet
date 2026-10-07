@@ -4,6 +4,7 @@ from __future__ import annotations
 import copy
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -42,6 +43,7 @@ class AppSettings:
         options = {"theme": ("midnight", "forest", "plum"), "pet_palette": ("mint", "sky", "amber", "rose"),
                    "roaming_mode": ("bottom", "free"), "character": ("robot", "cat", "knight"),
                    "monitor_style": ("medieval", "classic"),
+                   "pdf_engine": ("auto", "pdfium", "pypdf"),
                    "mouse_mode": ("off", "watch", "chase", "shy")}
         for key, default in DEFAULTS.items():
             value = raw.get(key, default)
@@ -62,6 +64,11 @@ class AppSettings:
             elif key == "ai_model":
                 cleaned = value.strip() if isinstance(value, str) else ""
                 result[key] = cleaned if 0 < len(cleaned) <= 100 and all(c.isalnum() or c in '/-._' for c in cleaned) else default
+            elif key == "ocr_language":
+                cleaned = value.strip() if isinstance(value, str) else ""
+                result[key] = cleaned if len(cleaned) <= 64 and re.fullmatch(r"[A-Za-z0-9_]+(?:\+[A-Za-z0-9_]+)*", cleaned) else default
+            elif key in ("tesseract_path", "semantic_model_path"):
+                result[key] = value.strip() if isinstance(value, str) and len(value) <= 1024 and all(c.isprintable() for c in value) else default
         return result
 
     def __getitem__(self, key):

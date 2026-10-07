@@ -1,6 +1,11 @@
 """Application coordinator. Run with `python main.py`."""
 from __future__ import annotations
 
+# Packaged PDF workers must dispatch before importing Qt or creating windows.
+if __name__ == "__main__":
+    from multiprocessing import freeze_support
+    freeze_support()
+
 import argparse
 import logging
 import sys
@@ -32,6 +37,7 @@ from characters import ANIMATION_STATES
 from memory import MemoryStore
 from memory_window import MemoryWindow
 from memory_learning import MemoryLearner
+from semantic_memory import SemanticMemory, SemanticService
 
 
 class BuddyApp(QObject):
@@ -63,9 +69,16 @@ class BuddyApp(QObject):
         self.credentials = CredentialStore()
         self.memory_window = MemoryWindow(self.memory_store, self.settings)
         self.memory_learner = MemoryLearner(self.memory_store, self.settings, self.credentials, self)
+        self.semantic = SemanticService(SemanticMemory(self.settings.path.parent / "semantic.sqlite",
+            model_path=self.settings["semantic_model_path"], documents=self.notes_store.documents), self)
+        self.semantic.status_changed.connect(self.dialog.semantic_status.setText)
+        self.semantic_timer = QTimer(self)
+        self.semantic_timer.setInterval(10_000)
+        self.semantic_timer.timeout.connect(self.refresh_semantic_memory)
+        self.configure_semantic_memory({})
         self.latest_snapshot = None
         self.chat = ChatWindow(self.settings, self.credentials, self.ai_context, self.run_buddy_action,
-            memory_store=self.memory_store, notebook_store=self.notes_store)
+            memory_store=self.memory_store, notebook_store=self.notes_store, semantic_service=self.semantic)
         self.chat.user_message.connect(self.memory_learner.observe)
         self.chat.notepad_requested.connect(self.show_notepad)
         self.chat.memory_requested.connect(self.show_memory)
@@ -291,6 +304,7 @@ class BuddyApp(QObject):
         self.note_popup.configure()
         self.launcher_window.configure()
         self.chat.configure()
+        self.configure_semantic_memory(changes)
         self.memory_window.configure()
         if not self.settings["memory_enabled"] or not self.settings["memory_ai"] or not self.settings["ai_share_memory"]:
             self.memory_learner.reset()
@@ -326,11 +340,33 @@ class BuddyApp(QObject):
     def effective_interval(self):
         return max(2000, self.settings["interval_ms"]) if self.settings["low_power"] else self.settings["interval_ms"]
 
+    def configure_semantic_memory(self, changes):
+        enabled = self.settings["semantic_memory_enabled"]
+        sharing = self.settings["ai_share_notes"]
+        if any(key in changes for key in ("semantic_memory_enabled", "semantic_model_path", "ai_share_notes")):
+            self.semantic.configure(model_path=self.settings["semantic_model_path"])
+        if not enabled or not sharing:
+            self.semantic.cancel()
+            self.dialog.semantic_status.setText("Meaning-based recall is off." if not enabled else
+                "Turn on notebook sharing to use meaning-based recall in chat.")
+        background = enabled and sharing and not self.settings["low_power"] and not self.settings["quiet_mode"]
+        if background and not self.semantic_timer.isActive():
+            self.semantic_timer.start()
+        elif not background:
+            self.semantic_timer.stop()
+
+    def refresh_semantic_memory(self):
+        if (not self.shutting_down and self.settings["semantic_memory_enabled"]
+                and self.settings["ai_share_notes"] and not self.settings["low_power"]
+                and not self.settings["quiet_mode"] and not self.semantic.busy):
+            self.semantic.refresh([dict(note) for note in self.notes_store.notes])
+
     def remember_snapshot(self, snapshot):
         self.latest_snapshot = snapshot
 
     def apply_ai_preferences(self, changes):
         if self.persist(changes) and hasattr(self, 'brain'):
+            self.configure_semantic_memory(changes)
             self.brain.configure()
             self.smart_notes.configure()
             self.voice.configure()
@@ -749,6 +785,8 @@ class BuddyApp(QObject):
         if self.shutting_down:
             return
         self.shutting_down = True
+        self.semantic_timer.stop()
+        self.semantic.shutdown()
         self.overlay.stop_animation()
         self.notepad.shutdown()
         self.chat.shutdown()

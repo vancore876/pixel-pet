@@ -25,7 +25,8 @@ def prepare_document(argument, cancel=None):
 
 def prepare_notebook_backup(argument, cancel=None):
     result = prepare_backup(argument, cancel)
-    result['_cleanup'] = lambda: argument['store']._discard_unreferenced(result.get('prepared_ids', []))
+    if '_cleanup' not in result:
+        result['_cleanup'] = lambda: argument['store']._discard_unreferenced(result.get('prepared_ids', []))
     return result
 
 

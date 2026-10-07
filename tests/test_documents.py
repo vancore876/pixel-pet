@@ -348,7 +348,39 @@ class DocumentStoreTests(unittest.TestCase):
         self.assertEqual(reopened.metadata(prepared["document_id"]), prepared)
         self.assertTrue(reopened.exists(new["document_id"]))
         with sqlite3.connect(self.store.path) as connection:
+            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 3)
+
+    def test_version_two_read_only_pages_and_totals_upgrade_only_on_write(self):
+        prepared = self.store.prepare_text("A version two notebook stays readable.")
+        with sqlite3.connect(self.store.path) as connection:
+            connection.execute("ALTER TABLE documents DROP COLUMN staged_restore")
+            connection.execute("ALTER TABLE documents DROP COLUMN restore_batch")
+            connection.execute("DROP TABLE restore_batches")
+            connection.execute("PRAGMA user_version = 2")
+        with patch.object(DocumentStore, "_schedule_cleanup"):
+            reopened = DocumentStore(self.store.path)
+        self.assertEqual(reopened.metadata(prepared["document_id"]), prepared)
+        self.assertEqual(reopened.read_page(prepared["document_id"], 0), prepared["body"])
+        self.assertEqual(reopened.total_characters(), prepared["body_characters"])
+        with sqlite3.connect(self.store.path) as connection:
             self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 2)
+        new = reopened.prepare_text("A document after migrating the restore schema.")
+        self.assertTrue(reopened.exists(new["document_id"]))
+        with sqlite3.connect(self.store.path) as connection:
+            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 3)
+
+    def test_staged_restore_does_not_relax_ordinary_document_capacity(self):
+        with patch("documents.MAX_NOTEBOOK_CHARACTERS", 100):
+            original = self.store.prepare_text("a" * 50)
+            restore_id = self.store.begin_restore({original["document_id"]})
+            staged = self.store.prepare_import({"text_file": self.source("b" * 80), "restore_id": restore_id})
+            self.assertEqual(self.store.total_characters(), 50)
+            self.assertTrue(self.store.exists(staged["document_id"]))
+            with self.assertRaisesRegex(DocumentError, "capacity"):
+                self.store.prepare_text("c" * 51)
+            self.store.abort_restore(restore_id)
+            self.assertTrue(self.store.exists(original["document_id"]))
+            self.assertFalse(self.store.exists(staged["document_id"]))
 
     def test_many_matching_chunks_do_not_hide_other_documents(self):
         first = self.store.prepare_text("observatory " * 10_000)

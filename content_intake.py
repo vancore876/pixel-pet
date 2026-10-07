@@ -226,7 +226,7 @@ def _result(kind, title, text, url="", sources=None, truncated=False, cancel=Non
         raise
 
 
-def extract_pdf(path, cancel=None):
+def _extract_pdf_pypdf(path, cancel=None):
     """Extract PDF text to a temporary file, keeping only a bounded UI preview."""
     from pypdf import PdfReader
     from pypdf.errors import PdfReadError
@@ -269,7 +269,7 @@ def extract_pdf(path, cancel=None):
                 raise IntakeError("No selectable text was found. This may be a scanned PDF; run OCR and import the text-enabled copy.")
             metadata = reader.metadata
             title = str(metadata.title) if metadata and metadata.title else path.stem
-        return spool.result("pdf", title, pages=pages, filename=path.name)
+        return spool.result("pdf", title, pages=pages, filename=path.name, engine="pypdf")
     except (IntakeError, _Canceled):
         if spool is not None:
             spool.discard()
@@ -286,6 +286,87 @@ def extract_pdf(path, cancel=None):
         if spool is not None:
             spool.discard()
         raise
+
+
+def extract_pdf(path, cancel=None, *, engine="auto", ocr=False, ocr_language="eng", tesseract_path=""):
+    """Spool native PDF text from an isolated process, with a pypdf fallback.
+
+    OCR is opt-in and runs locally only for pages without selectable text.
+    The compatibility reader remains available when PDFium is not installed.
+    """
+    from pdf_engine import (PDFEngineCanceled, PDFEngineCompatibilityError, PDFEngineError,
+                            pdfium_available, stream_pdf)
+
+    if engine not in ("auto", "pdfium", "pypdf"):
+        raise IntakeError("Choose the automatic, native, or compatibility PDF reader.")
+    _check_cancel(cancel)
+    native = engine != "pypdf" and pdfium_available()
+    if not native:
+        if ocr or engine == "pdfium":
+            raise IntakeError("Install the native PDF reader to enable PDF previews and Tesseract OCR.")
+        return _extract_pdf_pypdf(path, cancel)
+    path = Path(path)
+    if path.suffix.casefold() != ".pdf":
+        raise IntakeError("Choose a PDF file (.pdf).")
+    try:
+        # Validate before starting a process, retaining file-backed size checks.
+        with path.open("rb") as source:
+            source.seek(0, 2)
+            if source.tell() > MAX_PDF_BYTES:
+                raise IntakeError("Choose a PDF up to 500 MB, or split it into smaller documents.")
+            source.seek(0)
+            if source.read(5) != b"%PDF-":
+                raise IntakeError("This file does not appear to be a valid PDF.")
+    except OSError:
+        raise IntakeError("The PDF could not be opened. Check that the file still exists and is readable.") from None
+    _check_cancel(cancel)
+    spool = _TextSpool(cancel)
+    stream = stream_pdf(path, cancel, ocr=ocr, ocr_language=ocr_language,
+                        tesseract_path=tesseract_path, max_bytes=MAX_PDF_BYTES)
+    metadata = {"title": path.stem, "pages": 0, "engine": "pdfium"}
+    previous_page = None
+    extra = {"ocr_pages": 0}
+    try:
+        for message in stream:
+            _check_cancel(cancel)
+            if message[0] == "metadata":
+                metadata.update(message[1])
+            elif message[0] == "text":
+                page, text = message[1:]
+                if previous_page != page:
+                    spool.append(("\n\n" if spool.character_count else "") + f"Page {page}\n")
+                    previous_page = page
+                spool.append(text)
+                if spool.truncated:
+                    break
+            elif message[0] == "done":
+                extra.update(message[1])
+        if not spool.character_count:
+            if ocr:
+                raise IntakeError("No readable text was found, including OCR. Try a clearer scan or another OCR language.")
+            raise IntakeError("No selectable text was found. Enable OCR for scanned pages and install Tesseract if needed.")
+        return spool.result("pdf", metadata["title"], pages=metadata["pages"], filename=path.name,
+                            engine="pdfium", **extra)
+    except PDFEngineCanceled:
+        spool.discard()
+        raise _Canceled() from None
+    except PDFEngineCompatibilityError as exc:
+        spool.discard()
+        # Stop the native worker before opening the source with another reader.
+        stream.close()
+        if engine == "auto" and not ocr:
+            result = _extract_pdf_pypdf(path, cancel)
+            result["compatibility_fallback"] = True
+            return result
+        raise IntakeError(str(exc)) from None
+    except PDFEngineError as exc:
+        spool.discard()
+        raise IntakeError(str(exc)) from None
+    except BaseException:
+        spool.discard()
+        raise
+    finally:
+        stream.close()
 
 
 def validate_public_url(value, *, resolve=True):
@@ -415,6 +496,25 @@ class _PublicRedirect(urllib.request.HTTPRedirectHandler):
         return super().redirect_request(req, fp, code, msg, headers, target)
 
 
+def _decode_web_payload(payload, mime, charset=None):
+    """Respect HTTP encoding, then a bounded HTML charset declaration."""
+    if not charset:
+        if payload.startswith((b"\xff\xfe\x00\x00", b"\x00\x00\xfe\xff")):
+            charset = "utf-32"
+        elif payload.startswith((b"\xff\xfe", b"\xfe\xff")):
+            charset = "utf-16"
+        elif mime in ("text/html", "application/xhtml+xml"):
+            for tag in re.findall(br"<meta\b[^>]{0,1024}>", payload[:4096], re.IGNORECASE):
+                declared = re.search(br"charset\s*=\s*[\"']?\s*([a-zA-Z0-9._:-]+)", tag, re.IGNORECASE)
+                if declared:
+                    charset = declared.group(1).decode("ascii")
+                    break
+    try:
+        return payload.decode(charset or "utf-8-sig", errors="replace")
+    except (LookupError, UnicodeError):
+        return payload.decode("utf-8-sig", errors="replace")
+
+
 def fetch_public_bytes(url, cancel=None):
     """Read a bounded response with verified TLS, DNS checks and normal proxies."""
     _check_cancel(cancel)
@@ -452,11 +552,8 @@ def fetch_public_bytes(url, cancel=None):
                     raise IntakeError("This compressed webpage is too large or incomplete.")
             elif encoding not in ("", "identity"):
                 raise IntakeError("This webpage uses an unsupported encoding. Try another page.")
-            charset = response.headers.get_content_charset() or "utf-8"
-            try:
-                source = bytes(payload).decode(charset, errors="replace")
-            except LookupError:
-                source = bytes(payload).decode("utf-8", errors="replace")
+            source = _decode_web_payload(bytes(payload), content_type,
+                                         response.headers.get_content_charset())
             return final_url, content_type, source
     except IntakeError:
         raise
@@ -482,20 +579,23 @@ class ReadableHTML(HTMLParser):
     def __init__(self):
         super().__init__(convert_charrefs=True)
         self.stack, self.output, self.title_parts = [], [], []
+        self.title_depth, self.head_depth = 0, 0
 
     @property
     def hidden(self):
-        return any(row[1] for row in self.stack)
+        return bool(self.stack and self.stack[-1][1])
 
     def handle_starttag(self, tag, attrs):
         attrs = dict(attrs)
-        style = re.sub(r"\s+", "", attrs.get("style", "")).casefold()
-        hidden = (tag in self.OMIT or "hidden" in attrs or attrs.get("aria-hidden", "").casefold() == "true"
+        style = re.sub(r"\s+", "", attrs.get("style") or "").casefold()
+        hidden = (tag in self.OMIT or "hidden" in attrs or (attrs.get("aria-hidden") or "").casefold() == "true"
                   or "display:none" in style or "visibility:hidden" in style
-                  or attrs.get("role", "").casefold() in ("navigation", "banner", "contentinfo"))
+                  or (attrs.get("role") or "").casefold() in ("navigation", "banner", "contentinfo"))
         parent_hidden = self.hidden
         if tag not in self.VOID:
-            self.stack.append((tag, hidden))
+            self.stack.append((tag, hidden or parent_hidden))
+            self.title_depth += tag == "title"
+            self.head_depth += tag == "head"
         if not parent_hidden and not hidden:
             if tag in self.BLOCKS or tag == "hr":
                 self.output.append("\n\n")
@@ -514,15 +614,18 @@ class ReadableHTML(HTMLParser):
             self.output.append("\n\n")
         for index in range(len(self.stack) - 1, -1, -1):
             if self.stack[index][0] == tag:
+                removed = self.stack[index:]
+                self.title_depth -= sum(row[0] == "title" for row in removed)
+                self.head_depth -= sum(row[0] == "head" for row in removed)
                 del self.stack[index:]
                 break
 
     def handle_data(self, data):
         if self.hidden:
             return
-        if any(tag == "title" for tag, _ in self.stack):
+        if self.title_depth:
             self.title_parts.append(data)
-        elif not any(tag == "head" for tag, _ in self.stack):
+        elif not self.head_depth:
             self.output.append(data)
 
     def read(self, source):
@@ -534,34 +637,63 @@ class ReadableHTML(HTMLParser):
 def extract_web(url, cancel=None):
     final_url, mime, source = fetch_public_bytes(url, cancel)
     _check_cancel(cancel)
-    title, text = ReadableHTML().read(source) if mime != "text/plain" else ("", normalize_text(source))
+    metadata = {}
+    if mime == "text/plain":
+        title, text, extractor = "", normalize_text(source), "plain"
+    else:
+        from web_helpers import extract_article
+        title, text, metadata = extract_article(source, final_url, omit_tags=ReadableHTML.OMIT)
+        extractor = "trafilatura"
+        if not text:
+            title, text = ReadableHTML().read(source)
+            extractor = "html"
+        text = normalize_text(text)
+    _check_cancel(cancel)
     title = title or urllib.parse.urlsplit(final_url).hostname
+    title = normalize_text(str(title)).replace("\n", " ")[:100]
+    metadata = {key: normalize_text(value).replace("\n", " ") for key, value in metadata.items()}
     if not text:
         raise IntakeError("No readable text was found. This page may need sign-in or JavaScript; choose a public article instead.")
-    return _result("web", title, text, final_url, [{"title": title, "url": final_url}], cancel=cancel)
+    return _result("web", title, text, final_url, [{"title": title, "url": final_url}],
+                   cancel=cancel, metadata=metadata, extractor=extractor)
 
 
 class _SearchHTML(HTMLParser):
     def __init__(self):
         super().__init__(convert_charrefs=True)
         self.results, self.active, self.capture, self.parts = [], None, None, []
+        self.capture_stack = []
 
     def handle_starttag(self, tag, attrs):
         attrs = dict(attrs)
-        classes = set(attrs.get("class", "").split())
+        classes = set((attrs.get("class") or "").split())
         if tag == "a" and classes.intersection({"result__a", "result-link"}):
             self.finish_capture()
             if self.active:
                 self.results.append(self.active)
-            self.active = {"title": "", "url": attrs.get("href", ""), "snippet": ""}
+            self.active = {"title": "", "url": attrs.get("href") or "", "snippet": ""}
             self.capture, self.parts = "title", []
+            self.capture_stack = [tag]
         elif classes.intersection({"result__snippet", "result-snippet"}) and self.active:
             self.finish_capture()
             self.capture, self.parts = "snippet", []
+            self.capture_stack = [tag]
+        elif self.capture and tag not in ReadableHTML.VOID:
+            self.capture_stack.append(tag)
+
+    def handle_startendtag(self, tag, attrs):
+        self.handle_starttag(tag, attrs)
+        if tag not in ReadableHTML.VOID:
+            self.handle_endtag(tag)
 
     def handle_endtag(self, tag):
-        if (self.capture == "title" and tag == "a") or (self.capture == "snippet" and tag in ("a", "td", "div")):
-            self.finish_capture()
+        if self.capture:
+            for index in range(len(self.capture_stack) - 1, -1, -1):
+                if self.capture_stack[index] == tag:
+                    del self.capture_stack[index:]
+                    break
+            if not self.capture_stack:
+                self.finish_capture()
 
     def handle_data(self, data):
         if self.capture:
@@ -569,8 +701,10 @@ class _SearchHTML(HTMLParser):
 
     def finish_capture(self):
         if self.capture and self.active:
-            self.active[self.capture] = normalize_text("".join(self.parts))
+            limit = 300 if self.capture == "title" else 1200
+            self.active[self.capture] = normalize_text("".join(self.parts))[:limit]
         self.capture, self.parts = None, []
+        self.capture_stack = []
 
     def read(self, source):
         self.feed(source)
@@ -580,15 +714,18 @@ class _SearchHTML(HTMLParser):
             self.results.append(self.active)
         results, seen = [], set()
         for row in self.results:
-            raw = urllib.parse.urljoin(SEARCH_ENDPOINT, row["url"])
-            parsed = urllib.parse.urlsplit(raw)
-            if parsed.hostname and parsed.hostname.endswith("duckduckgo.com"):
-                raw = urllib.parse.parse_qs(parsed.query).get("uddg", [raw])[0]
             try:
+                raw = urllib.parse.urljoin(SEARCH_ENDPOINT, row["url"])
+                parsed = urllib.parse.urlsplit(raw)
+                hostname = (parsed.hostname or "").rstrip(".").casefold()
+                if hostname == "duckduckgo.com" or hostname.endswith(".duckduckgo.com"):
+                    raw = urllib.parse.parse_qs(parsed.query, max_num_fields=20).get("uddg", [raw])[0]
                 row["url"] = validate_public_url(raw, resolve=False)
-            except IntakeError:
+            except (IntakeError, ValueError):
                 continue
-            if not row["title"] or row["url"] in seen or "duckduckgo.com" == urllib.parse.urlsplit(row["url"]).hostname:
+            hostname = urllib.parse.urlsplit(row["url"]).hostname or ""
+            if (not row["title"] or row["url"] in seen or hostname == "duckduckgo.com"
+                    or hostname.endswith(".duckduckgo.com")):
                 continue
             seen.add(row["url"])
             results.append(row)
@@ -696,8 +833,13 @@ class IntakeService(QObject):
     def busy(self):
         return self._current is not None
 
-    def import_pdf(self, path):
-        return self._start(extract_pdf, path)
+    def import_pdf(self, path, *, ocr=False, ocr_language="eng", tesseract_path="", engine="auto"):
+        if not ocr and ocr_language == "eng" and not tesseract_path and engine == "auto":
+            return self._start(extract_pdf, path)
+        from functools import partial
+        operation = partial(extract_pdf, ocr=ocr, ocr_language=ocr_language,
+                            tesseract_path=tesseract_path, engine=engine)
+        return self._start(operation, path)
 
     def fetch_url(self, url):
         return self._start(extract_web, url)

@@ -1,0 +1,4 @@
+# Optional local meaning-based recall. See README.md for the CPU-only torch install.
+# These packages and the model are never installed by the desktop launcher.
+torch==2.14.1
+sentence-transformers==6.1.0

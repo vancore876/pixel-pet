@@ -17,6 +17,8 @@ import threading
 import time
 import uuid
 
+from fuzzy_search import search_words, typo_score
+
 VERSION = 1
 KINDS = ("like", "dislike", "fact", "routine")
 MAX_MEMORIES = 1000
@@ -286,10 +288,25 @@ class MemoryStore:
         with self._lock:
             rows = [entry for entry in self.state["entries"] if kind is None or entry["kind"] == kind]
             words = _tokens(query) if isinstance(query, str) else set()
-            rows = sorted(rows, key=lambda entry: (len(words & _tokens(entry["text"])), entry["updated"]), reverse=True)
+            fuzzy_words = search_words(query) if not contains_secret(query) else ()
+            rows = sorted(rows, key=lambda entry: (len(words & _tokens(entry["text"])),
+                          typo_score(fuzzy_words, entry["text"]), entry["updated"]), reverse=True)
             if limit is not None:
                 rows = rows[:max(0, int(limit))]
             return copy.deepcopy(rows)
+
+    def search_entries(self, query="", kind=None, limit=MAX_MEMORIES):
+        """Filter the memory editor using exact text or bounded typo matches."""
+        if not isinstance(query, str) or not query.strip():
+            return self.entries(kind=kind, limit=limit)
+        folded = query[:1000].strip().casefold()
+        words = search_words(query) if not contains_secret(query) else ()
+        rows = self.entries(kind=kind, query=query)
+        matched = [entry for entry in rows if folded in entry["text"].casefold()
+                   or (words and set(words) <= _tokens(entry["text"]))
+                   or typo_score(words, entry["text"]) >= 0.8]
+        count = max(0, min(MAX_MEMORIES, limit)) if type(limit) is int else MAX_MEMORIES
+        return matched[:count]
 
     def edit(self, identifier, kind, text):
         with self._lock:
@@ -328,11 +345,13 @@ class MemoryStore:
         budget = max(100, min(24000, int(max_chars)))
         count = max(0, min(40, int(limit)))
         words = _tokens(query) if isinstance(query, str) else set()
+        fuzzy_words = search_words(query) if not contains_secret(query) else ()
         result = {"memories": [], "tasks": []}
         candidates = []
         for entry in (self.entries() if include_memories else ()):
             row = {key: entry[key] for key in ("id", "kind", "text", "source", "updated")}
-            candidates.append((len(words & _tokens(entry["text"])), entry["updated"], "memories", row))
+            candidates.append((len(words & _tokens(entry["text"])), typo_score(fuzzy_words, entry["text"]),
+                               entry["updated"], "memories", row))
         for note in notes:
             if not isinstance(note, dict):
                 continue
@@ -364,9 +383,10 @@ class MemoryStore:
             updated = note.get("updated", note.get("created", 0))
             updated = updated if type(updated) in (int, float) and math.isfinite(updated) else 0
             searchable = " ".join([title, full_body, *[item["text"] for item in checklist]])
-            candidates.append((len(words & _tokens(searchable)), updated, "tasks", row))
-        candidates.sort(key=lambda candidate: (candidate[0], candidate[1]), reverse=True)
-        for _, _, category, row in candidates:
+            candidates.append((len(words & _tokens(searchable)), typo_score(fuzzy_words, title),
+                               updated, "tasks", row))
+        candidates.sort(key=lambda candidate: (candidate[0], candidate[1], candidate[2]), reverse=True)
+        for _, _, _, category, row in candidates:
             if sum(map(len, result.values())) >= count:
                 break
             trial = copy.deepcopy(result)

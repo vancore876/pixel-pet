@@ -24,6 +24,7 @@ class ScriptedIntake(QObject):
         super().__init__(parent)
         self.busy = False
         self.calls = []
+        self.pdf_options = {}
         self.closed = False
 
     def begin(self, kind, value):
@@ -34,7 +35,8 @@ class ScriptedIntake(QObject):
         self.busy_changed.emit(True)
         return True
 
-    def import_pdf(self, path):
+    def import_pdf(self, path, **options):
+        self.pdf_options = options
         return self.begin('pdf', path)
 
     def fetch_url(self, url):

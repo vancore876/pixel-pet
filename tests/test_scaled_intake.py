@@ -40,7 +40,7 @@ class ScaledExtractionTests(unittest.TestCase):
         with patch("pypdf.PdfReader", return_value=self.reader(texts)), \
                 patch.object(intake, "MAX_TEXT", preview), \
                 patch.object(intake, "MAX_DOCUMENT_CHARACTERS", limit):
-            result = intake.extract_pdf(self.path)
+            result = intake.extract_pdf(self.path, engine="pypdf")
         self.results.append(result)
         return result
 
@@ -79,7 +79,7 @@ class ScaledExtractionTests(unittest.TestCase):
         with patch("pypdf.PdfReader", return_value=reader), \
                 patch.object(intake, "MAX_TEXT", 40), \
                 patch.object(intake, "MAX_DOCUMENT_CHARACTERS", 80):
-            result = intake.extract_pdf(self.path)
+            result = intake.extract_pdf(self.path, engine="pypdf")
         self.results.append(result)
         self.assertEqual(result["character_count"], 80)
         self.assertTrue(result["truncated"])
@@ -99,7 +99,7 @@ class ScaledExtractionTests(unittest.TestCase):
         reader.pages[1].extract_text.side_effect = lambda: canceled.set() or "Second page."
         with patch("pypdf.PdfReader", return_value=reader), patch.object(intake, "MAX_TEXT", 32):
             with self.assertRaises(intake._Canceled):
-                intake.extract_pdf(self.path, canceled)
+                intake.extract_pdf(self.path, canceled, engine="pypdf")
         self.assert_no_spools()
 
     def test_parser_failure_after_spooling_removes_partial_full_text(self):
@@ -107,7 +107,7 @@ class ScaledExtractionTests(unittest.TestCase):
         reader.pages[1].extract_text.side_effect = ValueError("bad page")
         with patch("pypdf.PdfReader", return_value=reader), patch.object(intake, "MAX_TEXT", 32):
             with self.assertRaises(intake.IntakeError):
-                intake.extract_pdf(self.path)
+                intake.extract_pdf(self.path, engine="pypdf")
         self.assert_no_spools()
 
     def test_long_public_article_retains_text_beyond_its_preview(self):

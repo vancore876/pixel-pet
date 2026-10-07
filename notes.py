@@ -9,9 +9,13 @@ import math
 import os
 from pathlib import Path
 import sqlite3
+import tempfile
 import time
 import uuid
 from PySide6.QtCore import QObject, QTimer, Signal, QFileSystemWatcher
+
+from fuzzy_search import search_words, typo_score
+from memory import contains_secret
 
 MAX_NOTES = 2000
 MAX_DOCUMENT_NOTES = 200
@@ -43,6 +47,13 @@ def pending_items(note):
 def note_search_text(note):
     return ' '.join([note['title'], note['body'], note.get('customer', ''), note.get('contact', ''),
                      note.get('order_ref', ''), *[i['text'] for i in note.get('checklist', [])]])
+
+
+def note_search_label(note):
+    """Keep approximate matching on bounded labels, never complete note bodies."""
+    label = ' '.join([note['title'], note.get('customer', ''), note.get('order_ref', ''),
+                      note.get('document_source', '')])[:600]
+    return '' if contains_secret(label) else label
 
 
 def business_summary(notes, now=None):
@@ -111,6 +122,8 @@ class NoteStore:
         self.warning = ""
         self.blocked_write = False
         self._documents = None
+        self._restore_recovery_pending = False
+        self._restore_recovery_allowed = True
         if self.path.exists():
             try:
                 if self.path.stat().st_size > 128 * 1024 * 1024:
@@ -118,22 +131,33 @@ class NoteStore:
                 raw = json.loads(self.path.read_text(encoding="utf-8"))
                 if not isinstance(raw, dict) or not isinstance(raw.get("notes"), list):
                     raise ValueError("Invalid notes file")
+                if (type(raw.get('version', 2)) is not int or raw.get('version', 2) not in (1, 2)
+                        or len(raw['notes']) > MAX_NOTES):
+                    raise ValueError('Unsupported notes file')
                 seen = set()
-                for data in raw["notes"][:MAX_NOTES]:
+                for data in raw["notes"]:
                     note = self.validate_note(data)
-                    if note and note["id"] not in seen:
-                        self.state["notes"].append(note)
-                        seen.add(note["id"])
+                    if not note or note['id'] in seen:
+                        raise ValueError('Invalid or duplicate note')
+                    self.state["notes"].append(note)
+                    seen.add(note["id"])
                 linked = clean_text(raw.get("linked_file"), 4096)
                 self.state["linked_file"] = linked
                 lines = raw.get("linked_lines", [])
                 self.state["linked_lines"] = [clean_text(line, 10000) for line in lines[:MAX_NOTES] if isinstance(line, str)] if isinstance(lines, list) else []
                 if any(note.get('document_id') for note in self.notes) and not (self.path.parent / 'documents.sqlite').is_file():
                     self.warning = 'Full document text is missing. Keep documents.sqlite with notes.json or restore a complete ZIP backup.'
+                self._restore_recovery_pending = True
             except (OSError, ValueError, UnicodeError):
+                self._restore_recovery_allowed = False
+                # A later damaged row must not leave a writable, partial notebook.
+                self.state = {"version": 2, "notes": [], "linked_file": "", "linked_lines": []}
                 self.warning = "Notes could not be read; the original was backed up."
                 try:
-                    self.path.replace(self.path.with_suffix(".corrupt.json"))
+                    backup = self.path.with_suffix('.corrupt.json')
+                    if backup.exists():
+                        backup = self.path.with_suffix(f'.corrupt-{uuid.uuid4().hex}.json')
+                    self.path.replace(backup)
                 except OSError:
                     self.warning = "Notes could not be read or backed up. Check file permissions."
                     self.blocked_write = True
@@ -207,7 +231,26 @@ class NoteStore:
         if self._documents is None:
             from documents import DocumentStore
             self._documents = DocumentStore(self.path.parent / 'documents.sqlite')
+        if self._restore_recovery_pending:
+            try:
+                self._documents.finish_restore(self._document_manifest(), self.inline_character_count(), recover=True)
+            except (OSError, ValueError):
+                self.warning = 'A prepared restore still needs storage access. Its original and restored text were preserved; try again when storage is available.'
+            else:
+                self._restore_recovery_pending = False
         return self._documents
+
+    def _document_manifest(self):
+        return {note['document_id']: (note['body_characters'], note['body_sha256'])
+                for note in self.notes if note.get('document_id')}
+
+    def _finish_committed_restore(self, *, recover=True):
+        if self._documents is not None and (self._restore_recovery_allowed or not recover):
+            try:
+                self._documents.finish_restore(self._document_manifest(), self.inline_character_count(), recover=recover)
+            except (OSError, ValueError):
+                self._restore_recovery_pending = self._restore_recovery_allowed
+                self.warning = 'The notebook was saved. Restored text remains readable while storage activation is retried on the next save or restart.'
 
     def inline_character_count(self):
         return sum(len(note['body']) for note in self.notes if not note.get('document_id'))
@@ -215,7 +258,7 @@ class NoteStore:
     def close(self):
         """Stop background document cleanup before the notebook files are released."""
         if self._documents is not None:
-            return self._documents.stop_cleanup(timeout=0.5)
+            return self._documents.close(timeout=0.5)
         return True
 
     def character_count(self):
@@ -288,10 +331,26 @@ class NoteStore:
         if self.blocked_write:
             raise OSError("The original notebook could not be backed up; it has been left intact.")
         self._check_capacity()
+        if self._documents is not None and self._restore_recovery_allowed:
+            self._documents.finish_restore(self._document_manifest(), self.inline_character_count(), validate_only=True)
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        temp = self.path.with_suffix(".tmp")
-        temp.write_text(json.dumps(self.state, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-        os.replace(temp, self.path)
+        temporary = None
+        try:
+            with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', dir=self.path.parent,
+                                             prefix='.notes-', suffix='.tmp', delete=False) as output:
+                temporary = Path(output.name)
+                json.dump(self.state, output, indent=2, ensure_ascii=False, allow_nan=False)
+                output.write('\n')
+                output.flush()
+                os.fsync(output.fileno())
+            os.replace(temporary, self.path)
+            self._finish_committed_restore()
+        finally:
+            if temporary is not None:
+                try:
+                    temporary.unlink(missing_ok=True)
+                except OSError:
+                    pass
 
     def transaction(self, change):
         previous = copy.deepcopy(self.state)
@@ -533,6 +592,7 @@ class NoteStore:
                     count += 1
             return count
         count = self.transaction(change)
+        self._finish_committed_restore(recover=False)
         self._discard_unreferenced(previous_documents)
         return count
 
@@ -543,6 +603,9 @@ class NoteStore:
         folded = query.casefold()
         found = {note['id'] for note in self.notes if folded in
                  (note_search_text(note) + ' ' + note.get('document_source', '')).casefold()}
+        fuzzy_words = search_words(query) if not contains_secret(query) else ()
+        found.update(note['id'] for note in self.notes
+                     if typo_score(fuzzy_words, note_search_label(note)) >= 0.8)
         document_ids = {note['document_id'] for note in self.notes if note.get('document_id')}
         if document_ids:
             try:
@@ -573,9 +636,11 @@ class NoteStore:
                 if isinstance(text, str) and text:
                     excerpts[identifier] = (excerpts.get(identifier, '') + ('\n\n' if identifier in excerpts else '') + text)[:MAX_INLINE_CHARACTERS]
         terms = [word.casefold() for word in query.split() if len(word) > 2]
+        fuzzy_words = search_words(query) if not contains_secret(query) else ()
         def rank(note):
             text = (note_search_text(note) + ' ' + note.get('document_source', '')).casefold()
-            return (note.get('document_id') in excerpts, sum(term in text for term in terms), not note['done'], note['updated'])
+            return (note.get('document_id') in excerpts, sum(term in text for term in terms),
+                    typo_score(fuzzy_words, note_search_label(note)), not note['done'], note['updated'])
         selected = sorted(self.notes, key=rank, reverse=True)[:limit]
         result = []
         for note in selected:
