@@ -11,7 +11,7 @@ from credentials import redact
 from notepad_window import notes_style
 from themes import palette
 from sliding_text import SlideTranscript, plain_reply
-from content_intake import IntakeService
+from content_intake import IntakeService, cleanup_result
 
 ENDPOINT = "https://api.groq.com/openai/v1/chat/completions"
 ACTIONS = ("pet", "feed", "wave", "dance", "jump", "nap", "hide", "peek", "come_out",
@@ -427,8 +427,14 @@ class ChatWindow(QDialog):
     def system_message(self):
         context = self.context(self.metrics.isChecked(), self.notes.isChecked())
         if self.memory_store is not None:
+            notebook_notes = ()
+            if self.notes.isChecked() and self.notebook_store is not None:
+                # Large imported documents live on disk; retrieve only the
+                # pages relevant to this turn instead of copying their text.
+                recall = getattr(self.notebook_store, "recall_notes", None)
+                notebook_notes = recall(self.turn_query, limit=12) if callable(recall) else self.notebook_store.notes
             recalled = self.memory_store.context(self.turn_query,
-                notes=self.notebook_store.notes if self.notes.isChecked() and self.notebook_store is not None else (), include_memories=False)
+                notes=notebook_notes, include_memories=False)
             if self.settings["ai_share_memory"]:
                 context["user_memory"] = self.memory_store.context(self.turn_query)["memories"]
             if self.notes.isChecked():
@@ -495,7 +501,7 @@ class ChatWindow(QDialog):
             self.web_pending = None
             return
         self.web_loading = True
-        self.web_data = None
+        self.clear_web_data()
         self.web_save.setEnabled(False)
         self.set_busy(True)
         self.status.setText("Reading web sources…")
@@ -513,6 +519,8 @@ class ChatWindow(QDialog):
 
     def web_received(self, result):
         self.web_loading = False
+        if self.web_data is not result:
+            self.clear_web_data()
         self.web_data = result
         self.web_preview.setPlainText(result["title"] + "\n\n" + result["text"])
         self.web_sources.clear()
@@ -531,12 +539,16 @@ class ChatWindow(QDialog):
         if self.web_pending and not self.input.text().strip():
             self.input.setText(self.web_pending)
         self.web_pending = None
-        self.web_data = None
+        self.clear_web_data()
         self.web_preview.clear()
         self.web_sources.clear()
         self.web_save.setEnabled(False)
         self.set_busy(False)
         self.status.setText("Web source unavailable: " + redact(message) + " Turn web sources off to chat without browsing.")
+
+    def clear_web_data(self):
+        cleanup_result(self.web_data)
+        self.web_data = None
 
     def local_action(self, action):
         try:
@@ -603,6 +615,7 @@ class ChatWindow(QDialog):
     def shutdown(self):
         self.cancel_request()
         self.intake.shutdown()
+        self.clear_web_data()
         self.transcript.stop()
 
     def clear_conversation(self):

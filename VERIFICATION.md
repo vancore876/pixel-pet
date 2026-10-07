@@ -1,10 +1,23 @@
 # Jeffery 6.0 verification
 
+The one-billion-character notebook update passed 213 desktop unit tests, seven
+Qt GUI workflows, and the desktop startup smoke test. Checks cover streamed
+full text beyond the preview, Unicode character quotas, indexed recall after
+restart, bounded text pages, safe title/schedule edits, complete ZIP/text
+backups, restore at capacity, cancellation, missing storage, committed-restore
+cleanup, and background-cleanup shutdown. Visual QA retained all 149,999
+extracted characters from a synthetic document across 15 text pages while its
+notes.json metadata stayed about 11 KB. A 2,010,000-character import also
+retained its final fact and used one notebook entry. Capacity boundaries were
+exercised with reduced test quotas; a full billion-character file was not
+benchmarked. Windows native integration and live Groq remain unverified.
+
 The 500 MB PDF update passed 127 desktop unit tests and the import-window GUI
 workflow. A valid synthetic PDF exactly 500 × 1024 × 1024 bytes was imported
 without a whole-file read; one byte over the limit was rejected before parsing.
 Checks also cover 121-page documents and cancellation during parser I/O with
-the file handle closed. The saved-text preview limit remains 120,000 characters.
+the file handle closed. The import preview remains 120,000 characters; the
+latest notebook update now stores full extracted text separately.
 
 Windows memory/document/monitor update validated in the cloud workspace:
 124 desktop unit tests and seven Qt GUI workflows passed, along with runtime

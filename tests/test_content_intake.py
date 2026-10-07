@@ -176,7 +176,10 @@ class PDFTests(unittest.TestCase):
         with patch.object(intake, "MAX_TEXT", 32):
             result = intake.extract_pdf(self.path)
         self.assertLessEqual(len(result["text"]), 32)
-        self.assertTrue(result["truncated"])
+        self.assertTrue(result["preview_truncated"])
+        self.assertFalse(result["truncated"])
+        self.assertIn('More text.', Path(result['text_file']).read_text(encoding='utf-8'))
+        intake.cleanup_result(result)
 
     def test_invalid_file_and_canceled_import_do_not_return_partial_text(self):
         self.path.write_bytes(b"This is not a PDF")

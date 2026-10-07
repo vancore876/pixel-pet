@@ -66,6 +66,7 @@ the Windows desktop app. The mobile companion keeps its existing workflow.
 | Preferences and daily-task memory | Talk to Jeffery → Memory; tell him "I like mint tea" or "Remember that my birthday is June 6" |
 | Notebook recall in chat | Talk to Jeffery → Connection → Use my saved notes; completed notes and document excerpts can also be recalled |
 | PDF and website references | Notepad → Sources / Import → Choose PDF or enter a public webpage → review → Save to notebook |
+| One-billion-character notebook | Large imports use Save full document; saved documents open in text pages and remain searchable beyond the preview |
 | Web search and source-grounded replies | Talk to Jeffery → Web sources → Read / search; enable Use web sources for my next reply |
 | Animated medieval system monitor | Settings → Overlay → Monitor style → Medieval; choose Classic for the previous look |
 | Varied Groq greetings and interaction remarks | Talk to Jeffery → Connection → Use Groq for varied greetings and interactions |
@@ -75,7 +76,7 @@ the Windows desktop app. The mobile companion keeps its existing workflow.
 | Pickup deadlines and status | Checklist and order → Deadline; New / Preparing / Ready / Delivered / Cancelled |
 | Fresh reminders of remaining work | Due reminders request new Groq wording and filter repeated phrases |
 | Android and iPhone app | mobile/README.md; Today, Orders, Notes, Chat, Settings |
-| Desktop-to-phone notebook transfer | Desktop Mobile backup / Import backup; phone Settings → Move your notebook |
+| Desktop-to-phone notebook transfer | Desktop Backup → Mobile small-note JSON / Import backup; phone Settings → Move your notebook |
 | Groq reads saved notes and linked Notepad lines | Notepad → Use Groq for smarter reminders → Set up Groq |
 | Helpful reminder and one concrete next step | Reminder card and Notepad → Jeffery's advice |
 | Suggested times from note details | Jeffery's advice → Use this time → Save note |
@@ -119,15 +120,44 @@ draft or arbitrary open files on your computer.
 
 In **Notepad → Sources / Import**, select a text-based PDF or enter a public
 HTTP/HTTPS webpage. Reading runs in the background with progress and Cancel.
-Review and edit the extracted text before **Save to notebook**. Long documents
-are kept as multiple sections with their source label; imports preserve your
+Review extracted text before saving. Small imports remain editable and can be
+kept as sections. Large imports show a bounded preview and **Save full document**
+stores all extracted text, including text beyond the preview. **Save only this
+preview** explicitly saves an editable selection instead. Imports preserve your
 current writing draft. Text PDFs up to 500 MB are supported, without the former
 120-page rejection. Imports read from disk instead of first copying the whole
-file into memory. The notebook preview retains up to 120,000 characters and
-shows a visible truncation notice; this does not save an entire large PDF.
-Large or complex documents can take longer and use more memory. Scanned PDFs need
+file into memory. Large or complex documents can take longer and use more memory. Scanned PDFs need
 OCR first; encrypted PDFs need an unlocked copy. Website login pages and pages
 requiring JavaScript may not provide useful readable text.
+
+The Windows notebook supports **1,000,000,000 saved text characters in total**.
+Full document text is kept locally in `data/documents.sqlite` beside the small
+`notes.json` metadata file, or in the existing per-user data fallback. Imported
+text is streamed to storage and indexed for recall. The import preview still
+shows at most 120,000 characters; saved documents use 10,000-character text
+pages with Previous, Next, and a page-number control. These text pages are
+separate from the original PDF's pages. Search and Jeffery's notebook recall
+can find information anywhere in a saved document, including after restarting.
+Only bounded relevant excerpts go to Groq; the full notebook is not sent in one
+request. The notebook keeps its 2,000-entry limit; a large document is one entry.
+
+Full document pages are read only so editing a preview cannot replace unseen
+text. Titles and reminder schedules remain editable. Reimport a changed source,
+or choose **Save only this preview** for a note you want to edit. Extraction and
+full-document saves have Cancel controls. Text exceeding the one-billion limit
+shows a truncation notice; saving also checks remaining notebook capacity.
+The character limit is storage capacity, not a guarantee that every PDF can be
+parsed on every computer. Available disk space, indexing time, and individual
+PDF page complexity still matter; a full billion-character import has not been
+benchmarked in this workspace.
+
+Use **Backup → Desktop full backup (.zip)** to retain metadata and every full
+document. **Import backup** verifies and restores those files. **Export .txt**
+streams full saved text. These operations run in the background and can be
+cancelled. Mobile JSON remains available for small notes; it refuses documents
+whose full text would be missing from that format. Close Jeffery before copying
+the `data` folder manually, and retain the complete folder rather than only
+`notes.json`.
 
 Imported sections start with timed reminders off. Open a saved section, review
 **Jeffery's advice**, and use the existing scheduling controls to choose when
@@ -155,7 +185,8 @@ previous appearance. Chat now scrolls new lines smoothly and resumes unfinished
 reply animations when reopened.
 
 Screenshots: [Memory](preview/memory.png), [notebook imports](preview/pdf-import.png),
-and [medieval monitor](preview/medieval-monitor.png). Preview notes and replies
+the [large document reader](preview/large-notebook.png), and
+[medieval monitor](preview/medieval-monitor.png). Preview notes and replies
 are temporary test examples.
 
 To update an existing Windows checkout, exit Jeffery, run `git pull`, and run
@@ -186,7 +217,8 @@ and prompts focus on preparation, customer follow-up, or handover. It is told
 not to invent stock, payments, customer promises, or completed work.
 
 **+ List** creates a checklist without customer fields. Both lists and orders
-can be exported with **Mobile backup** and merged back with **Import backup**.
+can be exported with **Backup → Mobile small-note backup (.json)** and merged
+back with **Import backup**. Use a desktop ZIP for a notebook containing full documents.
 Matching IDs keep the newer entry. Import preserves existing local sticky-note
 positions and text-file links; it never deletes entries merely absent from a
 backup. Transfers are manual, without automatic cloud synchronization.

@@ -364,11 +364,16 @@ class BuddyApp(QObject):
         if metrics and self.latest_snapshot is not None:
             result["readings"] = {"cpu_percent": self.latest_snapshot.cpu, "memory_percent": self.latest_snapshot.memory_percent}
         if notes:
+            # Document notes contain short previews and metadata, while full
+            # document text is retrieved separately for each chat question.
+            saved_notes = self.notes_store.notes
             result['local_now'] = datetime.now().astimezone().isoformat(timespec='seconds')
-            result['business_summary'] = business_summary(self.notes_store.notes)
-            ordered = sorted((n for n in self.notes_store.notes if not n['done']), key=lambda n: n['next_due'] or float('inf'))
+            result['business_summary'] = business_summary(saved_notes)
+            ordered = sorted((n for n in saved_notes if not n['done']), key=lambda n: n['next_due'] or float('inf'))
             result["incomplete_notes"] = [{"title": n["title"], "body": n["body"][:1000], "repeat_minutes": n["repeat_minutes"],
                 **business_details(n),
+                **({"document_source": n["document_source"][:300], "document_characters": n.get("body_characters", 0)}
+                   if n.get("document_source") else {}),
                 "note_saved_at": datetime.fromtimestamp(n['updated']).astimezone().isoformat(),
                 "next_reminder": datetime.fromtimestamp(n['next_due']).astimezone().isoformat() if n['next_due'] else None,
                 "next_step": current_guidance(n).get('next_step', '')} for n in ordered[:20]]

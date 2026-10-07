@@ -7,25 +7,29 @@ its plain-text sections. Requests use normal verified TLS and system proxy rules
 from __future__ import annotations
 
 import atexit
+import hashlib
 import http.client
 import ipaddress
 from html.parser import HTMLParser
 from pathlib import Path
+import os
 import re
 import socket
 import ssl
 import threading
+import tempfile
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 import zlib
 
-from PySide6.QtCore import QObject, QThread, Signal, Slot
+from PySide6.QtCore import QObject, QThread, Signal, Slot, SIGNAL
 
 MAX_PDF_BYTES = 500 * 1024 * 1024
 MAX_WEB_BYTES = 2 * 1024 * 1024
 MAX_TEXT = 120_000
+MAX_DOCUMENT_CHARACTERS = 1_000_000_000
 SECTION_SIZE = 5500
 NETWORK_TIMEOUT = 12
 MAX_REDIRECTS = 4
@@ -109,18 +113,121 @@ def note_sections(title, text, limit=SECTION_SIZE):
              "body": part} for i, part in enumerate(parts)]
 
 
-def _result(kind, title, text, url="", sources=None, truncated=False, **extra):
-    text = normalize_text(text)
-    truncated = truncated or len(text) > MAX_TEXT
-    text = text[:MAX_TEXT].rstrip()
-    title = normalize_text(str(title)).replace("\n", " ")[:100]
-    return {"kind": kind, "title": title, "text": text, "url": url,
-            "sources": sources or [], "sections": note_sections(title, text),
-            "truncated": truncated, **extra}
+_TEMP_TEXT_FILES = set()
+_TEMP_TEXT_LOCK = threading.Lock()
+
+
+def cleanup_result(result):
+    """Release a temporary full-text file after a result is saved/discarded.
+
+    Files become the caller's responsibility when IntakeService.completed is
+    delivered. Only files created by this module can be removed here.
+    """
+    if not isinstance(result, dict):
+        return
+    callback = result.pop("_cleanup", None)
+    if callable(callback):
+        try:
+            callback()
+        except Exception:
+            pass  # Cleanup must not break closing or canceling the UI.
+    path = result.get("text_file")
+    if not path:
+        return
+    with _TEMP_TEXT_LOCK:
+        if path not in _TEMP_TEXT_FILES:
+            return
+    try:
+        os.unlink(path)
+    except FileNotFoundError:
+        pass
+    except OSError:
+        return  # Retry at shutdown if a reader still has the file open.
+    with _TEMP_TEXT_LOCK:
+        _TEMP_TEXT_FILES.discard(path)
+
+
+def own_text_file(path):
+    """Register a caller-created temporary copy for deferred shutdown cleanup."""
+    with _TEMP_TEXT_LOCK:
+        _TEMP_TEXT_FILES.add(str(path))
+
+
+class _TextSpool:
+    """Write normalized text incrementally while keeping a small UI preview."""
+
+    def __init__(self, cancel=None):
+        self.cancel = cancel
+        descriptor, self.path = tempfile.mkstemp(prefix="pixel-pet-intake-", suffix=".txt")
+        with _TEMP_TEXT_LOCK:
+            _TEMP_TEXT_FILES.add(self.path)
+        try:
+            self.handle = os.fdopen(descriptor, "wb")
+        except BaseException:
+            os.close(descriptor)
+            cleanup_result({"text_file": self.path})
+            raise
+        self.character_count = 0
+        self.preview = []
+        self.preview_count = 0
+        self.digest = hashlib.sha256()
+        self.truncated = False
+
+    def append(self, text):
+        _check_cancel(self.cancel)
+        remaining = max(0, MAX_DOCUMENT_CHARACTERS - self.character_count)
+        if len(text) > remaining:
+            self.truncated = True
+            text = text[:remaining].rstrip()
+        # Bound encoding/cancellation work even for a very large PDF page.
+        for offset in range(0, len(text), 32_768):
+            _check_cancel(self.cancel)
+            part = text[offset:offset + 32_768]
+            encoded = part.encode("utf-8")
+            self.handle.write(encoded)
+            self.digest.update(encoded)
+            available = max(0, MAX_TEXT - self.preview_count)
+            if available:
+                preview = part[:available]
+                self.preview.append(preview)
+                self.preview_count += len(preview)
+            self.character_count += len(part)
+        _check_cancel(self.cancel)
+
+    def result(self, kind, title, url="", sources=None, truncated=False, **extra):
+        self.handle.close()
+        _check_cancel(self.cancel)
+        title = normalize_text(str(title)).replace("\n", " ")[:100]
+        preview = "".join(self.preview).rstrip()
+        result = {"kind": kind, "title": title, "text": preview, "url": url,
+                  "sources": sources or [], "sections": note_sections(title, preview),
+                  "truncated": bool(truncated or self.truncated),
+                  "preview_truncated": self.character_count > MAX_TEXT,
+                  "character_count": self.character_count,
+                  "full_text_sha256": self.digest.hexdigest(), **extra}
+        if self.character_count > MAX_TEXT:
+            result["text_file"] = self.path
+        else:
+            cleanup_result({"text_file": self.path})
+        return result
+
+    def discard(self):
+        self.handle.close()
+        cleanup_result({"text_file": self.path})
+
+
+def _result(kind, title, text, url="", sources=None, truncated=False, cancel=None, **extra):
+    spool = _TextSpool(cancel)
+    try:
+        spool.append(normalize_text(text))
+        return spool.result(kind, title, url, sources, truncated, **extra)
+    except BaseException:
+        spool.discard()
+        raise
 
 
 def extract_pdf(path, cancel=None):
-    """Extract chosen PDF text without OCR, executing attachments, or saving it."""
+    """Extract PDF text to a temporary file, keeping only a bounded UI preview."""
     from pypdf import PdfReader
     from pypdf.errors import PdfReadError
 
@@ -128,6 +235,7 @@ def extract_pdf(path, cancel=None):
     if path.suffix.casefold() != ".pdf":
         raise IntakeError("Choose a PDF file (.pdf).")
     _check_cancel(cancel)
+    spool = None
     try:
         handle = path.open("rb")
     except OSError:
@@ -146,33 +254,38 @@ def extract_pdf(path, cancel=None):
             if reader.is_encrypted:
                 raise IntakeError("This PDF is encrypted. Save an unlocked copy before importing it.")
             pages = len(reader.pages)
-            text, length, truncated = [], 0, False
+            spool = _TextSpool(cancel)
             for index, page in enumerate(reader.pages):
                 _check_cancel(cancel)
                 content = normalize_text(page.extract_text() or "")
                 _check_cancel(cancel)
                 if not content:
                     continue
-                section = f"Page {index + 1}\n{content}"
-                remaining = MAX_TEXT - length - (2 if text else 0)
-                if len(section) > remaining:
-                    text.append(section[:max(0, remaining)])
-                    truncated = True
+                section = ("\n\n" if spool.character_count else "") + f"Page {index + 1}\n{content}"
+                spool.append(section)
+                if spool.truncated:
                     break
-                text.append(section)
-                length += len(section) + (2 if len(text) > 1 else 0)
-            if not text:
+            if not spool.character_count:
                 raise IntakeError("No selectable text was found. This may be a scanned PDF; run OCR and import the text-enabled copy.")
             metadata = reader.metadata
             title = str(metadata.title) if metadata and metadata.title else path.stem
-    except IntakeError:
+        return spool.result("pdf", title, pages=pages, filename=path.name)
+    except (IntakeError, _Canceled):
+        if spool is not None:
+            spool.discard()
         raise
     except MemoryError:
+        if spool is not None:
+            spool.discard()
         raise IntakeError("There is not enough memory to read this PDF. Close other apps or split the document and try again.") from None
     except (PdfReadError, ValueError, TypeError, KeyError, OSError, OverflowError, RecursionError):
+        if spool is not None:
+            spool.discard()
         raise IntakeError("The PDF could not be read. Try opening and exporting it as a new PDF.") from None
-    return _result("pdf", title, "\n\n".join(text), truncated=truncated,
-                   pages=pages, filename=path.name)
+    except BaseException:
+        if spool is not None:
+            spool.discard()
+        raise
 
 
 def validate_public_url(value, *, resolve=True):
@@ -425,7 +538,7 @@ def extract_web(url, cancel=None):
     title = title or urllib.parse.urlsplit(final_url).hostname
     if not text:
         raise IntakeError("No readable text was found. This page may need sign-in or JavaScript; choose a public article instead.")
-    return _result("web", title, text, final_url, [{"title": title, "url": final_url}])
+    return _result("web", title, text, final_url, [{"title": title, "url": final_url}], cancel=cancel)
 
 
 class _SearchHTML(HTMLParser):
@@ -497,7 +610,7 @@ def search_public_web(query, cancel=None):
     text = "\n\n".join(f"[{i + 1}] {row['title']}\n{row['url']}\n{row['snippet']}" for i, row in enumerate(results))
     return _result("search", "Web search: " + query[:75], text, url,
                    [{"title": row["title"], "url": row["url"]} for row in results],
-                   results=results, query=query, snippets_only=True)
+                   results=results, query=query, snippets_only=True, cancel=cancel)
 
 
 # Detached QThreads remain alive until their work ends even if a window closes.
@@ -517,6 +630,12 @@ def _finish_at_exit():
                 pass
         except RuntimeError:
             pass  # Qt already released this finished worker.
+        cleanup_result(worker.pending_result)
+        worker.pending_result = None
+    with _TEMP_TEXT_LOCK:
+        paths = tuple(_TEMP_TEXT_FILES)
+    for path in paths:
+        cleanup_result({"text_file": path})
 
 
 atexit.register(_finish_at_exit)
@@ -530,23 +649,33 @@ class _IntakeThread(QThread):
         super().__init__()
         self.generation, self.operation, self.argument = generation, operation, argument
         self.cancel_event = threading.Event()
+        self.pending_result = None
 
     def run(self):
         try:
             result = self.operation(self.argument, self.cancel_event)
+            self.pending_result = result
             _check_cancel(self.cancel_event)
             self.ready.emit((self.generation, result))
         except _Canceled:
             pass
-        except IntakeError as exc:
+        except (IntakeError, ValueError, OSError) as exc:
             if not self.cancel_event.is_set():
                 self.error.emit((self.generation, str(exc)))
         except Exception:
             if not self.cancel_event.is_set():
                 self.error.emit((self.generation, "This import could not be completed. Try a smaller document or a different public page."))
+        finally:
+            if self.cancel_event.is_set():
+                cleanup_result(self.pending_result)
+                self.pending_result = None
 
     @Slot()
     def release(self):
+        # A destroyed service cannot receive its queued ready signal. A stale
+        # worker must not leave full document text in the temporary directory.
+        cleanup_result(self.pending_result)
+        self.pending_result = None
         _ACTIVE_THREADS.discard(self)
         self.deleteLater()
 
@@ -576,6 +705,12 @@ class IntakeService(QObject):
     def search(self, query):
         return self._start(search_public_web, query)
 
+    def run(self, operation, argument):
+        """Run a notebook operation off the GUI thread with cancellation."""
+        if not callable(operation):
+            raise TypeError("The notebook operation must be callable.")
+        return self._start(operation, argument)
+
     def _start(self, operation, argument):
         if self.busy or self._closed:
             return False
@@ -594,10 +729,18 @@ class IntakeService(QObject):
     @Slot(object)
     def _received(self, payload):
         generation, result = payload
+        worker = self.sender()
+        if isinstance(worker, _IntakeThread):
+            worker.pending_result = None
         if not self._closed and self._current is not None and generation == self._generation:
             self._current = None
             self.busy_changed.emit(False)
-            self.completed.emit(result)
+            if self.receivers(SIGNAL("completed(PyObject)")):
+                self.completed.emit(result)
+            else:
+                cleanup_result(result)
+        else:
+            cleanup_result(result)
 
     @Slot(object)
     def _failed(self, payload):

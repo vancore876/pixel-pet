@@ -8,13 +8,15 @@ import json
 import math
 import os
 from pathlib import Path
+import sqlite3
 import time
 import uuid
 from PySide6.QtCore import QObject, QTimer, Signal, QFileSystemWatcher
 
 MAX_NOTES = 2000
 MAX_DOCUMENT_NOTES = 200
-MAX_DOCUMENT_CHARACTERS = 500000
+MAX_DOCUMENT_CHARACTERS = 1_000_000_000
+MAX_INLINE_CHARACTERS = 10_000
 ORDER_STATUSES = ('new', 'preparing', 'ready', 'delivered', 'cancelled')
 BUSINESS_FIELDS = ('kind', 'customer', 'contact', 'order_ref', 'order_status', 'order_due', 'checklist')
 
@@ -25,6 +27,7 @@ def clean_text(value, limit):
 
 def note_fingerprint(note):
     return hashlib.sha256(json.dumps([note.get("title", ""), note.get("body", ""),
+                                     note.get("body_sha256", ""),
                                      {key: note.get(key) for key in BUSINESS_FIELDS}], sort_keys=True,
                                     ensure_ascii=False).encode("utf-8")).hexdigest()
 
@@ -107,6 +110,7 @@ class NoteStore:
         self.state = {"version": 2, "notes": [], "linked_file": "", "linked_lines": []}
         self.warning = ""
         self.blocked_write = False
+        self._documents = None
         if self.path.exists():
             try:
                 if self.path.stat().st_size > 128 * 1024 * 1024:
@@ -124,6 +128,8 @@ class NoteStore:
                 self.state["linked_file"] = linked
                 lines = raw.get("linked_lines", [])
                 self.state["linked_lines"] = [clean_text(line, 10000) for line in lines[:MAX_NOTES] if isinstance(line, str)] if isinstance(lines, list) else []
+                if any(note.get('document_id') for note in self.notes) and not (self.path.parent / 'documents.sqlite').is_file():
+                    self.warning = 'Full document text is missing. Keep documents.sqlite with notes.json or restore a complete ZIP backup.'
             except (OSError, ValueError, UnicodeError):
                 self.warning = "Notes could not be read; the original was backed up."
                 try:
@@ -136,6 +142,8 @@ class NoteStore:
     def validate_note(data):
         if not isinstance(data, dict):
             return None
+        if isinstance(data.get('body'), str) and len(data['body'].strip()) > MAX_INLINE_CHARACTERS:
+            raise ValueError('The notebook contains oversized previews. Use a complete document backup to preserve its full text.')
         identifier = clean_text(data.get("id"), 64)
         body = clean_text(data.get("body"), 10000)
         title = clean_text(data.get("title"), 100)
@@ -168,6 +176,18 @@ class NoteStore:
         done = data.get('done') is True or kind == 'order' and status in ('delivered', 'cancelled')
         if kind == 'order' and done and status not in ('delivered', 'cancelled'):
             status = 'delivered'
+        document = {}
+        if any(key in data for key in ('document_id', 'body_characters', 'body_sha256')):
+            document_id = data.get('document_id')
+            characters = data.get('body_characters')
+            digest = data.get('body_sha256')
+            if (not isinstance(document_id, str) or len(document_id) != 32
+                    or any(c not in '0123456789abcdef' for c in document_id)
+                    or type(characters) is not int or not max(1, len(body)) <= characters <= MAX_DOCUMENT_CHARACTERS
+                    or not isinstance(digest, str) or len(digest) != 64
+                    or any(c not in '0123456789abcdef' for c in digest)):
+                raise ValueError('The notebook contains invalid document metadata.')
+            document = {'document_id': document_id, 'body_characters': characters, 'body_sha256': digest}
         return {"id": identifier, "title": title, "body": body, "created": created,
                 "updated": timestamp("updated") or created,
                 'written': timestamp('written') or timestamp('updated') or created,
@@ -179,7 +199,83 @@ class NoteStore:
                 "ai_guidance": validate_guidance(data.get("ai_guidance")),
                 "kind": kind, "customer": clean_text(data.get('customer'), 100), 'contact': clean_text(data.get('contact'), 100),
                 'order_ref': clean_text(data.get('order_ref'), 80), 'order_status': status, 'order_due': timestamp('order_due'),
-                'checklist': checklist, 'reminder_history': [clean_text(t, 280) for t in data.get('reminder_history', [])[-5:] if isinstance(t, str)] if isinstance(data.get('reminder_history'), list) else []}
+                'checklist': checklist, 'reminder_history': [clean_text(t, 280) for t in data.get('reminder_history', [])[-5:] if isinstance(t, str)] if isinstance(data.get('reminder_history'), list) else [], **document}
+
+    @property
+    def documents(self):
+        """Open the indexed full-text store only when a document is needed."""
+        if self._documents is None:
+            from documents import DocumentStore
+            self._documents = DocumentStore(self.path.parent / 'documents.sqlite')
+        return self._documents
+
+    def inline_character_count(self):
+        return sum(len(note['body']) for note in self.notes if not note.get('document_id'))
+
+    def close(self):
+        """Stop background document cleanup before the notebook files are released."""
+        if self._documents is not None:
+            return self._documents.stop_cleanup(timeout=0.5)
+        return True
+
+    def character_count(self):
+        documents = {}
+        for note in self.notes:
+            if note.get('document_id'):
+                documents[note['document_id']] = max(documents.get(note['document_id'], 0), note['body_characters'])
+        return self.inline_character_count() + sum(documents.values())
+
+    def _check_capacity(self):
+        if self.character_count() > MAX_DOCUMENT_CHARACTERS:
+            raise ValueError('Your notebook supports up to 1,000,000,000 characters. Remove older content before saving more.')
+
+    def _discard_unreferenced(self, identifiers):
+        referenced = {note.get('document_id') for note in self.notes}
+        for identifier in set(identifiers) - referenced - {None, ''}:
+            try:
+                self.documents.delete(identifier)
+            except (OSError, ValueError, sqlite3.Error):
+                self.warning = 'A note was removed, but its unreferenced document text could not be cleaned up. Check storage permissions.'
+
+    @staticmethod
+    def _source_label(label):
+        label = clean_text(label, 300)
+        if label and not label.lower().startswith(('https://', 'http://')):
+            label = label.replace('\\', '/').rsplit('/', 1)[-1]
+        return label
+
+    def _verified_document(self, prepared):
+        if not isinstance(prepared, dict):
+            raise ValueError('The prepared document is invalid.')
+        identifier = prepared.get('document_id')
+        if (not isinstance(identifier, str) or len(identifier) != 32
+                or any(c not in '0123456789abcdef' for c in identifier)):
+            raise ValueError('The prepared document is invalid.')
+        actual = self.documents.metadata(identifier)
+        if not actual or any(actual.get(key) != prepared.get(key) for key in ('body_characters', 'body_sha256')):
+            raise ValueError('The document is missing or changed. Import it again before saving.')
+        if type(actual.get('body_characters')) is not int or not 0 < actual['body_characters'] <= MAX_DOCUMENT_CHARACTERS:
+            raise ValueError('The document exceeds the notebook character limit.')
+        return {'document_id': identifier, 'body_characters': actual['body_characters'],
+                'body_sha256': actual['body_sha256'], 'body': actual.get('body', '')[:MAX_INLINE_CHARACTERS]}
+
+    def add_prepared_document(self, prepared, title, source_label='', now=None):
+        """Attach already indexed text in one small, atomic notebook write."""
+        now = time.time() if now is None else now
+        identifier = prepared.get('document_id') if isinstance(prepared, dict) else None
+        try:
+            document = self._verified_document(prepared)
+            note = self.new_note(title, document['body'], 0, None, now,
+                                 details={**document, 'document_source': self._source_label(source_label),
+                                          'unannounced': False})
+            def change():
+                self.notes.append(note)
+                return note
+            return self.transaction(change)
+        except Exception:
+            if isinstance(identifier, str) and len(identifier) == 32 and all(c in '0123456789abcdef' for c in identifier):
+                self._discard_unreferenced([identifier])
+            raise
 
     @property
     def notes(self):
@@ -191,6 +287,7 @@ class NoteStore:
     def save(self):
         if self.blocked_write:
             raise OSError("The original notebook could not be backed up; it has been left intact.")
+        self._check_capacity()
         self.path.parent.mkdir(parents=True, exist_ok=True)
         temp = self.path.with_suffix(".tmp")
         temp.write_text(json.dumps(self.state, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
@@ -211,17 +308,34 @@ class NoteStore:
             raise ValueError("Your notebook is full. Export or remove older notes before adding more.")
         if not clean_text(title, 100) and not clean_text(body, 10000):
             raise ValueError("Write a note before saving it.")
+        if isinstance(body, str) and len(body.strip()) > MAX_INLINE_CHARACTERS:
+            raise ValueError('Long notes must be prepared in the document store before saving.')
         return self.validate_note({"id": uuid.uuid4().hex, "title": title, "body": body, "created": now,
             "next_due": due if due is not None else now + repeat * 60 if repeat else None,
             "repeat_minutes": repeat, "done": False, "pinned": False, "unannounced": True, "source": source, **(details or {})})
 
     def add(self, title, body, repeat=30, due=None, now=None, source="", details=None):
         now = time.time() if now is None else now
-        note = self.new_note(title, body, repeat, due, now, source, details)
-        def change():
-            self.notes.append(note)
-            return note
-        return self.transaction(change)
+        if details and any(key in details for key in ('document_id', 'body_characters', 'body_sha256')):
+            raise ValueError('Use the document importer to attach full text to a note.')
+        document = None
+        try:
+            if isinstance(body, str) and len(body.strip()) > MAX_INLINE_CHARACTERS:
+                if len(body.strip()) + self.character_count() > MAX_DOCUMENT_CHARACTERS:
+                    raise ValueError('Your notebook supports up to 1,000,000,000 characters.')
+                document = self.documents.prepare_text(body.strip(), title=title,
+                                                       other_note_characters=self.inline_character_count())
+                document = self._verified_document(document)
+                body, details = document['body'], {**(details or {}), **document}
+            note = self.new_note(title, body, repeat, due, now, source, details)
+            def change():
+                self.notes.append(note)
+                return note
+            return self.transaction(change)
+        except Exception:
+            if document:
+                self._discard_unreferenced([document['document_id']])
+            raise
 
     def add_documents(self, sections, source_label="", now=None):
         """Save a reviewed import in one write, without creating timed reminders.
@@ -229,15 +343,13 @@ class NoteStore:
         Document provenance is separate from the watched text-file source. Long
         sections become separate notes rather than losing text to validation.
         """
-        if not isinstance(sections, list) or not sections or len(sections) > MAX_DOCUMENT_NOTES:
-            raise ValueError("Import from 1 to 200 document sections at a time.")
+        if not isinstance(sections, list) or not sections:
+            raise ValueError("Choose document text to import.")
         now = time.time() if now is None else now
-        label = clean_text(source_label, 300)
-        # Local imports identify the document, never its private directory.
-        if label and not label.lower().startswith(("https://", "http://")):
-            label = label.replace("\\", "/").rsplit("/", 1)[-1]
-        prepared = []
+        label = self._source_label(source_label)
+        reviewed = []
         characters = 0
+        parts_count = 0
         for section in sections:
             if not isinstance(section, dict) or not isinstance(section.get("body"), str):
                 raise ValueError("The document contains an invalid section. Nothing was saved.")
@@ -245,17 +357,27 @@ class NoteStore:
             if not body:
                 continue
             characters += len(body)
-            if characters > MAX_DOCUMENT_CHARACTERS:
-                raise ValueError("Import up to 500,000 characters at a time. Review a smaller selection.")
+            if characters + self.character_count() > MAX_DOCUMENT_CHARACTERS:
+                raise ValueError("Your notebook supports up to 1,000,000,000 characters. Review a smaller selection.")
             title = clean_text(section.get("title"), 100) or "Imported document"
+            reviewed.append((title, body))
+            parts_count += (len(body) + MAX_INLINE_CHARACTERS - 1) // MAX_INLINE_CHARACTERS
+        if not reviewed:
+            raise ValueError("The reviewed document has no text to save.")
+        if parts_count > MAX_DOCUMENT_NOTES:
+            # Large reviewed imports retain their full text in one indexed
+            # document rather than exhausting the small-note count.
+            text = '\n\n'.join(body for _, body in reviewed)
+            title = reviewed[0][0]
+            document = self.documents.prepare_text(text, title=title,
+                                                   other_note_characters=self.inline_character_count())
+            return [self.add_prepared_document(document, title, label, now=now)]
+        prepared = []
+        for title, body in reviewed:
             parts = [body[start:start + 10000] for start in range(0, len(body), 10000)]
             for index, part in enumerate(parts, 1):
                 suffix = f" · part {index}" if len(parts) > 1 else ""
                 prepared.append((title[:100 - len(suffix)] + suffix, part))
-                if len(prepared) > MAX_DOCUMENT_NOTES:
-                    raise ValueError("Import up to 200 notes at a time. Review a smaller selection.")
-        if not prepared:
-            raise ValueError("The reviewed document has no text to save.")
         if len(self.notes) + len(prepared) > MAX_NOTES:
             raise ValueError("Your notebook is full. Nothing from this import was saved.")
         def change():
@@ -273,23 +395,54 @@ class NoteStore:
         note = self.find(identifier)
         if not note:
             raise ValueError("This note no longer exists.")
-        updated = dict(note, title=title, body=body, repeat_minutes=repeat,
-                       next_due=due if due is not None else now + repeat * 60 if repeat else None, **(details or {}))
+        if note.get('document_id') and body != note['body']:
+            raise ValueError('This document is displayed in pages. Its preview is read-only; import a revised document to replace the full text.')
+        if note.get('document_id') and details and any(details.get(key, note[key]) != note[key]
+                                                       for key in ('document_id', 'body_characters', 'body_sha256')):
+            raise ValueError('Document text cannot be replaced through metadata edits.')
+        if not note.get('document_id') and details and any(key in details for key in ('document_id', 'body_characters', 'body_sha256')):
+            raise ValueError('Use the document importer to attach full text to a note.')
+        document = None
+        if isinstance(body, str) and len(body.strip()) > MAX_INLINE_CHARACTERS:
+            if len(body.strip()) + self.character_count() - len(note['body']) > MAX_DOCUMENT_CHARACTERS:
+                raise ValueError('Your notebook supports up to 1,000,000,000 characters.')
+            document = self.documents.prepare_text(body.strip(), title=title,
+                                                   other_note_characters=self.inline_character_count() - len(note['body']))
+            document = self._verified_document(document)
+            body, details = document['body'], {**(details or {}), **document}
+        updated = {**note, 'title': title, 'body': body, 'repeat_minutes': repeat,
+                   'next_due': due if due is not None else now + repeat * 60 if repeat else None,
+                   **(details or {})}
         updated = self.validate_note(updated)
         if not updated:
             raise ValueError("Write a note before saving it.")
         updated['updated'] = now
-        if (updated['title'], updated['body']) != (note['title'], note['body']):
+        if ((updated['title'], updated['body']) != (note['title'], note['body'])
+                or updated.get('body_sha256') != note.get('body_sha256')):
             updated['written'] = now
         def change():
             note.update(updated)
             return note
-        return self.transaction(change)
+        try:
+            return self.transaction(change)
+        except Exception:
+            if document:
+                self._discard_unreferenced([document['document_id']])
+            raise
 
     def modify(self, identifier, **changes):
         note = self.find(identifier)
         if not note:
             return None
+        if not note.get('document_id') and any(key in changes for key in ('document_id', 'body_characters', 'body_sha256')):
+            raise ValueError('Use the document importer to attach full text to a note.')
+        if note.get('document_id') and any(changes.get(key, note.get(key)) != note.get(key)
+                                          for key in ('body', 'document_id', 'body_characters', 'body_sha256')):
+            raise ValueError('This document preview is read-only. Import a revised document to replace the full text.')
+        if not note.get('document_id') and isinstance(changes.get('body'), str) and len(changes['body'].strip()) > MAX_INLINE_CHARACTERS:
+            return self.edit(identifier, changes.pop('title', note['title']), changes.pop('body'),
+                             changes.pop('repeat_minutes', note['repeat_minutes']),
+                             due=changes.pop('next_due', note['next_due']), details=changes)
         def change():
             updated = self.validate_note(dict(note, **changes))
             if not updated:
@@ -330,18 +483,32 @@ class NoteStore:
                            next_due=None if done or not repeat else time.time() + repeat * 60)
 
     def delete(self, identifier):
+        document_id = (self.find(identifier) or {}).get('document_id')
         def change():
             self.state["notes"] = [n for n in self.notes if n["id"] != identifier]
         self.transaction(change)
+        self._discard_unreferenced([document_id])
 
-    def import_backup(self, payload):
+    def export_json(self):
+        if any(note.get('document_id') for note in self.notes):
+            raise ValueError('This notebook includes full documents. Use a ZIP backup to include all of their text.')
+        return copy.deepcopy(self.state)
+
+    def import_json(self, payload):
+        return self.import_backup(payload)
+
+    def import_backup(self, payload, allow_documents=False):
         if not isinstance(payload, dict) or not isinstance(payload.get('notes'), list) or len(payload['notes']) > MAX_NOTES:
             raise ValueError('Choose a Jeffery notebook backup with up to 2,000 notes.')
         incoming = {}
         for data in payload['notes']:
+            if isinstance(data, dict) and data.get('document_id') and not allow_documents:
+                raise ValueError('A JSON file contains document previews, not their full text. Restore a complete ZIP backup instead.')
             note = self.validate_note(data)
             if not note:
                 raise ValueError('The backup contains an invalid note. Nothing was imported.')
+            if note.get('document_id'):
+                self._verified_document(note)
             note['source'] = ''
             note['pinned'] = False
             note['pin_position'] = None
@@ -350,19 +517,73 @@ class NoteStore:
         existing = {n['id']: n for n in self.notes}
         if len(set(existing) | set(incoming)) > MAX_NOTES:
             raise ValueError('Import would exceed the 2,000-note notebook limit.')
+        previous_documents = {note.get('document_id') for note in self.notes}
         def change():
             count = 0
             for identifier, note in incoming.items():
                 current = existing.get(identifier)
                 if current is None:
-                    note['unannounced'] = not note['done']
+                    note['unannounced'] = not note['done'] and not note.get('document_id')
                     self.notes.append(note)
                     count += 1
                 elif note['updated'] > current['updated']:
-                    current.update({**note, 'pinned': current['pinned'], 'pin_position': current['pin_position'], 'source': current['source']})
+                    replacement = {**note, 'pinned': current['pinned'], 'pin_position': current['pin_position'], 'source': current['source']}
+                    current.clear()
+                    current.update(replacement)
                     count += 1
             return count
-        return self.transaction(change)
+        count = self.transaction(change)
+        self._discard_unreferenced(previous_documents)
+        return count
+
+    def search_ids(self, query):
+        query = clean_text(query, 1000)
+        if not query:
+            return {note['id'] for note in self.notes}
+        folded = query.casefold()
+        found = {note['id'] for note in self.notes if folded in
+                 (note_search_text(note) + ' ' + note.get('document_source', '')).casefold()}
+        document_ids = {note['document_id'] for note in self.notes if note.get('document_id')}
+        if document_ids:
+            try:
+                matching = self.documents.matching_ids(query, document_ids=list(document_ids))
+            except (OSError, ValueError, sqlite3.Error):
+                self.warning = 'Full document text could not be searched. Previews are still available; restore a complete notebook backup.'
+                matching = set()
+            found.update(note['id'] for note in self.notes if note.get('document_id') in matching)
+        return found
+
+    def recall_notes(self, query='', limit=12):
+        """Return bounded copies with indexed excerpts, leaving persisted text intact."""
+        limit = max(0, min(MAX_NOTES, limit)) if type(limit) is int else 12
+        if not limit:
+            return []
+        query = clean_text(query, 1000)
+        document_ids = {note['document_id'] for note in self.notes if note.get('document_id')}
+        excerpts = {}
+        if query and document_ids:
+            try:
+                rows = self.documents.search(query, document_ids=list(document_ids), limit=max(limit * 3, 12))
+            except (OSError, ValueError, sqlite3.Error):
+                self.warning = 'Full document text could not be searched. Previews are still available; restore a complete notebook backup.'
+                rows = []
+            for row in rows:
+                identifier = row['document_id']
+                text = row.get('text', '')
+                if isinstance(text, str) and text:
+                    excerpts[identifier] = (excerpts.get(identifier, '') + ('\n\n' if identifier in excerpts else '') + text)[:MAX_INLINE_CHARACTERS]
+        terms = [word.casefold() for word in query.split() if len(word) > 2]
+        def rank(note):
+            text = (note_search_text(note) + ' ' + note.get('document_source', '')).casefold()
+            return (note.get('document_id') in excerpts, sum(term in text for term in terms), not note['done'], note['updated'])
+        selected = sorted(self.notes, key=rank, reverse=True)[:limit]
+        result = []
+        for note in selected:
+            recalled = copy.deepcopy(note)
+            if note.get('document_id') in excerpts:
+                recalled['body'] = excerpts[note['document_id']]
+            result.append(recalled)
+        return result
 
     def link_file(self, path):
         path = Path(path).expanduser().resolve()
@@ -503,6 +724,11 @@ class NoteService(QObject):
         notes = self.store.add_documents(sections, source_label)
         self.changed.emit("")
         return notes
+
+    def add_prepared_document(self, prepared, title, source_label=''):
+        note = self.store.add_prepared_document(prepared, title, source_label)
+        self.changed.emit(note['id'])
+        return note
 
     def modify(self, identifier, **changes):
         note = self.store.modify(identifier, **changes)

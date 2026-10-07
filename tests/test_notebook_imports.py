@@ -105,11 +105,14 @@ class NotebookImportTests(unittest.TestCase):
         self.store.add('Existing', 'Keep this', repeat=0)
         previous = copy.deepcopy(self.store.state)
         for incoming in ([{'title': 'Valid', 'body': 'Text'}, {'body': 42}],
-                         [{'title': 'Too much', 'body': 'x' * 500001}],
                          [{'body': ' '}]):
             with self.assertRaises(ValueError):
                 self.store.add_documents(incoming)
             self.assertEqual(self.store.state, previous)
+        with patch('notes.MAX_DOCUMENT_CHARACTERS', 500000):
+            with self.assertRaises(ValueError):
+                self.store.add_documents([{'title': 'Too much', 'body': 'x' * 500001}])
+        self.assertEqual(self.store.state, previous)
         with patch('notes.MAX_NOTES', len(self.store.notes)):
             with self.assertRaises(ValueError):
                 self.store.add_documents(document()['sections'])

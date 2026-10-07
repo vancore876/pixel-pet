@@ -4,6 +4,8 @@ from __future__ import annotations
 import time
 import uuid
 import json
+import shutil
+import tempfile
 from pathlib import Path
 from PySide6.QtCore import Qt, Signal, QDateTime, QTimer, QSignalBlocker, QEvent
 from PySide6.QtGui import QKeySequence, QShortcut
@@ -15,7 +17,9 @@ from config import clamp_position
 from themes import palette
 from notes import current_guidance, ORDER_STATUSES, business_summary, note_search_text
 from sliding_text import SlidingText
-from content_intake import IntakeService
+from content_intake import IntakeService, cleanup_result, own_text_file
+from notebook_backup import notebook_snapshot
+from notebook_ui_jobs import prepare_document, prepare_notebook_backup, export_notebook
 
 
 def reminder_time(note):
@@ -78,10 +82,15 @@ class NotepadWindow(QDialog):
         self.import_result = None
         self.import_saved = False
         self.import_loading = False
+        self.document_page_index = 0
         self.intake = IntakeService(self)
         self.intake.completed.connect(self.imported)
         self.intake.failed.connect(self.import_failed)
         self.intake.busy_changed.connect(self.set_import_busy)
+        self.transfer = IntakeService(self)
+        self.transfer.completed.connect(self.transfer_received)
+        self.transfer.failed.connect(lambda message: self.status.setText('Notebook transfer failed: ' + message))
+        self.transfer.busy_changed.connect(self.set_transfer_busy)
         self.setWindowTitle("Jeffery's Notepad")
         self.resize(880, min(700, QApplication.primaryScreen().availableGeometry().height() - 60))
         self.setMinimumSize(680, 540)
@@ -104,6 +113,7 @@ class NotepadWindow(QDialog):
         layout.addLayout(header)
         self.summary = QLabel("")
         self.summary.setObjectName("hint")
+        self.summary.setWordWrap(True)
         layout.addWidget(self.summary)
         ai_bar = QHBoxLayout()
         self.smart_enabled = QCheckBox("Use Groq for smarter reminders")
@@ -161,6 +171,24 @@ class NotepadWindow(QDialog):
         self.document_origin.hide()
         form.addWidget(self.document_origin)
         form.addWidget(self.body, 1)
+        self.document_pages = QWidget()
+        page_row = QHBoxLayout(self.document_pages)
+        page_row.setContentsMargins(0, 0, 0, 0)
+        self.document_previous = QPushButton('Previous')
+        self.document_previous.clicked.connect(lambda: self.document_page.setValue(self.document_page.value() - 1))
+        self.document_page = QSpinBox()
+        self.document_page.setPrefix('Text page ')
+        self.document_page.valueChanged.connect(self.show_document_page)
+        self.document_next = QPushButton('Next')
+        self.document_next.clicked.connect(lambda: self.document_page.setValue(self.document_page.value() + 1))
+        self.document_size = QLabel('')
+        self.document_size.setObjectName('hint')
+        page_row.addWidget(self.document_previous)
+        page_row.addWidget(self.document_page)
+        page_row.addWidget(self.document_next)
+        page_row.addWidget(self.document_size, 1)
+        self.document_pages.hide()
+        form.addWidget(self.document_pages)
         schedule = QFormLayout()
         self.repeat = QSpinBox()
         self.repeat.setRange(0, 1440)
@@ -330,12 +358,13 @@ class NotepadWindow(QDialog):
         export = QPushButton("Export .txt")
         export.clicked.connect(self.export_notes)
         link_bar.addWidget(export)
-        transfer = QPushButton('Mobile backup')
+        transfer = QPushButton('Backup')
         transfer.clicked.connect(self.export_backup)
         link_bar.addWidget(transfer)
         import_book = QPushButton('Import backup')
         import_book.clicked.connect(self.import_backup)
         link_bar.addWidget(import_book)
+        self.transfer_buttons = [export, transfer, import_book]
         layout.addLayout(link_bar)
         self.link_status = QLabel("")
         self.link_status.setObjectName("hint")
@@ -345,6 +374,10 @@ class NotepadWindow(QDialog):
         self.status.setObjectName("hint")
         self.status.setWordWrap(True)
         layout.addWidget(self.status)
+        self.transfer_cancel = QPushButton('Cancel notebook transfer')
+        self.transfer_cancel.clicked.connect(self.cancel_transfer)
+        self.transfer_cancel.hide()
+        layout.addWidget(self.transfer_cancel)
         self.shortcuts = [QShortcut(QKeySequence.Save, self), QShortcut(QKeySequence.New, self)]
         self.shortcuts[0].activated.connect(self.save_current_tab)
         self.shortcuts[1].activated.connect(self.new_note)
@@ -411,6 +444,10 @@ class NotepadWindow(QDialog):
         self.import_review.setMinimumHeight(140)
         self.import_review.textChanged.connect(self.update_import_save)
         layout.addWidget(self.import_review, 1)
+        self.import_preview_only = QCheckBox('Save only this preview instead of the full document')
+        self.import_preview_only.toggled.connect(self.import_selection_changed)
+        self.import_preview_only.hide()
+        layout.addWidget(self.import_preview_only)
         self.import_sources = QLabel('')
         self.import_sources.setObjectName('hint')
         self.import_sources.setTextFormat(Qt.PlainText)
@@ -444,6 +481,12 @@ class NotepadWindow(QDialog):
     def update_import_save(self):
         self.save_import_button.setEnabled(bool(self.import_result and not self.import_saved and
             not self.import_loading and not self.intake.busy and self.import_review.toPlainText().strip()))
+
+    def import_selection_changed(self):
+        full_document = bool(self.import_result and self.import_result.get('text_file'))
+        full_save = full_document and not self.import_preview_only.isChecked()
+        self.import_review.setReadOnly(full_save)
+        self.save_import_button.setText('Save full document' if full_save else 'Save to notebook')
 
     def may_replace_import(self):
         if not self.import_result or self.import_saved:
@@ -483,17 +526,40 @@ class NotepadWindow(QDialog):
             self.import_failed(str(exc))
 
     def imported(self, result):
+        if isinstance(result, dict) and result.get('kind') == 'document_prepared':
+            try:
+                note = self.service.add_prepared_document(result['document'], result['title'], result['source'])
+            except (OSError, ValueError) as exc:
+                cleanup_result(result)
+                self.import_failed('Nothing was saved: ' + str(exc))
+                return
+            result.pop('_cleanup', None)
+            cleanup_result(self.import_result)
+            self.import_saved = True
+            self.update_import_save()
+            self.import_status.setText(f"Saved the full document ({note['body_characters']:,} characters). Open it to read text pages or choose a reminder.")
+            self.status.setText('Full document saved. Your current writing draft is unchanged.')
+            return
         if not isinstance(result, dict) or not isinstance(result.get('text'), str) or not result['text'].strip():
+            cleanup_result(result)
             self.import_failed('No readable text was found. Your notebook was left unchanged.')
             return
+        if self.import_result is not result:
+            cleanup_result(self.import_result)
         self.import_result = result
         self.import_saved = False
         self.import_title.setText(str(result.get('title') or 'Imported document')[:100])
         self.import_review.setPlainText(result['text'])
+        with QSignalBlocker(self.import_preview_only):
+            self.import_preview_only.setChecked(False)
+        self.import_preview_only.setVisible(bool(result.get('text_file')))
+        self.import_selection_changed()
         sources = result.get('sources') or []
         self.import_sources.setText('\n'.join(str(source.get('url') or source.get('title') or '')
             for source in sources[:10] if isinstance(source, dict)))
         warning = ' Only part of the document was extracted; review the included text.' if result.get('truncated') else ''
+        if result.get('preview_truncated') and not result.get('truncated'):
+            warning = f" Showing the first {len(result['text']):,} of {result.get('character_count', 0):,} characters. Save full document keeps all extracted text; saved documents open in text pages."
         self.set_import_busy(False, 'Ready to review. Nothing has been added to your notebook yet.' + warning)
 
     def review_document(self, result):
@@ -502,6 +568,21 @@ class NotepadWindow(QDialog):
             return False
         if self.intake.busy:
             self.cancel_import()
+        # Chat owns its web spool. Keep an independent copy for this review.
+        if result.get('text_file'):
+            owned = dict(result)
+            with tempfile.NamedTemporaryFile(prefix='jeffery-review-', suffix='.txt', delete=False) as output:
+                path = Path(output.name)
+            try:
+                shutil.copyfile(result['text_file'], path)
+            except OSError:
+                path.unlink(missing_ok=True)
+                self.import_failed('The full source is no longer available. Read it again.')
+                return False
+            owned['text_file'] = str(path)
+            owned.pop('_cleanup', None)
+            own_text_file(path)
+            result = owned
         self.imported(result)
         self.editor_tabs.setCurrentIndex(3)
         return True
@@ -519,18 +600,30 @@ class NotepadWindow(QDialog):
         text = self.import_review.toPlainText().strip()
         title = self.import_title.text().strip() or 'Imported document'
         result = self.import_result
+        source = result.get('url') or str(result.get('filename') or result.get('title') or title)
+        if result.get('text_file') and not self.import_preview_only.isChecked():
+            if self.transfer.busy:
+                self.import_status.setText('Finish or cancel the notebook transfer before saving this document.')
+                return False
+            self.set_import_busy(True, 'Saving full document… You can cancel while Jeffery stores its text.')
+            argument = {'store': self.service.store, 'text_file': result['text_file'], 'title': title, 'source': source,
+                'character_count': result.get('character_count'), 'full_text_sha256': result.get('full_text_sha256')}
+            if not self.intake.run(prepare_document, argument):
+                self.set_import_busy(False, 'The full document could not start saving. Try again.')
+                return False
+            return True
         # Keep original page/section titles when the review text is unchanged.
         sections = result.get('sections') if (text == result['text'].strip() and
             title == str(result.get('title') or 'Imported document')[:100]) else None
         if not isinstance(sections, list) or not sections:
             sections = [{'title': title, 'body': text}]
-        source = result.get('url') or str(result.get('filename') or result.get('title') or title)
         try:
             added = self.service.add_documents(sections, source)
         except (OSError, ValueError) as exc:
             self.import_status.setText('Nothing was saved: ' + str(exc))
             return False
         self.import_saved = True
+        cleanup_result(result)
         self.update_import_save()
         self.import_status.setText(f'Saved {len(added)} document section(s). Timed reminders are off until you choose a schedule.')
         self.status.setText('Document saved. Your current note or writing draft is unchanged.')
@@ -543,6 +636,9 @@ class NotepadWindow(QDialog):
 
     def shutdown(self):
         self.intake.shutdown()
+        self.transfer.shutdown()
+        cleanup_result(self.import_result)
+        self.service.store.close()
 
     def configure(self):
         self.setStyleSheet(notes_style(self.settings))
@@ -624,27 +720,60 @@ class NotepadWindow(QDialog):
             self.scheduled.setChecked(True)
             self.status.setText('Reminder set to the deadline. Save to keep it.')
 
-    def export_backup(self):
-        file, _ = QFileDialog.getSaveFileName(self, 'Export for Jeffery Mobile', 'JefferyNotebook.json', 'Jeffery backup (*.json)')
-        if file:
-            try:
-                Path(file).write_text(json.dumps({'version': 2, 'notes': self.service.store.notes}, indent=2, ensure_ascii=False), encoding='utf-8')
-                self.status.setText('Backup exported. Import this JSON in the mobile app.')
-            except OSError as exc:
-                QMessageBox.warning(self, 'Export backup', str(exc))
+    def set_transfer_busy(self, busy):
+        for button in self.transfer_buttons:
+            button.setEnabled(not busy)
+        self.transfer_cancel.setVisible(busy)
 
-    def import_backup(self):
-        file, _ = QFileDialog.getOpenFileName(self, 'Import Jeffery backup', '', 'Jeffery backup (*.json)')
-        if file:
+    def cancel_transfer(self):
+        self.transfer.cancel()
+        self.status.setText('Notebook transfer cancelled. Your saved notes are unchanged.')
+
+    def transfer_received(self, result):
+        if result.get('kind') == 'backup_prepared':
             try:
-                path = Path(file)
-                if path.stat().st_size > 8 * 1024 * 1024:
-                    raise ValueError('Use a backup smaller than 8 MB.')
-                count = self.service.store.import_backup(json.loads(path.read_text(encoding='utf-8')))
-                self.service.changed.emit('')
-                self.status.setText(f'Imported {count} new or newer notes and orders.')
+                count = self.service.store.import_backup(result['payload'], allow_documents=True)
             except (OSError, ValueError) as exc:
-                QMessageBox.warning(self, 'Import backup', str(exc))
+                cleanup_result(result)
+                self.status.setText('Nothing was imported: ' + str(exc))
+                return
+            # Once committed, cleanup may only touch IDs absent from the notebook.
+            result.pop('_cleanup', None)
+            self.service.store._discard_unreferenced(result.get('prepared_ids', []))
+            self.service.changed.emit('')
+            self.status.setText(f'Imported {count} new or newer notes, including their full documents.')
+        else:
+            self.status.setText('Notebook exported: ' + str(result.get('path', '')))
+
+    def start_export(self, file, format):
+        if self.transfer.busy:
+            return False
+        snapshot = notebook_snapshot(self.service.store)
+        if format == 'json' and any(note.get('document_id') for note in snapshot['notes']):
+            self.status.setText('Choose a desktop ZIP backup to include full documents. Mobile JSON supports small notes only.')
+            return False
+        self.status.setText('Exporting notebook… Use Cancel notebook transfer to stop.')
+        return self.transfer.run(export_notebook, {'store': self.service.store, 'path': file,
+            'snapshot': snapshot, 'format': format})
+
+    def export_backup(self, file=None):
+        if not file:
+            file, _ = QFileDialog.getSaveFileName(self, 'Export notebook backup', 'JefferyNotebook.zip',
+                'Desktop full backup (*.zip);;Mobile small-note backup (*.json)')
+        if file:
+            return self.start_export(file, 'json' if Path(file).suffix.lower() == '.json' else 'zip')
+        return False
+
+    def import_backup(self, file=None):
+        if self.transfer.busy or self.intake.busy:
+            self.status.setText('Finish or cancel the current document operation before importing a backup.')
+            return False
+        if not file:
+            file, _ = QFileDialog.getOpenFileName(self, 'Import Jeffery backup', '', 'Jeffery backup (*.zip *.json)')
+        if file:
+            self.status.setText('Reading notebook backup… You can cancel before it is added.')
+            return self.transfer.run(prepare_notebook_backup, {'store': self.service.store, 'path': file})
+        return False
 
     def mark_dirty(self, *args):
         if not self.loading:
@@ -717,9 +846,10 @@ class NotepadWindow(QDialog):
         with QSignalBlocker(self.list):
             self.list.clear()
             search = self.search.text().strip().casefold()
+            matched = self.service.store.search_ids(search) if search else None
             mode = self.filter.currentIndex()
             for note in sorted(self.service.store.notes, key=lambda n: (n["done"], -n["created"])):
-                if (search and search not in note_search_text(note).casefold()) or (mode == 1 and note["done"]) or (mode == 2 and not note["done"]) or (mode == 3 and note['kind'] != 'order') or (mode == 4 and note['kind'] != 'list'):
+                if (matched is not None and note['id'] not in matched) or (mode == 1 and note["done"]) or (mode == 2 and not note["done"]) or (mode == 3 and note['kind'] != 'order') or (mode == 4 and note['kind'] != 'list'):
                     continue
                 prefix = "✓ " if note["done"] else "• "
                 label = note['order_status'].title() + ' · ' + (note['customer'] or 'Walk-in') if note['kind'] == 'order' else reminder_time(note)
@@ -733,7 +863,7 @@ class NotepadWindow(QDialog):
                     self.list.setCurrentItem(item)
         active = sum(not n["done"] for n in self.service.store.notes)
         summary = business_summary(self.service.store.notes)
-        self.summary.setText(f"{active} to do · {summary['open_orders']} open orders · {summary['ready_orders']} ready · {summary['late_orders']} past deadline")
+        self.summary.setText(f"{active} to do · {summary['open_orders']} open orders · {summary['ready_orders']} ready · {summary['late_orders']} past deadline\n{self.service.store.character_count():,} of 1,000,000,000 characters saved")
         linked = self.service.store.state["linked_file"]
         self.link_status.setText("Linked file: " + linked if linked else "No text file linked. You can use this notebook on its own.")
         note = self.service.store.find(self.editing_id)
@@ -760,6 +890,8 @@ class NotepadWindow(QDialog):
         if not self.maybe_leave():
             return False
         self.editing_id = None
+        self.document_pages.hide()
+        self.body.setReadOnly(False)
         self.loading = True
         self.title.clear()
         self.body.clear()
@@ -796,6 +928,23 @@ class NotepadWindow(QDialog):
         self.loading = True
         self.title.setText(note["title"])
         self.body.setPlainText(note['body'])
+        self.body.setReadOnly(bool(note.get('document_id')))
+        self.document_pages.setVisible(bool(note.get('document_id')))
+        if note.get('document_id'):
+            try:
+                count = self.service.store.documents.page_count(note['document_id'])
+            except (OSError, ValueError) as exc:
+                count = 0
+                self.status.setText('The full document could not be opened: ' + str(exc))
+            with QSignalBlocker(self.document_page):
+                self.document_page.setRange(1, max(1, count))
+                self.document_page.setValue(1)
+            self.document_size.setText(f"of {count:,} · {note.get('body_characters', 0):,} characters · read only")
+            if count:
+                self.show_document_page(1)
+            else:
+                self.document_previous.setEnabled(False)
+                self.document_next.setEnabled(False)
         self.load_business(note)
         self.repeat.setValue(note["repeat_minutes"])
         self.scheduled.setChecked(note["next_due"] is not None)
@@ -807,6 +956,22 @@ class NotepadWindow(QDialog):
         self.refresh_advice()
         self.reading.emit()
 
+    def show_document_page(self, value):
+        note = self.service.store.find(self.editing_id)
+        if not note or not note.get('document_id'):
+            return
+        try:
+            text = self.service.store.documents.read_page(note['document_id'], max(0, value - 1))
+        except (OSError, ValueError) as exc:
+            self.status.setText('Document could not be opened: ' + str(exc))
+            return
+        with QSignalBlocker(self.body):
+            self.body.setPlainText(text)
+        if not text:
+            self.status.setText('The full document is unavailable. Keep your notebook files and restore a desktop ZIP backup.')
+        self.document_previous.setEnabled(value > 1)
+        self.document_next.setEnabled(value < self.document_page.maximum())
+
     def save_note(self):
         try:
             due = self.due.dateTime().toSecsSinceEpoch() if self.scheduled.isChecked() else None
@@ -814,12 +979,20 @@ class NotepadWindow(QDialog):
             if details['kind'] in ('list', 'order') and not details['checklist'] and not self.body.toPlainText().strip():
                 raise ValueError('Add at least one item or write the order details before saving.')
             title = self.title.text().strip() or (details['order_ref'] or ('Order for ' + (details['customer'] or 'Walk-in')) if details['kind'] == 'order' else 'Checklist' if details['kind'] == 'list' else '')
-            note = self.service.save_note(self.editing_id, title, self.body.toPlainText(), self.repeat.value(), due, details)
+            current = self.service.store.find(self.editing_id)
+            was_document = bool(current and current.get('document_id'))
+            body = current['body'] if current and current.get('document_id') else self.body.toPlainText()
+            if len(body) > 10000 and (self.intake.busy or self.transfer.busy):
+                self.status.setText('Finish or cancel the document operation before saving this long draft.')
+                return False
+            note = self.service.save_note(self.editing_id, title, body, self.repeat.value(), due, details)
             self.loading = True
             self.title.setText(note['title'])
             self.loading = False
             self.editing_id = note["id"]
             self.dirty = False
+            if note.get('document_id') and not was_document:
+                self.load_note(note['id'])
             self.refresh()
             self.status.setText("Saved · " + reminder_time(note) + ". Jeffery's advice updates when Groq is connected.")
             return True
@@ -839,6 +1012,9 @@ class NotepadWindow(QDialog):
     def delete_note(self):
         if not self.editing_id:
             return
+        if self.intake.busy or self.transfer.busy:
+            self.status.setText('Finish or cancel the notebook operation before deleting a note.')
+            return
         if QMessageBox.question(self, "Delete note", "Permanently delete this note?", QMessageBox.Yes | QMessageBox.No, QMessageBox.No) != QMessageBox.Yes:
             return
         try:
@@ -849,15 +1025,10 @@ class NotepadWindow(QDialog):
         except OSError as exc:
             QMessageBox.warning(self, "Delete note", str(exc))
 
-    def export_notes(self):
-        file, _ = QFileDialog.getSaveFileName(self, "Export notebook", "JefferyNotebook.txt", "Text files (*.txt)")
-        if file:
-            try:
-                sections = [f"{'DONE' if n['done'] else 'ACTIVE'}: {n['title']}\n{n['body']}\n" + '\n'.join(f"[{'x' if i['done'] else ' '}] {i['quantity']} × {i['text']}" for i in n['checklist']) for n in self.service.store.notes]
-                Path(file).write_text("\n\n".join(sections) + "\n", encoding="utf-8")
-                self.status.setText("Notebook exported.")
-            except OSError as exc:
-                QMessageBox.warning(self, "Export notebook", str(exc))
+    def export_notes(self, file=None):
+        if not file:
+            file, _ = QFileDialog.getSaveFileName(self, "Export notebook", "JefferyNotebook.txt", "Text files (*.txt)")
+        return self.start_export(file, 'text') if file else False
 
     def toggle_pin(self):
         note = self.service.store.find(self.editing_id)

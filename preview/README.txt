@@ -20,3 +20,6 @@ pdf-import.png shows a reviewed test PDF import with a synthetic appointment.
 medieval-monitor.png shows real Linux workspace readings in the medieval Qt HUD.
 These demonstrate UI and local persistence, not a live Groq or native Windows
 session. The monitor's torch animates in the running application.
+large-notebook.png shows a synthetic 149,999-character document saved in full
+and opened at its last bounded text page. This is a GUI test example, not a
+billion-character benchmark or a real appointment.
