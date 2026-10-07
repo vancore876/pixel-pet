@@ -1,7 +1,9 @@
 # Custom buddy sprites
 
-The app includes robot, cat, and knight characters drawn directly in Qt.
-No downloads or image files are needed. All characters have interaction poses.
+The app includes robot, cat, and knight characters drawn directly in Qt with
+rounded forms, soft material shading and expressive eyes. No downloads or image
+files are needed. All characters have interaction poses. The mobile sheets can
+be regenerated from this renderer with `python tools/export_pet_sprites.py`.
 
 To replace a character, create a matching subfolder here: `robot`, `cat`, or
 `knight`. Put square transparent PNG frames in that folder, using a fixed canvas

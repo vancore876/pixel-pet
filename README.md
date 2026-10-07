@@ -39,6 +39,22 @@ py -3 -m venv .venv
 .\.venv\Scripts\python.exe main.py
 ```
 
+## A more lifelike virtual buddy
+
+The built-in robot, cat, and knight use rounded forms, material shading, soft
+highlights, expressive eyes, and gentle breathing. A subtle cyan ground light
+keeps their virtual companion feel. All 49 animation states, palette choices,
+and desktop interactions remain available. The mobile app uses the same
+character renderer and adds a quiet halo around its pet stage.
+
+![Original and updated virtual companions](preview/virtual-pets.png)
+
+After changing `characters.py`, regenerate the mobile animation sheets with
+`python tools/export_pet_sprites.py` from an environment with the desktop
+dependencies installed. The exporter keeps the eight-frame, 49-state layout
+used by the phone app. Local notebook data, credentials, installed dependencies,
+and generated build outputs are excluded from Git.
+
 ## What changed
 
 | Upgrade | How to use it |
