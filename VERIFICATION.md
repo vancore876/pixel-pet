@@ -1,5 +1,15 @@
 # Jeffery 6.0 verification
 
+The shared-office launcher passed six profile/startup checks, 13 core regression
+checks, and 23 Work Chat client checks. Two real app startup/shutdown smoke runs
+used separate local profiles and an unrelated working directory, preserving each
+user's saved chat name without changing the portable settings. Windows startup
+commands retain the work entrypoint, including quoted shared paths. The actual
+server batch started HTTP on port 8765 with a disposable database in its private
+local profile, outside the application folder, and was stopped afterward. The
+office's real Windows share, permissions, and concurrent workstation launches
+still need validation at work.
+
 The office HTTP Work Chat update passed 22 backend authentication/privacy/storage
 checks, 23 desktop client/transport checks, and disposable two-account Qt and
 browser workflows. Two real Qt clients connected through this development PC's

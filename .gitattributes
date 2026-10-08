@@ -1,3 +1,4 @@
 # Preserve Windows batch line endings in source ZIP downloads.
 Start_Work_Server.bat -text whitespace=cr-at-eol
 Setup_Work_Server.bat -text whitespace=cr-at-eol
+Start_Work_Buddy.bat -text whitespace=cr-at-eol

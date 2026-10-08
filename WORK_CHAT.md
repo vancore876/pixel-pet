@@ -3,8 +3,10 @@
 Work Chat gives each coworker a username and password, a shared **Team Room**,
 and private direct messages. A Python service stores accounts and messages on
 the work server. People can use their browser, or **Chat → Work Chat · Coworkers**
-in a locally installed copy of Buddy. Chat updates approximately every two seconds
-while open. This chat is separate from the existing Groq AI conversation.
+in Buddy opened from the office's shared application folder. Each coworker
+creates a different chat username and password. Chat updates approximately
+every two seconds while open. This chat is separate from the existing Groq AI
+conversation.
 
 The proposed work server is Windows at **192.168.50.194**. Confirm its IPv4
 address with `ipconfig` on that machine. The simple office setup uses:
@@ -24,10 +26,15 @@ The code has been tested locally. It has not been installed on that work server.
 
 1. Install 64-bit Python 3.11 or newer on the main PC.
 2. Download the updated GitHub ZIP, or clone/update this repository, into a local
-   folder such as `C:\Jeffery\pixel-pet`. Use the complete project files.
-3. Double-click **Start_Work_Server.bat**. It creates `.server-venv` and installs
-   or refreshes the server dependencies automatically. The first setup needs
-   internet access. No certificate files are required.
+   folder such as `C:\Jeffery\pixel-pet`. Use the complete project files and
+   exclude anyone's existing personal `data` or `server-data` folders. This same
+   project folder can be shared with coworkers as described below.
+3. Double-click **Start_Work_Server.bat** using its local disk path on the main
+   PC. It creates `.server-venv` and installs or refreshes the server dependencies
+   automatically. The first setup needs internet access. No certificate files
+   are required. Accounts and messages are stored outside the project folder at
+   `%LOCALAPPDATA%\PixelSystemBuddy\work-server\work-chat.sqlite`, under the
+   Windows account running the server.
 4. Leave its window open. Ctrl+C stops the service. Keep the main PC on and awake
    whenever coworkers need chat. The desktop pet does not need to be open on
    the server for chat to work.
@@ -39,12 +46,23 @@ For a manual PowerShell setup, run these commands from the project folder:
 py -3 -m venv .server-venv
 .\.server-venv\Scripts\python.exe -m pip install -r requirements-server.txt
 .\.server-venv\Scripts\python.exe -m pip check
-.\.server-venv\Scripts\python.exe -m work_server --host 0.0.0.0 --port 8765 --database server-data\work-chat.sqlite --allow-lan-http
+.\.server-venv\Scripts\python.exe -m work_server --host 0.0.0.0 --port 8765 --database "$env:LOCALAPPDATA\PixelSystemBuddy\work-server\work-chat.sqlite" --allow-lan-http
 ```
 
 The server has its own optional dependencies; desktop clients do not need them.
 Keep the database on the server's local disk. Do not put SQLite on an SMB share
-or give workstations write access to it.
+or give workstations access to it. Accounts and message history belong in the
+private `work-server` folder in the server account's local profile. Share only
+the project folder, not the server account's profile or its `work-server` folder.
+
+An existing database from an earlier manual setup in `server-data` is not moved
+automatically. If you already have accounts, stop the old server and either
+keep using its explicit `--database` path outside the share, or privately copy
+the complete old database folder (including any SQLite WAL/SHM files) into the
+new `work-server` location. Verify the accounts are present before removing the
+old copy from any folder you plan to share. The CLI's default database path
+remains `server-data\work-chat.sqlite`; use the explicit production command
+above when starting it manually.
 
 Allow incoming TCP port 8765 only from the actual office subnet. For example, if
 your administrator confirms the office uses `192.168.50.0/24`, this elevated
@@ -63,40 +81,65 @@ coworkers do not have to change their saved address.
 For automatic startup later, have your administrator run the manual server
 command through Windows Task Scheduler or your usual service manager, using
 this repository as its working directory and a dedicated Windows account.
+Keep using the same Windows account, or set an explicit private database path;
+changing accounts changes `%LOCALAPPDATA%` and otherwise starts a new database.
 
-## Connect coworkers
+## Share the application and connect coworkers
 
-1. Put a clean, complete project copy in a separate local folder on each work
-   PC. Install 64-bit Python 3.11 or newer, then run **Start_Buddy.bat**. It installs
-   the desktop dependencies on first launch, which also needs internet access.
-2. Right-click Jeffery, open **Chat → Work Chat · Coworkers**, and enter
+1. On the main PC, have your administrator share the same project folder,
+   for example `C:\Jeffery\pixel-pet`, with coworkers as **read-only**. It should
+   contain application code, not anyone's personal `data`, `server-data`, or
+   credentials. The server's `.server-venv` contains dependencies and can stay
+   there; coworkers use their own local environment. For example, a share
+   named `Jeffery` would expose `\\192.168.50.194\Jeffery`; the administrator
+   chooses the actual share name. Only administrators need write access to
+   publish application updates.
+2. On each coworker's PC, install 64-bit Python 3.11 or newer. Open
+   **Start_Work_Buddy.bat** from that shared folder. A desktop shortcut can point
+   to `\\192.168.50.194\Jeffery\Start_Work_Buddy.bat`. The same launcher also
+   supports a mapped network drive. It installs desktop dependencies in that
+   Windows user's local profile on first launch, which needs internet access.
+   Coworkers do not need a separate project copy or access to the server's
+   Python environment.
+3. Right-click Jeffery, open **Chat → Work Chat · Coworkers**, and enter
    **192.168.50.194** in the server field. Use the actual server IP if different.
    Bare IPs use HTTP port 8765; for another port, enter `192.168.50.194:PORT`.
    An explicit URL such as `http://192.168.50.194:8765` also works.
-3. Choose **Create account**, enter a unique username, a password, and its
+4. Choose **Create account**, enter a unique username, a password, and its
    confirmation. Usernames contain 3–32 letters, numbers, underscores, dots, or
    dashes; they are case-insensitive. Passwords contain 12–128 characters.
-4. Open **Team Room** for everyone, or select a coworker for direct messages.
+5. Open **Team Room** for everyone, or select a coworker for direct messages.
    Coworkers appear after creating accounts. Use Refresh if needed.
 
 Only the main PC runs **Start_Work_Server.bat**. Everyone connects to that one
 server; they do not start their own chat servers. Accounts and message history
-stay in the main PC's `server-data` folder and survive restarts.
+stay in the server Windows account's
+`%LOCALAPPDATA%\PixelSystemBuddy\work-server` folder and survive restarts.
 
 As an alternative to installing Jeffery, coworkers can open
 `http://192.168.50.194:8765` in a browser and use the same accounts and chats.
 
-Each desktop copy keeps its existing notebook, memory, and settings locally.
-Do not have everyone launch the portable desktop app from the same writable
-server folder: that would share its `data` folder. Work Chat itself is shared
-through the Python API. The current mobile app has not been connected to this
-API; its existing Groq chat and manual notebook transfers continue to work.
+**Start_Work_Buddy.bat** runs the shared application code while keeping its
+Python environment at `%LOCALAPPDATA%\PixelSystemBuddy\work-runtime` and each
+Windows user's notebook, memory, and settings at
+`%LOCALAPPDATA%\PixelSystemBuddy\work-data`. It does not write personal data or
+install dependencies into the shared folder. Keep the share available while
+Buddy is running. Close Buddy before publishing a new version of the shared
+code, then have coworkers reopen it.
 
-Distribute the clean source ZIP or Git checkout, excluding `.venv`,
-`.server-venv`, `data`, and `server-data`. Do not copy virtual environments or
-someone else's notebook/settings to coworkers' PCs. Existing packaged EXEs
-need rebuilding to include these changes; use **Start_Buddy.bat** with the new
-source files for this setup.
+Chat usernames are separate from Windows logins. Different Windows user
+profiles keep local notebooks and settings separate. If coworkers use the
+same Windows profile, they share those local files and must **Sign out** of
+Work Chat between people. Each person signs in with their own chat account;
+changing the chat account does not change the local notebook.
+
+**Start_Buddy.bat** remains available for a separate local, portable project
+copy on an individual PC. Do not use that launcher from the shared folder:
+its portable `data` folder could be shared between coworkers. Work Chat itself
+is shared through the Python API. The current mobile app has not been connected
+to this API; its existing Groq chat and manual notebook transfers continue to
+work. Existing packaged EXEs need rebuilding to include these changes; use the
+new source files and **Start_Work_Buddy.bat** for this shared-folder setup.
 
 ## Check the connection at work
 
@@ -143,14 +186,18 @@ server itself. The command prompts for the new password without echoing it and
 revokes all sessions for that account. Restart the server afterward.
 
 ```powershell
-.\.server-venv\Scripts\python.exe -m work_server reset-password USERNAME --database server-data\work-chat.sqlite
+.\.server-venv\Scripts\python.exe -m work_server reset-password USERNAME --database "$env:LOCALAPPDATA\PixelSystemBuddy\work-server\work-chat.sqlite"
 ```
 
-For backups, stop the server, copy the complete `server-data` folder to a
-protected backup location, then restart. Preserve the database and any existing
-SQLite WAL/SHM files together. Backups contain workplace chat history and TLS
-private keys if HTTPS is configured; limit access accordingly. Restore while
-the server is stopped.
+Run the reset command under the same Windows account that runs the server, or
+replace the database argument with its actual private path.
+
+For backups, stop the server and copy the complete
+`%LOCALAPPDATA%\PixelSystemBuddy\work-server` folder from that server Windows
+account to a protected backup location, then restart. Preserve the database and
+any existing SQLite WAL/SHM files together. Backups contain workplace chat
+history and TLS private keys if HTTPS is configured; limit access accordingly.
+Restore while the server is stopped.
 
 ## Optional HTTPS later
 
@@ -162,14 +209,15 @@ browser and Buddy's Qt TLS backend can use different trust configuration;
 verify both clients on the actual work PCs. HTTPS certificate checks remain
 enforced and cannot be bypassed.
 
-Store the certificate chain as `server-data\tls\server.crt` and the key as
-`server-data\tls\server.key`; protect that folder so only the server service
-account and administrators can access it. These files and the database are
-excluded from Git. Stop the HTTP server and use this command instead of the
-HTTP launcher:
+Store the certificate chain as
+`%LOCALAPPDATA%\PixelSystemBuddy\work-server\tls\server.crt` and the key as
+`%LOCALAPPDATA%\PixelSystemBuddy\work-server\tls\server.key` under the server
+Windows account. Protect that private folder so only the server service account
+and administrators can access it; keep both files outside the application share.
+Stop the HTTP server and use this command instead of the HTTP launcher:
 
 ```powershell
-.\.server-venv\Scripts\python.exe -m work_server --host 0.0.0.0 --port 8443 --database server-data\work-chat.sqlite --certfile server-data\tls\server.crt --keyfile server-data\tls\server.key
+.\.server-venv\Scripts\python.exe -m work_server --host 0.0.0.0 --port 8443 --database "$env:LOCALAPPDATA\PixelSystemBuddy\work-server\work-chat.sqlite" --certfile "$env:LOCALAPPDATA\PixelSystemBuddy\work-server\tls\server.crt" --keyfile "$env:LOCALAPPDATA\PixelSystemBuddy\work-server\tls\server.key"
 ```
 
 Allow TCP port 8443 from the office subnet, enter

@@ -103,7 +103,8 @@ def set_windows_startup(enabled: bool):
             else:
                 executable = Path(sys.executable)
                 windowed = executable.with_name("pythonw.exe")
-                arguments = [str(windowed if windowed.exists() else executable), str(ROOT / "main.py")]
+                entrypoint = "work_buddy.py" if os.environ.get("JEFFERY_WORK_PROFILE") == "1" else "main.py"
+                arguments = [str(windowed if windowed.exists() else executable), str(ROOT / entrypoint)]
             winreg.SetValueEx(key, "PixelSystemBuddy", 0, winreg.REG_SZ, subprocess.list2cmdline(arguments))
         else:
             try:

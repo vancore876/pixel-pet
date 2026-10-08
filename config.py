@@ -38,7 +38,13 @@ DEFAULTS = {
 
 
 def data_directory() -> Path:
-    """Prefer portable data beside the app; use per-user storage if read-only."""
+    """Keep shared-office profiles local; otherwise prefer portable app data."""
+    if os.environ.get("JEFFERY_WORK_PROFILE") == "1":
+        local_base = os.environ.get("LOCALAPPDATA") or Path.home() / ".local" / "share"
+        profile = Path(local_base) / "PixelSystemBuddy" / "work-data"
+        profile.mkdir(parents=True, exist_ok=True)
+        return profile
+
     preferred = ROOT / "data"
     try:
         preferred.mkdir(parents=True, exist_ok=True)

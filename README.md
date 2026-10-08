@@ -18,10 +18,19 @@ For accounts and coworker messaging on a shared office server, see
 sign-up, a shared Team Room, private direct messages, and a browser interface.
 Desktop clients open **Chat → Work Chat · Coworkers**. Jeffery's existing Groq AI
 chat is under **Chat → Talk to Jeffery · Groq**. On the main office PC, run
-**Start_Work_Server.bat**; on each coworker's PC, enter the main PC's IP in Work
-Chat and create an account. The launcher uses office-only HTTP on port 8765
-without certificates; passwords and messages travel unencrypted. Optional
-verified HTTPS is documented in the setup guide.
+**Start_Work_Server.bat** using the project's local disk path, then share that
+same clean project folder as a read-only Windows share. Coworkers open
+**Start_Work_Buddy.bat** from that shared folder or a shortcut to it.
+Each PC needs 64-bit Python 3.11 or newer and internet access for its first
+dependency installation. Coworkers enter the main PC's IP in Work Chat and
+create their own unique username and password. The shared launcher keeps
+dependencies and personal notebooks/settings in each Windows user's local
+profile. Accounts and chat messages stay outside the shared project, in the
+server Windows account's `%LOCALAPPDATA%\PixelSystemBuddy\work-server` folder.
+Do not publish personal `data` or older `server-data` folders in the share.
+The server launcher uses office-only HTTP on port 8765 without certificates;
+passwords and messages travel unencrypted. Optional verified HTTPS is documented
+in the setup guide.
 
 The launcher installs PySide6, psutil, pypdf, PDFium, Pillow, Trafilatura, and
 RapidFuzz into its own virtual environment
@@ -551,7 +560,12 @@ If Ctrl+Alt+J is unavailable, use the countdown button.
 If Groq fails, Test connection and replace a rejected key or choose an available
 model. Play continues offline.
 
-Data is stored beside the app when writable, with a per-user fallback.
+With **Start_Buddy.bat**, data is stored beside the app when writable, with a
+per-user fallback. For the shared office application, use **Start_Work_Buddy.bat**:
+it always keeps personal data in `%LOCALAPPDATA%\PixelSystemBuddy\work-data` and
+its Python environment in `%LOCALAPPDATA%\PixelSystemBuddy\work-runtime`.
+Different Windows profiles have separate local data. People sharing a Windows
+profile share its notebook/settings and must sign out of Work Chat between users.
 Settings, notes, shortcuts, and optional portal locations use separate JSON files.
 Corrupt note/settings files are preserved when possible. buddy.log holds diagnostic
 errors. No automatic installation at login occurs unless Start with Windows is enabled.
