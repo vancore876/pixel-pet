@@ -1,8 +1,10 @@
 # Jeffery Work Chat
 
 Work Chat gives each coworker a username and password, a shared **Team Room**,
-and private direct messages. A Python service stores accounts and messages on
-the work server. People can use their browser, or **Chat → Work Chat · Coworkers**
+and private direct messages. The same login also enables shared Famous Twins
+orders and checklists in desktop Jeffery. A Python service stores accounts,
+messages, and shared business records on the work server. People can use their
+browser for chat, or **Chat → Work Chat · Coworkers**
 in Buddy opened from the office's shared application folder. Each coworker
 creates a different chat username and password. Chat updates approximately
 every two seconds while open. This chat is separate from the existing Groq AI
@@ -17,8 +19,9 @@ http://192.168.50.194:8765
 
 In Jeffery, entering just **192.168.50.194** selects that address and port
 automatically. This setup requires no certificates. Passwords, session tokens,
-and messages travel unencrypted over the office network; use it only on the
-trusted office LAN. Verified HTTPS remains available as an optional setup below.
+messages, and business data travel unencrypted over the office network; use it
+only on the trusted office LAN. Verified HTTPS remains available as an optional
+setup below.
 
 The code has been tested locally. It has not been installed on that work server.
 
@@ -32,12 +35,13 @@ The code has been tested locally. It has not been installed on that work server.
 3. Double-click **Start_Work_Server.bat** using its local disk path on the main
    PC. It creates `.server-venv` and installs or refreshes the server dependencies
    automatically. The first setup needs internet access. No certificate files
-   are required. Accounts and messages are stored outside the project folder at
+   are required. Accounts, messages, and shared business records are stored
+   outside the project folder at
    `%LOCALAPPDATA%\PixelSystemBuddy\work-server\work-chat.sqlite`, under the
    Windows account running the server.
 4. Leave its window open. Ctrl+C stops the service. Keep the main PC on and awake
-   whenever coworkers need chat. The desktop pet does not need to be open on
-   the server for chat to work.
+   whenever coworkers need chat or shared business access. The desktop pet does
+   not need to be open on the server for those services to work.
 
 You can also prepare dependencies separately with **Setup_Work_Server.bat**.
 For a manual PowerShell setup, run these commands from the project folder:
@@ -51,8 +55,9 @@ py -3 -m venv .server-venv
 
 The server has its own optional dependencies; desktop clients do not need them.
 Keep the database on the server's local disk. Do not put SQLite on an SMB share
-or give workstations access to it. Accounts and message history belong in the
-private `work-server` folder in the server account's local profile. Share only
+or give workstations access to it. Accounts, message history, and shared
+business records belong in the private `work-server` folder in the server
+account's local profile. Share only
 the project folder, not the server account's profile or its `work-server` folder.
 
 An existing database from an earlier manual setup in `server-data` is not moved
@@ -110,10 +115,13 @@ changing accounts changes `%LOCALAPPDATA%` and otherwise starts a new database.
    dashes; they are case-insensitive. Passwords contain 12–128 characters.
 5. Open **Team Room** for everyone, or select a coworker for direct messages.
    Coworkers appear after creating accounts. Use Refresh if needed.
+6. Open **Famous Twins → Business Overview**. Wait for **Shared with coworkers**
+   before saving an order or checklist. The login automatically loads shared
+   records; there is no separate business account or database path to configure.
 
 Only the main PC runs **Start_Work_Server.bat**. Everyone connects to that one
-server; they do not start their own chat servers. Accounts and message history
-stay in the server Windows account's
+server; they do not start their own chat servers. Accounts, message history,
+and shared business records stay in the server Windows account's
 `%LOCALAPPDATA%\PixelSystemBuddy\work-server` folder and survive restarts.
 
 As an alternative to installing Jeffery, coworkers can open
@@ -131,7 +139,9 @@ Chat usernames are separate from Windows logins. Different Windows user
 profiles keep local notebooks and settings separate. If coworkers use the
 same Windows profile, they share those local files and must **Sign out** of
 Work Chat between people. Each person signs in with their own chat account;
-changing the chat account does not change the local notebook.
+changing the chat account does not change personal writing. Shared business
+records use a disposable local cache that is cleared on sign-out/account
+changes and reloaded from the server on sign-in.
 
 **Start_Buddy.bat** remains available for a separate local, portable project
 copy on an individual PC. Do not use that launcher from the shared folder:
@@ -148,6 +158,42 @@ and send a message in each direction. New messages should appear in about two
 seconds while the conversation is open. Then send a Team Room message and
 check that both accounts see it. Direct messages should stay out of Team Room.
 
+Then create an order or checklist on one PC and save it. Check that it appears
+on the other PC, make a change there, and verify that the first PC receives it.
+To check conflict handling, open the same order on both PCs, save a change on
+one, then try to save an older editor draft on the other. The older save should
+be rejected without overwriting the coworker's change; its draft stays in the
+editor until reviewed or discarded.
+
+## Shared Famous Twins records
+
+The redesigned desktop workspace separates **Writing**, **Checklists**,
+**Orders**, **Schedule**, and **Overview**. See [Famous Twins workflow](FAMOUS_TWINS.md)
+for JMD totals, quotes, supplier/bin details, manual sourcing, customer history,
+pickup summaries, templates, and animations.
+
+- Every authenticated coworker can read, edit, complete, and delete every shared
+  order/checklist. These are team business records; direct-message privacy does
+  not apply to them.
+- Signing in loads records from the office server. New and edited records need
+  a live connection to save; changes appear on other signed-in desktop clients
+  approximately every 2.5 seconds. The browser currently offers chat, not the
+  desktop business workspace.
+- Personal Writing entries and full documents remain local. Existing local
+  orders/checklists are not uploaded at login. Opening one and choosing **Save
+  entry** explicitly publishes it to coworkers.
+- Concurrent changes use version checks. A stale save/delete returns a conflict
+  instead of overwriting another coworker. An unsaved editor draft is preserved
+  in the current window. Copy desired edits before choosing **Reload saved**
+  and **Discard**, then review the latest version and reapply them.
+- Prices, payments, stock status, VIN, and fitment notes are entered by staff.
+  This is not live inventory, a supplier catalogue, or an automatic payment
+  system. Quotes do not count toward open orders or receivables.
+- The server supports up to 2,000 undeleted business entries and 100 rows per
+  entry. Completed records still count until deleted. Each desktop's existing
+  local notebook limit also includes loaded business records. There is no
+  offline business-save queue or per-order access control.
+
 If another PC cannot connect, open `http://192.168.50.194:8765/api/health` in its
 browser. It should show a JSON response with `"status":"ok"`. Confirm the actual
 server IP, that the server window is still open, the Windows network profile,
@@ -157,7 +203,7 @@ and the port 8765 firewall rule. From that PC, PowerShell can also check:
 Test-NetConnection 192.168.50.194 -Port 8765
 ```
 
-## Accounts and message storage
+## Accounts, messages, and business storage
 
 - Passwords use salted Argon2id hashes. Session tokens are random, stored only
   as hashes on the server, and expire after eight hours. Sign out revokes the
@@ -170,6 +216,9 @@ Test-NetConnection 192.168.50.194 -Port 8765
   recipient; Team Room messages are visible to every signed-in user. Message
   history is stored in the server database. Administrators with database access
   can read it; this is not end-to-end encryption.
+- Shared orders/checklists, audit usernames, revisions, and deletion markers are
+  stored in the same database. Business API reads/writes require a valid work
+  login. All staff accounts have the same shared-business permissions.
 - In certificate-free HTTP mode, these access checks do not protect against
   someone intercepting traffic on the network. Password hashes protect stored
   passwords; they do not encrypt passwords sent during sign-in.
@@ -178,8 +227,11 @@ Test-NetConnection 192.168.50.194 -Port 8765
   in the database; this version has no scroll-back browser or retention policy.
 - Messages are plain text, up to 4,000 characters. Uploads, push notifications,
   read receipts, and automatic AI replies to coworker messages are not included.
-- Sign-in/sign-up and sending have rate limits. Requests are bounded to 16 KiB
-  and must finish their body within ten seconds. FastAPI telemetry is disabled.
+- Sign-in/sign-up, sending, and business writes have rate limits. Ordinary
+  requests are bounded to 16 KiB; business API requests allow up to 256 KiB.
+  Business delta pages contain up to three records so desktop responses remain
+  below the client's 1 MiB cap. Request bodies must finish within ten seconds.
+  FastAPI telemetry is disabled.
 
 To reset a forgotten password, stop the server and run the following on the
 server itself. The command prompts for the new password without echoing it and
@@ -195,8 +247,10 @@ replace the database argument with its actual private path.
 For backups, stop the server and copy the complete
 `%LOCALAPPDATA%\PixelSystemBuddy\work-server` folder from that server Windows
 account to a protected backup location, then restart. Preserve the database and
-any existing SQLite WAL/SHM files together. Backups contain workplace chat
-history and TLS private keys if HTTPS is configured; limit access accordingly.
+any existing SQLite WAL/SHM files together. Backups contain workplace accounts,
+chat, shared orders/checklists, revisions, deletion markers, and TLS private
+keys if HTTPS is configured; limit access accordingly. Desktop notebook exports
+do not replace this server backup.
 Restore while the server is stopped.
 
 ## Optional HTTPS later
@@ -223,7 +277,8 @@ Stop the HTTP server and use this command instead of the HTTP launcher:
 Allow TCP port 8443 from the office subnet, enter
 `https://192.168.50.194:8443` in each client, and close the old port 8765 firewall
 rule if it is no longer needed. The same database preserves accounts and
-history. Direct CLI LAN starts without `--allow-lan-http` still require HTTPS.
+history and shared business records. Direct CLI LAN starts without
+`--allow-lan-http` still require HTTPS.
 
 ## Local development and checks
 
@@ -239,8 +294,12 @@ To run the backend and desktop checks:
 
 ```powershell
 .\.server-venv\Scripts\python.exe -m unittest discover -s tests -p test_work_server.py -v
+.\.server-venv\Scripts\python.exe -m unittest discover -s tests -p test_work_business.py -v
 .\.venv\Scripts\python.exe -m unittest discover -s tests -p test_work_chat.py -v
+.\.venv\Scripts\python.exe -m unittest discover -s tests -p test_shared_business.py -v
+.\.venv\Scripts\python.exe -m unittest discover -s tests -p test_auto_parts.py -v
 .\.venv\Scripts\python.exe tests\check_work_chat_integration.py
+.\.venv\Scripts\python.exe tests\check_shared_business_integration.py
 ```
 
 To exercise the same two-client Qt workflow through a private IPv4 socket on

@@ -12,10 +12,12 @@ from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (QApplication, QDialog, QWidget, QVBoxLayout, QHBoxLayout,
     QFormLayout, QSplitter, QListWidget, QListWidgetItem, QLabel, QLineEdit,
     QPlainTextEdit, QPushButton, QCheckBox, QSpinBox, QDateTimeEdit, QFileDialog,
-    QMessageBox, QComboBox, QTabWidget, QTableWidget, QTableWidgetItem, QAbstractItemView, QHeaderView, QScrollArea, QProgressBar)
+    QMessageBox, QComboBox, QTabWidget, QTableWidget, QTableWidgetItem, QAbstractItemView, QHeaderView, QScrollArea, QProgressBar, QGridLayout, QFrame)
 from config import clamp_position
 from themes import palette
 from notes import current_guidance, ORDER_STATUSES, business_summary, note_search_text
+from auto_parts import (STOCK_STATUSES, CHECKLIST_TEMPLATES, money_to_cents, format_money,
+                        order_totals, dashboard_summary, parts_to_source, customer_history)
 from sliding_text import SlidingText
 from content_intake import IntakeService, cleanup_result, own_text_file
 from notebook_backup import notebook_snapshot
@@ -53,6 +55,8 @@ def notes_style(settings):
         QPushButton {{ background: {c['panel']}; border: 1px solid {c['border']}; border-radius: 6px; padding: 7px 11px; }}
         QPushButton:hover {{ border-color: {c['accent']}; }}
         QPushButton#primary {{ background: {c['border']}; border-color: {c['accent']}; }}
+        QProgressBar {{ background: {c['panel']}; color: {c['text']}; border: 1px solid {c['border']}; border-radius: 5px; text-align: center; min-height: 20px; }}
+        QProgressBar::chunk {{ background: {c['border']}; border-radius: 4px; }}
         QCheckBox {{ spacing: 6px; }}
         QCheckBox::indicator {{ width: 15px; height: 15px; border: 1px solid {c['muted']}; border-radius: 3px; background: {c['bg']}; }}
         QCheckBox::indicator:checked {{ background: {c['accent']}; }}
@@ -72,17 +76,23 @@ class NotepadWindow(QDialog):
     ai_requested = Signal(str)
     connection_requested = Signal()
     chat_requested = Signal()
+    business_event = Signal(str)
+    connection_work_chat_requested = Signal()
 
     def __init__(self, service, settings):
         super().__init__()
         self.service, self.settings = service, settings
         self.editing_id = None
+        self.shared_business = None
+        self.business_pending = False
+        self._loaded_note_signature = None
         self.loading = False
         self.dirty = False
         self.import_result = None
         self.import_saved = False
         self.import_loading = False
         self.document_page_index = 0
+        self.section_indices = {}
         self.intake = IntakeService(self)
         self.intake.completed.connect(self.imported)
         self.intake.failed.connect(self.import_failed)
@@ -91,78 +101,101 @@ class NotepadWindow(QDialog):
         self.transfer.completed.connect(self.transfer_received)
         self.transfer.failed.connect(lambda message: self.status.setText('Notebook transfer failed: ' + message))
         self.transfer.busy_changed.connect(self.set_transfer_busy)
-        self.setWindowTitle("Jeffery's Notepad")
-        self.resize(880, min(700, QApplication.primaryScreen().availableGeometry().height() - 60))
-        self.setMinimumSize(680, 540)
+        name = settings['business_name'] or 'Famous Twins'
+        self.setWindowTitle(name + ' · Auto Parts Workspace')
+        self.resize(1100, min(760, QApplication.primaryScreen().availableGeometry().height() - 50))
+        self.setMinimumSize(760, 560)
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setContentsMargins(18, 16, 18, 12)
+        layout.setSpacing(10)
         header = QHBoxLayout()
-        title = QLabel("Jeffery's Notepad")
-        title.setStyleSheet("font-size: 21px; font-weight: 600;")
-        header.addWidget(title, 1)
-        self.talk_button = QPushButton("Talk to Jeffery")
+        brand = QVBoxLayout()
+        self.brand_title = QLabel(name)
+        self.brand_title.setStyleSheet('font-size: 25px; font-weight: 700;')
+        self.brand_subtitle = QLabel('AUTO PARTS WORKSPACE  /  JEFFERY')
+        self.brand_subtitle.setObjectName('hint')
+        brand.addWidget(self.brand_title)
+        brand.addWidget(self.brand_subtitle)
+        header.addLayout(brand, 1)
+        self.talk_button = QPushButton('Talk to Jeffery')
         self.talk_button.clicked.connect(self.chat_requested.emit)
         header.addWidget(self.talk_button)
-        new = QPushButton("+ New note")
-        new.clicked.connect(self.new_note)
-        header.addWidget(new)
-        for label, kind in (('+ List', 'list'), ('+ Order', 'order')):
-            button = QPushButton(label)
-            button.clicked.connect(lambda checked=False, value=kind: self.new_entry(value))
-            header.addWidget(button)
         layout.addLayout(header)
-        self.summary = QLabel("")
-        self.summary.setObjectName("hint")
+        self.summary = QLabel('')
+        self.summary.setObjectName('hint')
         self.summary.setWordWrap(True)
         layout.addWidget(self.summary)
-        ai_bar = QHBoxLayout()
-        self.smart_enabled = QCheckBox("Use Groq for smarter reminders")
-        self.smart_enabled.setChecked(settings["ai_share_notes"])
-        self.smart_enabled.toggled.connect(lambda value: self.ai_preferences_requested.emit({"ai_share_notes": value}))
-        ai_bar.addWidget(self.smart_enabled, 1)
-        self.setup_ai = QPushButton("Set up Groq")
-        self.setup_ai.clicked.connect(self.connection_requested.emit)
-        ai_bar.addWidget(self.setup_ai)
-        layout.addLayout(ai_bar)
-        self.ai_status = QLabel("Saved notes and linked .txt lines help Groq write useful reminders.")
-        self.ai_status.setObjectName("hint")
-        self.ai_status.setTextFormat(Qt.PlainText)
-        self.ai_status.setWordWrap(True)
-        layout.addWidget(self.ai_status)
+        shared_row = QHBoxLayout()
+        self.shared_status = QLabel('Sign in to Work Chat to use shared orders and checklists.')
+        self.shared_status.setObjectName('hint')
+        self.shared_status.setWordWrap(True)
+        shared_row.addWidget(self.shared_status, 1)
+        self.shared_login_button = QPushButton('Coworker login')
+        self.shared_login_button.clicked.connect(self.connection_work_chat_requested.emit)
+        shared_row.addWidget(self.shared_login_button)
+        layout.addLayout(shared_row)
         splitter = QSplitter()
         browser = QWidget()
         browse = QVBoxLayout(browser)
         browse.setContentsMargins(0, 0, 0, 0)
+        self.sections = QListWidget()
+        self.sections.setObjectName('workspaceNavigation')
+        self.sections.setMaximumHeight(212)
+        self.sections.setMinimumHeight(186)
+        self.sections.setStyleSheet('QListWidget::item { padding: 3px 9px; }')
+        self.sections.setMinimumWidth(180)
+        browse.addWidget(self.sections)
+        new_bar = QHBoxLayout()
+        for label, kind in (('+ Write', 'note'), ('+ List', 'list'), ('+ Order', 'order')):
+            button = QPushButton(label)
+            button.setToolTip('Create a new ' + ('checklist' if kind == 'list' else kind))
+            button.clicked.connect(lambda checked=False, value=kind: self.new_note() if value == 'note' else self.new_entry(value))
+            new_bar.addWidget(button)
+        browse.addLayout(new_bar)
         self.search = QLineEdit()
-        self.search.setPlaceholderText("Search notes…")
+        self.search.setPlaceholderText('Find customer, part or note…')
         self.search.textChanged.connect(self.refresh)
         self.filter = QComboBox()
-        self.filter.addItems(["All notes", "To do", "Done", "Orders", "Lists"])
+        for label, value in (('All entries', 'all'), ('Open entries', 'open'), ('Completed', 'done'),
+                             ('Orders & quotes', 'order'), ('Checklists', 'list'), ('Writing', 'note')):
+            self.filter.addItem(label, value)
         self.filter.currentIndexChanged.connect(self.refresh)
         browse.addWidget(self.search)
         browse.addWidget(self.filter)
         self.list = QListWidget()
-        self.list.setMinimumWidth(190)
+        self.list.setMinimumWidth(180)
+        self.list.setMinimumHeight(60)
         self.list.currentItemChanged.connect(self.selection_changed)
         browse.addWidget(self.list, 1)
         splitter.addWidget(browser)
         editor = QWidget()
         editor_layout = QVBoxLayout(editor)
-        editor_layout.setContentsMargins(8, 0, 0, 0)
-        self.editor_tabs = QTabWidget()
-        editor_layout.addWidget(self.editor_tabs)
-        note_page = QWidget()
-        note_page.setObjectName("notePage")
-        form = QVBoxLayout(note_page)
-        form.setContentsMargins(8, 10, 8, 8)
-        self.editor_tabs.addTab(note_page, "Write and schedule")
+        editor_layout.setContentsMargins(10, 0, 0, 0)
+        self.entry_heading = QWidget()
+        title_row = QHBoxLayout(self.entry_heading)
+        title_row.setContentsMargins(0, 0, 0, 0)
         self.title = QLineEdit()
         self.title.setMaxLength(100)
-        self.title.setPlaceholderText("Title — e.g. Finish the website")
-        self.body = QPlainTextEdit()
-        self.body.setPlaceholderText("What do you need to remember? Include any date, time or useful details.")
-        self.body.setMinimumHeight(100)
-        form.addWidget(self.title)
+        self.title.setPlaceholderText('Give this entry a title')
+        self.kind = QComboBox()
+        for label, value in (('Writing', 'note'), ('Checklist', 'list'), ('Customer order', 'order')):
+            self.kind.addItem(label, value)
+        self.kind.hide()  # Entry types have their own pages and creation controls.
+        self.entry_type = QLabel('WRITING')
+        self.entry_type.setObjectName('hint')
+        title_row.addWidget(self.title, 1)
+        title_row.addWidget(self.entry_type)
+        editor_layout.addWidget(self.entry_heading)
+        self.editor_tabs = QTabWidget()
+        self.editor_tabs.tabBar().hide()
+        self.editor_tabs.currentChanged.connect(self.section_changed)
+        editor_layout.addWidget(self.editor_tabs, 1)
+        self.build_overview()
+        note_page, form = self.make_page()
+        self.add_section('writing', 'Writing', note_page)
+        intro = QLabel('A clear space for notes, ideas and full documents.')
+        intro.setObjectName('hint')
+        form.addWidget(intro)
         self.document_origin = QLabel('')
         self.document_origin.setObjectName('hint')
         self.document_origin.setTextFormat(Qt.PlainText)
@@ -170,6 +203,9 @@ class NotepadWindow(QDialog):
         self.document_origin.setTextInteractionFlags(Qt.TextSelectableByMouse)
         self.document_origin.hide()
         form.addWidget(self.document_origin)
+        self.body = QPlainTextEdit()
+        self.body.setPlaceholderText('Write here. Use Schedule for reminders and Sources / Import for documents.')
+        self.body.setMinimumHeight(180)
         form.addWidget(self.body, 1)
         self.document_pages = QWidget()
         page_row = QHBoxLayout(self.document_pages)
@@ -189,189 +225,37 @@ class NotepadWindow(QDialog):
         page_row.addWidget(self.document_size, 1)
         self.document_pages.hide()
         form.addWidget(self.document_pages)
-        schedule = QFormLayout()
-        self.repeat = QSpinBox()
-        self.repeat.setRange(0, 1440)
-        self.repeat.setSuffix(" min")
-        self.repeat.setValue(settings["note_repeat_minutes"])
-        repeat_row = QHBoxLayout()
-        self.repeat_choice = QComboBox()
-        for label, value in (("One time / no repeat", 0), ("Every 15 minutes", 15),
-                             ("Every 30 minutes", 30), ("Every hour", 60), ("Every day", 1440), ("Custom", -1)):
-            self.repeat_choice.addItem(label, value)
-        self.repeat_choice.currentIndexChanged.connect(self.choose_repeat)
-        self.repeat.valueChanged.connect(self.sync_repeat_choice)
-        repeat_row.addWidget(self.repeat_choice, 1)
-        repeat_row.addWidget(self.repeat)
-        schedule.addRow("Repeat", repeat_row)
-        self.sync_repeat_choice()
-        self.scheduled = QCheckBox("Remind me at a specific time")
-        self.due = QDateTimeEdit(QDateTime.currentDateTime().addSecs(1800))
-        self.due.setCalendarPopup(True)
-        self.due.setDisplayFormat("MMM d, yyyy  h:mm AP")
-        self.due.setEnabled(False)
-        self.scheduled.toggled.connect(self.due.setEnabled)
-        schedule.addRow(self.scheduled)
-        schedule.addRow("Next reminder", self.due)
-        form.addLayout(schedule)
-        quick_times = QHBoxLayout()
-        for label, seconds in (("In 15 min", 900), ("In 1 hour", 3600), ("Tomorrow 9 AM", -1)):
-            button = QPushButton(label)
-            button.clicked.connect(lambda checked=False, value=seconds: self.quick_time(value))
-            quick_times.addWidget(button)
-        form.addLayout(quick_times)
-        hint = QLabel("Save to start reminders. Mark Done to stop them. Keep Jeffery running.")
-        hint.setObjectName("hint")
-        hint.setWordWrap(True)
-        form.addWidget(hint)
-        actions = QHBoxLayout()
-        self.save_button = QPushButton("Save note")
-        self.save_button.setObjectName("primary")
-        self.save_button.clicked.connect(self.save_note)
-        self.pin = QPushButton("Pin")
-        self.pin.clicked.connect(self.toggle_pin)
-        self.done_button = QPushButton("Done")
-        self.done_button.clicked.connect(self.toggle_done)
-        actions.addWidget(self.save_button)
-        actions.addWidget(self.pin)
-        actions.addWidget(self.done_button)
-        self.remove = QPushButton("Delete")
-        self.remove.clicked.connect(self.delete_note)
-        actions.addWidget(self.remove)
-        form.addLayout(actions)
-        advice_page = QWidget()
-        advice_page.setObjectName("advicePage")
-        advice = QVBoxLayout(advice_page)
-        advice.setContentsMargins(12, 14, 12, 12)
-        self.advice_message = QLabel("Save a note and Jeffery will suggest a helpful reminder.")
-        self.advice_message.setWordWrap(True)
-        self.advice_message.setTextFormat(Qt.PlainText)
-        advice.addWidget(self.advice_message)
-        self.advice_step = QLabel("")
-        self.advice_step.setWordWrap(True)
-        self.advice_step.setTextFormat(Qt.PlainText)
-        advice.addWidget(self.advice_step)
-        self.advice_time = QLabel("")
-        self.advice_time.setWordWrap(True)
-        self.advice_time.setTextFormat(Qt.PlainText)
-        advice.addWidget(self.advice_time)
-        self.use_time = QPushButton("Use this time")
-        self.use_time.clicked.connect(self.apply_suggested_time)
-        advice.addWidget(self.use_time)
-        self.refresh_ai = QPushButton("Refresh Jeffery's advice")
-        self.refresh_ai.clicked.connect(self.request_advice)
-        advice.addWidget(self.refresh_ai)
-        privacy = QLabel("Groq reads this saved note's details. Suggested times take effect after you choose one and save the note.")
-        privacy.setObjectName("hint")
-        privacy.setWordWrap(True)
-        advice.addWidget(privacy)
-        advice.addStretch(1)
-        self.editor_tabs.addTab(advice_page, "Jeffery's advice")
-        business_page = QWidget()
-        business_page.setObjectName('notePage')
-        business = QVBoxLayout(business_page)
-        info = QFormLayout()
-        self.kind = QComboBox()
-        for label, value in (('Note', 'note'), ('Checklist', 'list'), ('Customer order', 'order')):
-            self.kind.addItem(label, value)
-        info.addRow('Type', self.kind)
-        self.customer = QLineEdit()
-        self.customer.setMaxLength(100)
-        self.customer.setPlaceholderText('Customer name or Walk-in')
-        self.contact = QLineEdit()
-        self.contact.setMaxLength(100)
-        self.contact.setPlaceholderText('Phone or email (optional)')
-        self.order_ref = QLineEdit()
-        self.order_ref.setMaxLength(80)
-        self.order_ref.setPlaceholderText('e.g. ORD-001')
-        self.order_status = QComboBox()
-        for status in ORDER_STATUSES:
-            self.order_status.addItem(status.title(), status)
-        self.order_timed = QCheckBox('Pickup / delivery deadline')
-        self.order_due = QDateTimeEdit(QDateTime.currentDateTime().addSecs(3600))
-        self.order_due.setCalendarPopup(True)
-        self.order_due.setDisplayFormat('MMM d, yyyy h:mm AP')
-        self.order_due.setEnabled(False)
-        self.order_timed.toggled.connect(self.order_due.setEnabled)
-        self.order_fields = [self.customer, self.contact, self.order_ref, self.order_status, self.order_timed, self.order_due]
-        for label, field in zip(('Customer', 'Contact', 'Order number', 'Status', 'Deadline', 'At'), self.order_fields):
-            info.addRow(label, field)
-        self.order_form = info
-        business.addLayout(info)
-        self.checklist = QTableWidget(0, 3)
-        self.checklist.setHorizontalHeaderLabels(['Done', 'Item / task', 'Qty'])
-        self.checklist.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.checklist.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
-        self.checklist.setColumnWidth(0, 48)
-        self.checklist.setColumnWidth(2, 55)
-        self.checklist.setMinimumHeight(100)
-        business.addWidget(self.checklist, 1)
-        item_row = QHBoxLayout()
-        self.item_text = QLineEdit()
-        self.item_text.setMaxLength(200)
-        self.item_text.setPlaceholderText('Add an item or task…')
-        self.item_quantity = QSpinBox()
-        self.item_quantity.setRange(1, 9999)
-        add_item = QPushButton('Add')
-        add_item.clicked.connect(self.add_checklist_item)
-        self.item_text.returnPressed.connect(self.add_checklist_item)
-        item_row.addWidget(self.item_text, 1)
-        item_row.addWidget(self.item_quantity)
-        item_row.addWidget(add_item)
-        business.addLayout(item_row)
-        line_actions = QHBoxLayout()
-        remove_item = QPushButton('Remove selected item')
-        remove_item.clicked.connect(self.remove_checklist_item)
-        remind_pickup = QPushButton('Remind at deadline')
-        remind_pickup.clicked.connect(self.remind_at_order_deadline)
-        line_actions.addWidget(remove_item)
-        line_actions.addWidget(remind_pickup)
-        business.addLayout(line_actions)
-        checklist_hint = QLabel('Check items as you prepare them, then Save note. Ready means awaiting handover; Delivered or Cancelled stops reminders.')
-        checklist_hint.setWordWrap(True)
-        checklist_hint.setObjectName('hint')
-        business.addWidget(checklist_hint)
-        save_order = QPushButton('Save note / order')
-        save_order.setObjectName('primary')
-        save_order.clicked.connect(self.save_note)
-        business.addWidget(save_order)
-        business_scroll = QScrollArea()
-        business_scroll.setWidgetResizable(True)
-        business_scroll.setWidget(business_page)
-        self.editor_tabs.addTab(business_scroll, 'Checklist and order')
+        self.build_checklists()
+        self.build_orders()
+        self.build_schedule()
+        self.build_advice()
         self.build_import_tab()
         self.kind.currentIndexChanged.connect(self.kind_changed)
         self.kind_changed()
+        self.sections.currentRowChanged.connect(self.editor_tabs.setCurrentIndex)
         splitter.addWidget(editor)
-        splitter.setSizes([220, 540])
+        splitter.setSizes([235, 825])
         layout.addWidget(splitter, 1)
-        link_bar = QHBoxLayout()
-        link = QPushButton("Link .txt")
-        link.clicked.connect(self.choose_link)
-        open_text = QPushButton("Open linked file")
-        open_text.clicked.connect(self.open_text_requested.emit)
-        unlink = QPushButton("Unlink")
-        unlink.clicked.connect(self.unlink)
-        link_bar.addWidget(link)
-        link_bar.addWidget(open_text)
-        link_bar.addWidget(unlink)
-        export = QPushButton("Export .txt")
-        export.clicked.connect(self.export_notes)
-        link_bar.addWidget(export)
-        transfer = QPushButton('Backup')
-        transfer.clicked.connect(self.export_backup)
-        link_bar.addWidget(transfer)
-        import_book = QPushButton('Import backup')
-        import_book.clicked.connect(self.import_backup)
-        link_bar.addWidget(import_book)
-        self.transfer_buttons = [export, transfer, import_book]
-        layout.addLayout(link_bar)
-        self.link_status = QLabel("")
-        self.link_status.setObjectName("hint")
-        self.link_status.setWordWrap(True)
-        layout.addWidget(self.link_status)
-        self.status = QLabel("Ctrl+S saves · Ctrl+N starts a note · Each new saved .txt line becomes a note")
-        self.status.setObjectName("hint")
+        self.editor_actions = QWidget()
+        actions = QHBoxLayout(self.editor_actions)
+        actions.setContentsMargins(0, 0, 0, 0)
+        self.save_button = QPushButton('Save entry')
+        self.save_button.setObjectName('primary')
+        self.save_button.clicked.connect(self.save_note)
+        self.pin = QPushButton('Pin')
+        self.pin.clicked.connect(self.toggle_pin)
+        self.done_button = QPushButton('Done')
+        self.done_button.clicked.connect(self.toggle_done)
+        self.remove = QPushButton('Delete')
+        self.remove.clicked.connect(self.delete_note)
+        actions.addStretch(1)
+        self.reload_button = QPushButton('Reload saved')
+        self.reload_button.clicked.connect(self.reload_saved)
+        for button in (self.save_button, self.reload_button, self.pin, self.done_button, self.remove):
+            actions.addWidget(button)
+        layout.addWidget(self.editor_actions)
+        self.status = QLabel('Ctrl+S saves · Ctrl+N starts writing · JMD totals')
+        self.status.setObjectName('hint')
         self.status.setWordWrap(True)
         layout.addWidget(self.status)
         self.transfer_cancel = QPushButton('Cancel notebook transfer')
@@ -385,12 +269,379 @@ class NotepadWindow(QDialog):
                        self.scheduled.toggled, self.due.dateTimeChanged, self.kind.currentIndexChanged,
                        self.customer.textChanged, self.contact.textChanged, self.order_ref.textChanged,
                        self.order_status.currentIndexChanged, self.order_timed.toggled,
-                       self.order_due.dateTimeChanged, self.checklist.itemChanged):
+                       self.order_due.dateTimeChanged, self.task_table.itemChanged, self.order_table.itemChanged,
+                       self.vehicle.textChanged, self.registration.textChanged, self.vin.textChanged,
+                       self.priority.currentIndexChanged, self.order_type.currentIndexChanged,
+                       self.payment_received.textChanged):
             signal.connect(self.mark_dirty)
+        self.task_table.itemChanged.connect(self.update_checklist_progress)
+        self.order_table.itemChanged.connect(self.update_order_totals)
+        self.payment_received.textChanged.connect(self.update_order_totals)
+        self.body.textChanged.connect(lambda: self.sync_body(self.body))
+        self.checklist_notes.textChanged.connect(lambda: self.sync_body(self.checklist_notes))
+        self.order_notes.textChanged.connect(lambda: self.sync_body(self.order_notes))
         service.changed.connect(self.refresh)
         self.configure()
         self.refresh()
+        self.show_section('overview')
         self.update_buttons()
+
+    def make_page(self, scroll=False):
+        page = QWidget()
+        page.setObjectName('notePage')
+        box = QVBoxLayout(page)
+        box.setContentsMargins(14, 14, 14, 14)
+        box.setSpacing(10)
+        if not scroll:
+            return page, box
+        area = QScrollArea()
+        area.setWidgetResizable(True)
+        area.setWidget(page)
+        return area, box
+
+    def add_section(self, key, title, page):
+        index = self.editor_tabs.addTab(page, title)
+        self.section_indices[key] = index
+        self.sections.addItem(title)
+        return index
+
+    def set_shared_status(self, text, connected=False):
+        self.shared_status.setText(str(text))
+        self.shared_login_button.setText('Work Chat' if connected else 'Coworker login')
+
+    def show_section(self, section):
+        index = self.section_indices.get(section)
+        if index is not None:
+            self.editor_tabs.setCurrentIndex(index)
+            self.sections.setCurrentRow(index)
+
+    def section_changed(self, index):
+        if hasattr(self, 'sections'):
+            with QSignalBlocker(self.sections):
+                self.sections.setCurrentRow(index)
+        section = next((key for key, value in self.section_indices.items() if value == index), '')
+        if hasattr(self, 'entry_heading'):
+            self.entry_heading.setVisible(section not in ('overview', 'import'))
+        if hasattr(self, 'editor_actions'):
+            self.editor_actions.setVisible(section not in ('overview', 'import'))
+
+    def build_overview(self):
+        page, box = self.make_page(scroll=True)
+        heading = QLabel('Your parts counter, at a glance')
+        heading.setStyleSheet('font-size: 20px; font-weight: 600;')
+        box.addWidget(heading)
+        hint = QLabel('Open an order to continue work. Shared business entries sync through your office server after coworker login.')
+        hint.setWordWrap(True)
+        hint.setObjectName('hint')
+        box.addWidget(hint)
+        cards = QGridLayout()
+        self.dashboard_cards = {}
+        for index, (key, title) in enumerate((('open_orders', 'Open orders'), ('ready_orders', 'Ready for pickup'),
+                                            ('late_orders', 'Past deadline'), ('urgent_orders', 'Urgent orders'))):
+            button = QPushButton('0\n' + title)
+            button.setMinimumHeight(64)
+            button.setStyleSheet('font-size: 15px; text-align: left; padding: 12px;')
+            button.clicked.connect(lambda checked=False, value=key: self.dashboard_focus(value))
+            cards.addWidget(button, index // 2, index % 2)
+            self.dashboard_cards[key] = (button, title)
+        box.addLayout(cards)
+        self.dashboard_money = QLabel('')
+        self.dashboard_money.setWordWrap(True)
+        box.addWidget(self.dashboard_money)
+        self.order_queue_title = QLabel('Orders to follow up')
+        self.order_queue_title.setStyleSheet('font-weight: 600;')
+        box.addWidget(self.order_queue_title)
+        self.order_queue = QListWidget()
+        self.order_queue.setMinimumHeight(120)
+        self.order_queue.setMaximumHeight(140)
+        self.order_queue.itemActivated.connect(lambda item: self.open_workspace_note(item.data(Qt.UserRole)))
+        self.order_queue.itemClicked.connect(lambda item: self.open_workspace_note(item.data(Qt.UserRole)))
+        box.addWidget(self.order_queue)
+        source_heading = QLabel('Parts to source')
+        source_heading.setStyleSheet('font-weight: 600;')
+        box.addWidget(source_heading)
+        self.sourcing_table = QTableWidget(0, 5)
+        self.sourcing_table.setHorizontalHeaderLabels(['Part / number', 'Qty', 'Supplier', 'Stock', 'Customer'])
+        self.sourcing_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.sourcing_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.sourcing_table.verticalHeader().hide()
+        self.sourcing_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        self.sourcing_table.setMinimumHeight(135)
+        self.sourcing_table.cellDoubleClicked.connect(self.open_sourcing_order)
+        box.addWidget(self.sourcing_table)
+        history_bar = QHBoxLayout()
+        history_bar.addWidget(QLabel('Customer history'))
+        self.history_search = QLineEdit()
+        self.history_search.setPlaceholderText('Customer, phone, registration or VIN')
+        self.history_search.textChanged.connect(self.refresh_customer_history)
+        history_bar.addWidget(self.history_search, 1)
+        box.addLayout(history_bar)
+        self.history_table = QTableWidget(0, 5)
+        self.history_table.setHorizontalHeaderLabels(['Customer / reference', 'Vehicle', 'Status', 'Total JMD', 'Balance JMD'])
+        self.history_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.history_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.history_table.verticalHeader().hide()
+        self.history_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        self.history_table.setMinimumHeight(140)
+        self.history_table.cellDoubleClicked.connect(self.open_history_order)
+        box.addWidget(self.history_table)
+        box.addStretch(1)
+        self.add_section('overview', 'Overview', page)
+        self.dashboard_mode = 'open_orders'
+
+    def build_checklists(self):
+        page, box = self.make_page(scroll=True)
+        intro = QLabel('Daily routines and handover checks, separate from customer orders.')
+        intro.setWordWrap(True)
+        intro.setObjectName('hint')
+        box.addWidget(intro)
+        new_list = QPushButton('+ Create checklist')
+        new_list.clicked.connect(lambda: self.new_entry('list'))
+        box.addWidget(new_list)
+        template_bar = QHBoxLayout()
+        self.checklist_template = QComboBox()
+        self.checklist_template.addItems(CHECKLIST_TEMPLATES.keys())
+        template_bar.addWidget(self.checklist_template, 1)
+        self.apply_template_button = QPushButton('Add template tasks')
+        self.apply_template_button.clicked.connect(self.apply_checklist_template)
+        template_bar.addWidget(self.apply_template_button)
+        box.addLayout(template_bar)
+        self.checklist_progress = QProgressBar()
+        self.checklist_progress.setFormat('No tasks yet')
+        box.addWidget(self.checklist_progress)
+        self.task_table = QTableWidget(0, 3)
+        self.task_table.setHorizontalHeaderLabels(['Done', 'Task', 'Qty'])
+        self.task_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.task_table.verticalHeader().hide()
+        self.task_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        self.task_table.setColumnWidth(0, 52)
+        self.task_table.setColumnWidth(2, 62)
+        self.task_table.setMinimumHeight(210)
+        box.addWidget(self.task_table, 1)
+        row = QHBoxLayout()
+        self.item_text = QLineEdit()
+        self.item_text.setMaxLength(200)
+        self.item_text.setPlaceholderText('Add a task')
+        self.item_quantity = QSpinBox()
+        self.item_quantity.setRange(1, 9999)
+        add = QPushButton('Add task')
+        add.clicked.connect(self.add_checklist_item)
+        self.item_text.returnPressed.connect(self.add_checklist_item)
+        row.addWidget(self.item_text, 1)
+        row.addWidget(self.item_quantity)
+        row.addWidget(add)
+        box.addLayout(row)
+        remove = QPushButton('Remove selected task')
+        remove.clicked.connect(lambda: self.remove_checklist_item(self.task_table))
+        box.addWidget(remove)
+        self.checklist_notes = QPlainTextEdit()
+        self.checklist_notes.setPlaceholderText('Checklist notes (optional)')
+        self.checklist_notes.setMinimumHeight(80)
+        self.checklist_notes.setMaximumHeight(120)
+        box.addWidget(self.checklist_notes)
+        self.add_section('checklists', 'Checklists', page)
+
+    def build_orders(self):
+        page, box = self.make_page(scroll=True)
+        intro = QLabel('Track quotes, parts preparation, customer pickup and JMD balances.')
+        intro.setWordWrap(True)
+        intro.setObjectName('hint')
+        box.addWidget(intro)
+        new_order = QPushButton('+ Create customer order / quote')
+        new_order.clicked.connect(lambda: self.new_entry('order'))
+        box.addWidget(new_order)
+        info = QGridLayout()
+        self.customer = self.business_input('Customer name or Walk-in', 100)
+        self.contact = self.business_input('Phone / email', 100)
+        self.order_ref = self.business_input('ORD-001', 80)
+        self.vehicle = self.business_input('Year, make, model / engine', 160)
+        self.registration = self.business_input('Registration', 32)
+        self.vin = self.business_input('VIN / chassis number', 32)
+        self.priority = QComboBox()
+        self.priority.addItem('Normal', 'normal')
+        self.priority.addItem('Urgent', 'urgent')
+        self.order_type = QComboBox()
+        self.order_type.addItem('Order', 'order')
+        self.order_type.addItem('Quote', 'quote')
+        self.order_status = QComboBox()
+        for status in ORDER_STATUSES:
+            self.order_status.addItem(status.title(), status)
+        for row, (label, field, label2, field2) in enumerate((
+                ('Customer', self.customer, 'Contact', self.contact),
+                ('Reference', self.order_ref, 'Type', self.order_type),
+                ('Vehicle', self.vehicle, 'Registration', self.registration),
+                ('VIN / chassis', self.vin, 'Priority', self.priority))):
+            info.addWidget(QLabel(label), row, 0)
+            info.addWidget(field, row, 1)
+            info.addWidget(QLabel(label2), row, 2)
+            info.addWidget(field2, row, 3)
+        info.addWidget(QLabel('Status'), 4, 0)
+        info.addWidget(self.order_status, 4, 1)
+        self.order_timed = QCheckBox('Pickup deadline')
+        self.order_due = QDateTimeEdit(QDateTime.currentDateTime().addSecs(3600))
+        self.order_due.setCalendarPopup(True)
+        self.order_due.setDisplayFormat('MMM d, yyyy h:mm AP')
+        self.order_due.setEnabled(False)
+        self.order_timed.toggled.connect(self.order_due.setEnabled)
+        info.addWidget(self.order_timed, 5, 0)
+        info.addWidget(self.order_due, 5, 1, 1, 3)
+        box.addLayout(info)
+        self.order_fields = [self.customer, self.contact, self.order_ref, self.order_status, self.order_timed, self.order_due]
+        self.order_table = QTableWidget(0, 9)
+        self.order_table.setHorizontalHeaderLabels(['Done', 'Part / description', 'Qty', 'Part no.', 'Supplier', 'Bin', 'Unit JMD', 'Stock', 'Line JMD'])
+        self.order_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.order_table.verticalHeader().hide()
+        self.order_table.setMinimumHeight(200)
+        widths = (48, 190, 55, 100, 105, 65, 95, 110, 100)
+        for column, width in enumerate(widths):
+            self.order_table.setColumnWidth(column, width)
+        box.addWidget(self.order_table)
+        inputs = QGridLayout()
+        self.part_text = self.business_input('Part description', 200)
+        self.part_number = self.business_input('Part number', 80)
+        self.part_supplier = self.business_input('Supplier', 100)
+        self.part_bin = self.business_input('Shelf / bin', 60)
+        self.part_quantity = QSpinBox()
+        self.part_quantity.setRange(1, 9999)
+        self.part_price = self.business_input('Unit price JMD', 20)
+        self.part_price.setText('0.00')
+        self.part_stock = QComboBox()
+        for status in STOCK_STATUSES:
+            self.part_stock.addItem(status.replace('_', ' ').title(), status)
+        inputs.addWidget(self.part_text, 0, 0, 1, 2)
+        inputs.addWidget(self.part_number, 0, 2)
+        inputs.addWidget(self.part_supplier, 1, 0)
+        inputs.addWidget(self.part_bin, 1, 1)
+        inputs.addWidget(self.part_quantity, 1, 2)
+        inputs.addWidget(self.part_price, 2, 0)
+        inputs.addWidget(self.part_stock, 2, 1)
+        add = QPushButton('Add part')
+        add.clicked.connect(self.add_order_item)
+        self.part_text.returnPressed.connect(self.add_order_item)
+        inputs.addWidget(add, 2, 2)
+        box.addLayout(inputs)
+        row = QHBoxLayout()
+        remove = QPushButton('Remove selected part')
+        remove.clicked.connect(lambda: self.remove_checklist_item(self.order_table))
+        remind = QPushButton('Use pickup deadline as reminder')
+        remind.clicked.connect(self.remind_at_order_deadline)
+        row.addWidget(remove)
+        row.addWidget(remind)
+        box.addLayout(row)
+        money = QHBoxLayout()
+        money.addWidget(QLabel('Payment received JMD'))
+        self.payment_received = self.business_input('0.00', 20)
+        self.payment_received.setText('0.00')
+        self.payment_received.setMaximumWidth(150)
+        money.addWidget(self.payment_received)
+        self.order_total_label = QLabel('')
+        self.order_total_label.setWordWrap(True)
+        money.addWidget(self.order_total_label, 1)
+        box.addLayout(money)
+        self.copy_pickup_button = QPushButton('Copy pickup summary')
+        self.copy_pickup_button.clicked.connect(self.copy_pickup_summary)
+        box.addWidget(self.copy_pickup_button)
+        follow = QPushButton('Schedule customer follow-up')
+        follow.clicked.connect(self.schedule_follow_up)
+        box.addWidget(follow)
+        self.order_notes = QPlainTextEdit()
+        self.order_notes.setPlaceholderText('Order notes, fitment checks or supplier follow-up')
+        self.order_notes.setMinimumHeight(90)
+        self.order_notes.setMaximumHeight(140)
+        box.addWidget(self.order_notes)
+        hint = QLabel('Confirm vehicle fitment before handover. Ready means awaiting pickup; Delivered or Cancelled stops reminders. Quotes do not count as open orders.')
+        hint.setWordWrap(True)
+        hint.setObjectName('hint')
+        box.addWidget(hint)
+        self.add_section('orders', 'Orders', page)
+
+    @staticmethod
+    def business_input(placeholder, limit):
+        field = QLineEdit()
+        field.setMaxLength(limit)
+        field.setPlaceholderText(placeholder)
+        return field
+
+    def build_schedule(self):
+        page, box = self.make_page(scroll=True)
+        label = QLabel('Reminders for the selected entry')
+        label.setStyleSheet('font-size: 18px; font-weight: 600;')
+        box.addWidget(label)
+        schedule = QFormLayout()
+        self.repeat = QSpinBox()
+        self.repeat.setRange(0, 1440)
+        self.repeat.setSuffix(' min')
+        self.repeat.setValue(self.settings['note_repeat_minutes'])
+        repeat_row = QHBoxLayout()
+        self.repeat_choice = QComboBox()
+        for label, value in (('One time / no repeat', 0), ('Every 15 minutes', 15),
+                             ('Every 30 minutes', 30), ('Every hour', 60), ('Every day', 1440), ('Custom', -1)):
+            self.repeat_choice.addItem(label, value)
+        self.repeat_choice.currentIndexChanged.connect(self.choose_repeat)
+        self.repeat.valueChanged.connect(self.sync_repeat_choice)
+        repeat_row.addWidget(self.repeat_choice, 1)
+        repeat_row.addWidget(self.repeat)
+        schedule.addRow('Repeat', repeat_row)
+        self.sync_repeat_choice()
+        self.scheduled = QCheckBox('Enable a timed reminder')
+        self.due = QDateTimeEdit(QDateTime.currentDateTime().addSecs(1800))
+        self.due.setCalendarPopup(True)
+        self.due.setDisplayFormat('MMM d, yyyy  h:mm AP')
+        self.due.setEnabled(False)
+        self.scheduled.toggled.connect(self.due.setEnabled)
+        schedule.addRow(self.scheduled)
+        schedule.addRow('Next reminder', self.due)
+        box.addLayout(schedule)
+        quick = QHBoxLayout()
+        for label, seconds in (('In 15 min', 900), ('In 1 hour', 3600), ('Tomorrow 9 AM', -1)):
+            button = QPushButton(label)
+            button.clicked.connect(lambda checked=False, value=seconds: self.quick_time(value))
+            quick.addWidget(button)
+        box.addLayout(quick)
+        hint = QLabel('Save this entry to apply its schedule. Mark Done to stop reminders. Keep Jeffery running.')
+        hint.setWordWrap(True)
+        hint.setObjectName('hint')
+        box.addWidget(hint)
+        box.addWidget(QLabel('Upcoming and overdue'))
+        self.agenda = QListWidget()
+        self.agenda.setMinimumHeight(180)
+        self.agenda.itemClicked.connect(lambda item: self.open_workspace_note(item.data(Qt.UserRole), 'schedule'))
+        box.addWidget(self.agenda, 1)
+        self.add_section('schedule', 'Schedule', page)
+
+    def build_advice(self):
+        page, advice = self.make_page(scroll=True)
+        self.smart_enabled = QCheckBox('Use Groq for smarter reminders')
+        self.smart_enabled.setChecked(self.settings['ai_share_notes'])
+        self.smart_enabled.toggled.connect(lambda value: self.ai_preferences_requested.emit({'ai_share_notes': value}))
+        advice.addWidget(self.smart_enabled)
+        self.setup_ai = QPushButton('Set up Groq')
+        self.setup_ai.clicked.connect(self.connection_requested.emit)
+        advice.addWidget(self.setup_ai)
+        self.ai_status = QLabel('Saved notes and linked .txt lines help Groq write useful reminders.')
+        self.ai_status.setObjectName('hint')
+        self.ai_status.setWordWrap(True)
+        self.ai_status.setTextFormat(Qt.PlainText)
+        advice.addWidget(self.ai_status)
+        self.advice_message = QLabel('Save an entry and Jeffery will suggest a helpful reminder.')
+        self.advice_step = QLabel('')
+        self.advice_time = QLabel('')
+        for field in (self.advice_message, self.advice_step, self.advice_time):
+            field.setWordWrap(True)
+            field.setTextFormat(Qt.PlainText)
+            advice.addWidget(field)
+        self.use_time = QPushButton('Use this time')
+        self.use_time.clicked.connect(self.apply_suggested_time)
+        advice.addWidget(self.use_time)
+        self.refresh_ai = QPushButton("Refresh Jeffery's advice")
+        self.refresh_ai.clicked.connect(self.request_advice)
+        advice.addWidget(self.refresh_ai)
+        privacy = QLabel("Groq reads this saved entry's details when enabled. Suggested times apply after you choose one and save.")
+        privacy.setObjectName('hint')
+        privacy.setWordWrap(True)
+        advice.addWidget(privacy)
+        advice.addStretch(1)
+        self.add_section('advice', "Jeffery's advice", page)
 
     def build_import_tab(self):
         page = QWidget()
@@ -467,7 +718,29 @@ class NotepadWindow(QDialog):
         reminder_hint.setObjectName('hint')
         reminder_hint.setWordWrap(True)
         layout.addWidget(reminder_hint)
-        self.editor_tabs.addTab(page, 'Sources / Import')
+        tools = QHBoxLayout()
+        for label, callback in (('Link .txt', self.choose_link), ('Open linked', self.open_text_requested.emit),
+                                ('Unlink', self.unlink)):
+            button = QPushButton(label)
+            button.clicked.connect(callback)
+            tools.addWidget(button)
+        layout.addLayout(tools)
+        self.link_status = QLabel('')
+        self.link_status.setObjectName('hint')
+        self.link_status.setWordWrap(True)
+        layout.addWidget(self.link_status)
+        transfers = QHBoxLayout()
+        self.transfer_buttons = []
+        for label, callback in (('Export .txt', self.export_notes), ('Backup', self.export_backup), ('Import backup', self.import_backup)):
+            button = QPushButton(label)
+            button.clicked.connect(callback)
+            transfers.addWidget(button)
+            self.transfer_buttons.append(button)
+        layout.addLayout(transfers)
+        area = QScrollArea()
+        area.setWidgetResizable(True)
+        area.setWidget(page)
+        self.add_section('import', 'Sources / Import', area)
 
     def set_import_busy(self, busy, status=''):
         self.import_loading = busy
@@ -590,7 +863,7 @@ class NotepadWindow(QDialog):
             own_text_file(path)
             result = owned
         self.imported(result)
-        self.editor_tabs.setCurrentIndex(3)
+        self.show_section('import')
         return True
 
     def import_failed(self, message):
@@ -636,7 +909,7 @@ class NotepadWindow(QDialog):
         return True
 
     def save_current_tab(self):
-        if self.editor_tabs.currentIndex() == 3:
+        if self.editor_tabs.currentIndex() == self.section_indices['import']:
             return self.save_import()
         return self.save_note()
 
@@ -648,17 +921,41 @@ class NotepadWindow(QDialog):
 
     def configure(self):
         self.setStyleSheet(notes_style(self.settings))
+        name = self.settings['business_name'] or 'Famous Twins'
+        self.brand_title.setText(name)
+        self.setWindowTitle(name + ' · Auto Parts Workspace')
         if not self.intake.busy:
             self.import_ocr.setChecked(self.settings['pdf_ocr'])
         with QSignalBlocker(self.smart_enabled):
             self.smart_enabled.setChecked(self.settings["ai_share_notes"])
         self.refresh_advice()
 
+    @property
+    def checklist(self):
+        # Legacy callers use this name for the currently edited item table.
+        return self.order_table if self.kind.currentData() == 'order' else self.task_table
+
     def kind_changed(self, *args):
-        is_order = self.kind.currentData() == 'order'
-        for field in self.order_fields:
-            field.setVisible(is_order)
-            self.order_form.labelForField(field).setVisible(is_order)
+        kind = self.kind.currentData()
+        self.entry_type.setText({'note': 'WRITING', 'list': 'CHECKLIST', 'order': 'ORDER / QUOTE'}.get(kind, 'WRITING'))
+        for field in (self.task_table, self.item_text, self.item_quantity, self.checklist_notes):
+            field.setEnabled(kind == 'list')
+        for field in (self.order_table, self.customer, self.contact, self.order_ref, self.vehicle, self.registration,
+                      self.vin, self.priority, self.order_type, self.order_status, self.order_timed,
+                      self.part_text, self.part_number, self.part_supplier, self.part_bin, self.part_quantity,
+                      self.part_price, self.part_stock, self.payment_received, self.order_notes, self.copy_pickup_button):
+            field.setEnabled(kind == 'order')
+        self.order_due.setEnabled(kind == 'order' and self.order_timed.isChecked())
+
+    def sync_body(self, source):
+        if self.loading:
+            return
+        text = source.toPlainText()
+        for field in (self.body, self.checklist_notes, self.order_notes):
+            if field is not source and field.toPlainText() != text:
+                with QSignalBlocker(field):
+                    field.setPlainText(text)
+        self.mark_dirty()
 
     def add_checklist_item(self):
         text = self.item_text.text().strip()
@@ -668,65 +965,315 @@ class NotepadWindow(QDialog):
         self.item_text.clear()
         self.item_quantity.setValue(1)
         self.mark_dirty()
+        self.update_checklist_progress()
+        self.update_order_totals()
 
-    def insert_checklist_row(self, item):
-        row = self.checklist.rowCount()
-        self.checklist.insertRow(row)
+    def insert_checklist_row(self, item, table=None):
+        table = table if table is not None else self.checklist
+        row = table.rowCount()
+        table.insertRow(row)
         done = QTableWidgetItem('')
         done.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled | Qt.ItemIsSelectable)
-        done.setCheckState(Qt.Checked if item['done'] else Qt.Unchecked)
-        done.setData(Qt.UserRole, item['id'])
-        self.checklist.setItem(row, 0, done)
-        self.checklist.setItem(row, 1, QTableWidgetItem(item['text']))
-        self.checklist.setItem(row, 2, QTableWidgetItem(str(item['quantity'])))
+        done.setCheckState(Qt.Checked if item.get('done') else Qt.Unchecked)
+        done.setData(Qt.UserRole, item.get('id') or uuid.uuid4().hex)
+        # Preserve rich item fields even when an old order is changed to a list.
+        done.setData(Qt.UserRole + 1, dict(item))
+        table.setItem(row, 0, done)
+        table.setItem(row, 1, QTableWidgetItem(item.get('text', '')))
+        table.setItem(row, 2, QTableWidgetItem(str(item.get('quantity', 1))))
+        if table is self.order_table:
+            for column, key in ((3, 'part_number'), (4, 'supplier'), (5, 'bin_location')):
+                table.setItem(row, column, QTableWidgetItem(item.get(key, '')))
+            table.setItem(row, 6, QTableWidgetItem(f"{item.get('unit_price_cents', 0) // 100}.{item.get('unit_price_cents', 0) % 100:02d}"))
+            stock = QComboBox()
+            for status in STOCK_STATUSES:
+                stock.addItem(status.replace('_', ' ').title(), status)
+            stock.setCurrentIndex(max(0, stock.findData(item.get('stock_status', 'check_stock'))))
+            stock.currentIndexChanged.connect(self.mark_dirty)
+            table.setCellWidget(row, 7, stock)
+            total = QTableWidgetItem('')
+            total.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+            table.setItem(row, 8, total)
 
-    def remove_checklist_item(self):
-        row = self.checklist.currentRow()
+    def add_order_item(self):
+        text = self.part_text.text().strip()
+        if not text:
+            self.status.setText('Enter a part description first.')
+            return
+        if self.kind.currentData() != 'order':
+            self.status.setText('Create or open an order before adding parts.')
+            return
+        if self.order_table.rowCount() >= 100:
+            self.status.setText('An order supports up to 100 parts.')
+            return
+        try:
+            price = money_to_cents(self.part_price.text())
+            if price > 1_000_000_000:
+                raise ValueError('The unit price must be JMD 10,000,000.00 or less.')
+        except ValueError as exc:
+            self.status.setText(str(exc))
+            return
+        self.insert_checklist_row({'id': uuid.uuid4().hex, 'text': text, 'quantity': self.part_quantity.value(),
+            'done': False, 'part_number': self.part_number.text(), 'supplier': self.part_supplier.text(),
+            'bin_location': self.part_bin.text(), 'unit_price_cents': price, 'stock_status': self.part_stock.currentData()}, self.order_table)
+        for field in (self.part_text, self.part_number, self.part_supplier, self.part_bin):
+            field.clear()
+        self.part_quantity.setValue(1)
+        self.part_price.setText('0.00')
+        self.part_stock.setCurrentIndex(0)
+        self.mark_dirty()
+        self.update_order_totals()
+
+    def remove_checklist_item(self, table=None):
+        table = table if table is not None else self.checklist
+        row = table.currentRow()
         if row >= 0:
-            self.checklist.removeRow(row)
+            table.removeRow(row)
             self.mark_dirty()
+            self.update_checklist_progress()
+            self.update_order_totals()
 
-    def collect_business(self):
+    def collect_items(self, table=None):
+        table = table if table is not None else self.checklist
         items = []
-        for row in range(self.checklist.rowCount()):
-            done, text, quantity = (self.checklist.item(row, column) for column in range(3))
+        for row in range(table.rowCount()):
+            done, text, quantity = (table.item(row, column) for column in range(3))
             try:
                 qty = int(quantity.text())
                 if not 1 <= qty <= 9999 or not text.text().strip():
                     raise ValueError()
             except (ValueError, AttributeError):
-                raise ValueError('Each checklist item needs text and a quantity from 1 to 9,999.')
-            items.append({'id': done.data(Qt.UserRole), 'text': text.text().strip(), 'quantity': qty,
-                          'done': done.checkState() == Qt.Checked})
+                raise ValueError('Each item needs text and a quantity from 1 to 9,999.')
+            item = dict(done.data(Qt.UserRole + 1) or {})
+            item.update({'id': done.data(Qt.UserRole), 'text': text.text().strip(), 'quantity': qty,
+                         'done': done.checkState() == Qt.Checked})
+            if table is self.order_table:
+                for column, key in ((3, 'part_number'), (4, 'supplier'), (5, 'bin_location')):
+                    cell = table.item(row, column)
+                    item[key] = cell.text().strip() if cell else ''
+                cell = table.item(row, 6)
+                item['unit_price_cents'] = money_to_cents(cell.text() if cell else '0')
+                if item['unit_price_cents'] > 1_000_000_000:
+                    raise ValueError('A unit price must be JMD 10,000,000.00 or less.')
+                item['stock_status'] = table.cellWidget(row, 7).currentData()
+            items.append(item)
+        return items
+
+    def collect_business(self):
         return {'kind': self.kind.currentData(), 'customer': self.customer.text(), 'contact': self.contact.text(),
                 'order_ref': self.order_ref.text(), 'order_status': self.order_status.currentData(),
                 'order_due': self.order_due.dateTime().toSecsSinceEpoch() if self.order_timed.isChecked() else None,
-                'checklist': items}
+                'checklist': self.collect_items(), 'vehicle': self.vehicle.text(),
+                'registration': self.registration.text(), 'vin': self.vin.text(),
+                'priority': self.priority.currentData(), 'order_type': self.order_type.currentData(),
+                'currency': 'JMD', 'payment_received_cents': money_to_cents(self.payment_received.text())}
 
     def load_business(self, note=None):
         note = note or {}
         self.kind.setCurrentIndex(max(0, self.kind.findData(note.get('kind', 'note'))))
-        for field, key in ((self.customer, 'customer'), (self.contact, 'contact'), (self.order_ref, 'order_ref')):
+        for field, key in ((self.customer, 'customer'), (self.contact, 'contact'), (self.order_ref, 'order_ref'),
+                           (self.vehicle, 'vehicle'), (self.registration, 'registration'), (self.vin, 'vin')):
             field.setText(note.get(key, ''))
-        self.order_status.setCurrentIndex(max(0, self.order_status.findData(note.get('order_status', 'new'))))
+        for field, key, default in ((self.order_status, 'order_status', 'new'), (self.priority, 'priority', 'normal'),
+                                    (self.order_type, 'order_type', 'order')):
+            field.setCurrentIndex(max(0, field.findData(note.get(key, default))))
+        self.payment_received.setText(f"{note.get('payment_received_cents', 0) // 100}.{note.get('payment_received_cents', 0) % 100:02d}")
         self.order_timed.setChecked(note.get('order_due') is not None)
         self.order_due.setDateTime(QDateTime.fromSecsSinceEpoch(int(note['order_due'])) if note.get('order_due') else QDateTime.currentDateTime().addSecs(3600))
-        self.checklist.setRowCount(0)
+        self.task_table.setRowCount(0)
+        self.order_table.setRowCount(0)
         for item in note.get('checklist', []):
             self.insert_checklist_row(item)
+        for field in (self.checklist_notes, self.order_notes):
+            with QSignalBlocker(field):
+                field.setPlainText(note.get('body', ''))
+        self.update_checklist_progress()
+        self.update_order_totals()
 
     def new_entry(self, kind):
+        if kind not in ('list', 'order'):
+            return self.new_note()
         if self.new_note():
             self.kind.setCurrentIndex(self.kind.findData(kind))
             self.title.setText('New order' if kind == 'order' else 'Checklist')
-            self.editor_tabs.setCurrentIndex(2)
-            self.item_text.setFocus()
+            self.show_section('orders' if kind == 'order' else 'checklists')
+            (self.customer if kind == 'order' else self.item_text).setFocus()
+            return True
+        return False
+
+    def apply_checklist_template(self):
+        if self.kind.currentData() != 'list':
+            if not self.new_entry('list'):
+                return
+        name = self.checklist_template.currentText()
+        tasks = CHECKLIST_TEMPLATES.get(name, ())
+        existing = {self.task_table.item(row, 1).text().casefold() for row in range(self.task_table.rowCount())}
+        for text in tasks:
+            if text.casefold() not in existing and self.task_table.rowCount() < 100:
+                self.insert_checklist_row({'id': uuid.uuid4().hex, 'text': text, 'quantity': 1, 'done': False}, self.task_table)
+        if self.title.text() in ('', 'Checklist'):
+            self.title.setText(name + ' checklist')
+        self.mark_dirty()
+        self.update_checklist_progress()
+        self.status.setText(name + ' tasks added. Save the checklist to keep them.')
+
+    def update_checklist_progress(self, *args):
+        count = self.task_table.rowCount()
+        done = sum(bool(self.task_table.item(row, 0) and self.task_table.item(row, 0).checkState() == Qt.Checked) for row in range(count))
+        self.checklist_progress.setRange(0, max(1, count))
+        self.checklist_progress.setValue(done)
+        self.checklist_progress.setFormat(f'{done} of {count} tasks done' if count else 'No tasks yet')
+
+    def update_order_totals(self, *args):
+        if not hasattr(self, 'order_total_label'):
+            return
+        try:
+            items = self.collect_items(self.order_table)
+            paid = money_to_cents(self.payment_received.text())
+            totals = order_totals({'checklist': items, 'payment_received_cents': paid})
+            with QSignalBlocker(self.order_table):
+                for row, item in enumerate(items):
+                    cell = self.order_table.item(row, 8)
+                    if cell:
+                        cell.setText(format_money(item.get('unit_price_cents', 0) * item['quantity']))
+            credit = ' · Credit ' + format_money(totals['credit_cents']) if totals['credit_cents'] else ''
+            self.order_total_label.setText('Total ' + format_money(totals['subtotal_cents']) + '\nBalance ' + format_money(totals['balance_cents']) + credit)
+        except (ValueError, AttributeError) as exc:
+            self.order_total_label.setText('Check prices / quantities: ' + str(exc))
 
     def remind_at_order_deadline(self):
         if self.order_timed.isChecked():
             self.due.setDateTime(self.order_due.dateTime())
             self.scheduled.setChecked(True)
-            self.status.setText('Reminder set to the deadline. Save to keep it.')
+            self.show_section('schedule')
+            self.status.setText('Reminder set to the pickup deadline. Save to keep it.')
+        else:
+            self.status.setText('Enable a pickup deadline on the order first.')
+
+    def schedule_follow_up(self):
+        self.quick_time(3600)
+        self.show_section('schedule')
+        self.status.setText('Follow-up set for one hour from now. Choose another time if needed, then save.')
+
+    def copy_pickup_summary(self):
+        try:
+            details = self.collect_business()
+            totals = order_totals(details)
+        except ValueError as exc:
+            self.status.setText(str(exc))
+            return False
+        if details['kind'] != 'order':
+            self.status.setText('Open an order to copy a pickup summary.')
+            return False
+        lines = [self.settings['business_name'] or 'Famous Twins',
+                 (details['order_type'].title() + ' ' + (details['order_ref'] or self.title.text())).strip(),
+                 'Customer: ' + (details['customer'] or 'Walk-in')]
+        for label, key in (('Contact', 'contact'), ('Vehicle', 'vehicle'), ('Registration', 'registration'), ('VIN / chassis', 'vin')):
+            if details[key]:
+                lines.append(label + ': ' + details[key])
+        lines.append('Status: ' + details['order_status'].title())
+        if details['order_due']:
+            lines.append('Pickup: ' + self.order_due.dateTime().toString('ddd, MMM d yyyy h:mm AP'))
+        for item in details['checklist']:
+            number = ' [' + item.get('part_number', '') + ']' if item.get('part_number') else ''
+            lines.append(f"{item['quantity']} x {item['text']}{number} - {format_money(item['quantity'] * item.get('unit_price_cents', 0))}")
+        lines.extend(('Total: ' + format_money(totals['subtotal_cents']), 'Paid: ' + format_money(totals['paid_cents']),
+                      'Balance: ' + format_money(totals['balance_cents'])))
+        if totals['credit_cents']:
+            lines.append('Credit: ' + format_money(totals['credit_cents']))
+        QApplication.clipboard().setText('\n'.join(lines))
+        self.status.setText('Pickup summary copied. Review it before sharing with the customer.')
+        return True
+
+    def open_workspace_note(self, identifier, section=None):
+        if not identifier:
+            return
+        if identifier == self.editing_id:
+            note = self.service.store.find(identifier)
+            self.show_section(section or {'order': 'orders', 'list': 'checklists'}.get((note or {}).get('kind'), 'writing'))
+            return
+        if not self.maybe_leave():
+            return
+        self.load_note(identifier)
+        if section:
+            self.show_section(section)
+
+    def dashboard_focus(self, mode):
+        self.dashboard_mode = mode
+        self.refresh_dashboard()
+
+    def refresh_dashboard(self):
+        notes = self.service.store.notes
+        summary = dashboard_summary(notes)
+        for key, (button, title) in self.dashboard_cards.items():
+            button.setText(str(summary[key]) + '\n' + title)
+        self.dashboard_money.setText('Outstanding: ' + format_money(summary['balance_cents']) +
+            f"  ·  {summary['quotes']} quotes  ·  {summary['parts_to_source']} parts to source")
+        now = time.time()
+        active = [n for n in notes if n.get('kind') == 'order' and not n['done'] and n.get('order_type', 'order') != 'quote' and n.get('order_status') not in ('delivered', 'cancelled')]
+        if self.dashboard_mode == 'ready_orders':
+            active = [n for n in active if n['order_status'] == 'ready']
+        elif self.dashboard_mode == 'late_orders':
+            active = [n for n in active if n.get('order_due') is not None and n['order_due'] < now]
+        elif self.dashboard_mode == 'urgent_orders':
+            active = [n for n in active if n.get('priority') == 'urgent']
+        self.order_queue_title.setText({'open_orders': 'Open orders', 'ready_orders': 'Ready for pickup',
+            'late_orders': 'Orders past deadline', 'urgent_orders': 'Urgent orders'}.get(self.dashboard_mode, 'Open orders'))
+        self.order_queue.clear()
+        for note in sorted(active, key=lambda n: (n.get('priority') != 'urgent', n.get('order_due') or float('inf'), -n['created'])):
+            text = (note.get('order_ref') or note['title']) + ' · ' + (note.get('customer') or 'Walk-in') + ' · ' + note['order_status'].title()
+            item = QListWidgetItem(text)
+            item.setData(Qt.UserRole, note['id'])
+            self.order_queue.addItem(item)
+        if not active:
+            item = QListWidgetItem('No orders in this view')
+            item.setFlags(Qt.NoItemFlags)
+            self.order_queue.addItem(item)
+        sources = parts_to_source(notes)
+        self.sourcing_table.setRowCount(len(sources))
+        for row, source in enumerate(sources):
+            orders = source['orders']
+            values = (source['text'] + (' · ' + source['part_number'] if source['part_number'] else ''),
+                      str(source['quantity']), source['supplier'], source['stock_status'].replace('_', ' ').title(),
+                      ', '.join(dict.fromkeys(o['customer'] or 'Walk-in' for o in orders)))
+            for column, value in enumerate(values):
+                cell = QTableWidgetItem(value)
+                cell.setData(Qt.UserRole, orders[0]['id'] if orders else None)
+                self.sourcing_table.setItem(row, column, cell)
+        self.refresh_customer_history()
+        with QSignalBlocker(self.agenda):
+            self.agenda.clear()
+            for note in sorted((n for n in notes if not n['done'] and n.get('next_due') is not None), key=lambda n: n['next_due']):
+                when = QDateTime.fromSecsSinceEpoch(int(note['next_due'])).toString('ddd, MMM d · h:mm AP')
+                item = QListWidgetItem(('OVERDUE · ' if note['next_due'] <= now else '') + when + '\n' + note['title'])
+                item.setData(Qt.UserRole, note['id'])
+                self.agenda.addItem(item)
+            if not self.agenda.count():
+                item = QListWidgetItem('No timed reminders. Open an entry, choose a time above and save.')
+                item.setFlags(Qt.NoItemFlags)
+                self.agenda.addItem(item)
+
+    def refresh_customer_history(self, *args):
+        history = customer_history(self.service.store.notes, self.history_search.text())
+        self.history_table.setRowCount(len(history))
+        for row, note in enumerate(history):
+            values = ((note['customer'] or 'Walk-in') + ' · ' + (note['order_ref'] or note['title']),
+                      note['vehicle'], note['order_type'].title() + ' / ' + note['order_status'].title(),
+                      format_money(note['subtotal_cents']), format_money(note['balance_cents']))
+            for column, value in enumerate(values):
+                item = QTableWidgetItem(value)
+                item.setData(Qt.UserRole, note['id'])
+                self.history_table.setItem(row, column, item)
+
+    def open_sourcing_order(self, row, column):
+        item = self.sourcing_table.item(row, column)
+        if item:
+            self.open_workspace_note(item.data(Qt.UserRole))
+
+    def open_history_order(self, row, column):
+        item = self.history_table.item(row, column)
+        if item:
+            self.open_workspace_note(item.data(Qt.UserRole))
 
     def set_transfer_busy(self, busy):
         for button in self.transfer_buttons:
@@ -820,7 +1367,7 @@ class NotepadWindow(QDialog):
         self.refresh_ai.setEnabled(bool(note and not note["done"] and not self.dirty and self.settings["ai_share_notes"]))
         self.use_time.setVisible(bool(guidance.get("suggested_due") and guidance["suggested_due"] > time.time()))
         self.use_time.setEnabled(not self.dirty and bool(note and not note["done"]))
-        self.editor_tabs.setTabText(1, "Jeffery's advice ✓" if guidance else "Jeffery's advice")
+        self.editor_tabs.setTabText(self.section_indices['advice'], "Jeffery's advice ✓" if guidance else "Jeffery's advice")
         if self.dirty:
             self.advice_message.setText("Save your changes so Jeffery can read the latest note.")
             self.advice_step.clear()
@@ -847,7 +1394,7 @@ class NotepadWindow(QDialog):
         if stamp and stamp > time.time() and not self.dirty:
             self.due.setDateTime(QDateTime.fromSecsSinceEpoch(int(stamp)))
             self.scheduled.setChecked(True)
-            self.editor_tabs.setCurrentIndex(0)
+            self.show_section('schedule')
             self.status.setText("Suggested time selected. Save note to keep it.")
 
     def refresh(self, *args):
@@ -861,7 +1408,7 @@ class NotepadWindow(QDialog):
                 self.status.setText('Search could not finish: ' + str(exc))
             mode = self.filter.currentIndex()
             for note in sorted(self.service.store.notes, key=lambda n: (n["done"], -n["created"])):
-                if (matched is not None and note['id'] not in matched) or (mode == 1 and note["done"]) or (mode == 2 and not note["done"]) or (mode == 3 and note['kind'] != 'order') or (mode == 4 and note['kind'] != 'list'):
+                if (matched is not None and note['id'] not in matched) or (mode == 1 and note["done"]) or (mode == 2 and not note["done"]) or (mode == 3 and note['kind'] != 'order') or (mode == 4 and note['kind'] != 'list') or (mode == 5 and note['kind'] != 'note'):
                     continue
                 prefix = "✓ " if note["done"] else "• "
                 label = note['order_status'].title() + ' · ' + (note['customer'] or 'Walk-in') if note['kind'] == 'order' else reminder_time(note)
@@ -873,35 +1420,48 @@ class NotepadWindow(QDialog):
                 self.list.addItem(item)
                 if note["id"] == self.editing_id:
                     self.list.setCurrentItem(item)
-        active = sum(not n["done"] for n in self.service.store.notes)
-        summary = business_summary(self.service.store.notes)
-        self.summary.setText(f"{active} to do · {summary['open_orders']} open orders · {summary['ready_orders']} ready · {summary['late_orders']} past deadline\n{self.service.store.character_count():,} of 1,000,000,000 characters saved")
+        summary = dashboard_summary(self.service.store.notes)
+        self.summary.setText(f"{summary['open_orders']} open orders · {summary['ready_orders']} ready · {summary['late_orders']} past deadline · {self.service.store.character_count():,} characters saved")
         linked = self.service.store.state["linked_file"]
         self.link_status.setText("Linked file: " + linked if linked else "No text file linked. You can use this notebook on its own.")
         note = self.service.store.find(self.editing_id)
-        if note and not self.dirty:
-            self.loading = True
-            self.repeat.setValue(note['repeat_minutes'])
-            self.scheduled.setChecked(note['next_due'] is not None)
-            if note['next_due'] is not None:
-                self.due.setDateTime(QDateTime.fromSecsSinceEpoch(int(note['next_due'])))
-            self.load_business(note)
-            self.loading = False
+        if note and not self.dirty and not self.business_pending:
+            signature = json.dumps(note, sort_keys=True, ensure_ascii=False)
+            if signature != self._loaded_note_signature:
+                section = next((key for key, index in self.section_indices.items() if index == self.editor_tabs.currentIndex()), 'writing')
+                document_page = self.document_page.value() if note.get('document_id') else None
+                self.load_note(note['id'])
+                if document_page is not None:
+                    self.document_page.setValue(min(document_page, self.document_page.maximum()))
+                self.show_section(section)
+        elif not note and self.editing_id and not self.dirty and not self.business_pending:
+            self.new_note()
+            self.status.setText('The selected shared entry was removed. Create or open another entry.')
         self.update_buttons()
         self.refresh_advice()
+        self.refresh_dashboard()
 
     def maybe_leave(self):
+        if self.business_pending:
+            self.status.setText('Wait for the server to finish saving this entry.')
+            return False
         if not self.dirty:
             return True
         answer = QMessageBox.question(self, "Unsaved note", "Save this note before switching?", QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel, QMessageBox.Save)
         if answer == QMessageBox.Cancel:
             return False
-        return self.save_note() if answer == QMessageBox.Save else True
+        if answer == QMessageBox.Save:
+            saved = self.save_note()
+            return saved and not self.business_pending
+        return True
 
     def new_note(self):
         if not self.maybe_leave():
             return False
         self.editing_id = None
+        self._loaded_note_signature = None
+        if self.shared_business is not None:
+            self.shared_business.mark_editing(None)
         self.document_pages.hide()
         self.body.setReadOnly(False)
         self.loading = True
@@ -917,7 +1477,7 @@ class NotepadWindow(QDialog):
             self.list.clearSelection()
             self.list.setCurrentRow(-1)
         self.title.setFocus()
-        self.editor_tabs.setCurrentIndex(0)
+        self.show_section('writing')
         self.update_buttons()
         self.refresh_advice()
         return True
@@ -937,6 +1497,8 @@ class NotepadWindow(QDialog):
         if not note:
             return
         self.editing_id = identifier
+        if self.shared_business is not None:
+            self.shared_business.mark_editing(identifier)
         self.loading = True
         self.title.setText(note["title"])
         self.body.setPlainText(note['body'])
@@ -966,6 +1528,8 @@ class NotepadWindow(QDialog):
         self.dirty = False
         self.update_buttons()
         self.refresh_advice()
+        self.show_section({'order': 'orders', 'list': 'checklists'}.get(note.get('kind'), 'writing'))
+        self._loaded_note_signature = json.dumps(note, sort_keys=True, ensure_ascii=False)
         self.reading.emit()
 
     def show_document_page(self, value):
@@ -984,36 +1548,84 @@ class NotepadWindow(QDialog):
         self.document_previous.setEnabled(value > 1)
         self.document_next.setEnabled(value < self.document_page.maximum())
 
+    def set_business_pending(self, pending):
+        self.business_pending = bool(pending)
+        for widget in (self.editor_tabs, self.entry_heading, self.editor_actions, self.list, self.sections):
+            widget.setEnabled(not pending)
+
+    def finish_saved_note(self, note, was_document=False):
+        self.loading = True
+        self.title.setText(note['title'])
+        self.loading = False
+        self.editing_id = note['id']
+        self.dirty = False
+        if self.shared_business is not None and note['kind'] in ('list', 'order'):
+            self.shared_business.mark_editing(note['id'])
+        if note.get('document_id') and not was_document:
+            self.load_note(note['id'])
+        self.refresh()
+        self.status.setText('Saved · ' + reminder_time(note) + '.')
+        if note['kind'] == 'order':
+            self.business_event.emit('order_ready' if note['order_status'] == 'ready' else 'order_saved')
+        elif note['kind'] == 'list':
+            self.business_event.emit('checklist_saved')
+
     def save_note(self):
+        if self.business_pending:
+            return False
         try:
             due = self.due.dateTime().toSecsSinceEpoch() if self.scheduled.isChecked() else None
             details = self.collect_business()
             if details['kind'] in ('list', 'order') and not details['checklist'] and not self.body.toPlainText().strip():
-                raise ValueError('Add at least one item or write the order details before saving.')
+                raise ValueError('Add at least one item or write the entry details before saving.')
             title = self.title.text().strip() or (details['order_ref'] or ('Order for ' + (details['customer'] or 'Walk-in')) if details['kind'] == 'order' else 'Checklist' if details['kind'] == 'list' else '')
             current = self.service.store.find(self.editing_id)
+            if current and current['kind'] in ('list', 'order') and details['kind'] == 'note' and self.shared_business is not None:
+                raise ValueError('Shared orders and checklists keep their business type. Create a new Writing entry for personal notes.')
             was_document = bool(current and current.get('document_id'))
-            body = current['body'] if current and current.get('document_id') else self.body.toPlainText()
+            body = current['body'] if was_document else self.body.toPlainText()
             if len(body) > 10000 and (self.intake.busy or self.transfer.busy):
                 self.status.setText('Finish or cancel the document operation before saving this long draft.')
                 return False
+            if details['kind'] in ('list', 'order') and self.shared_business is not None:
+                self.set_business_pending(True)
+                self.status.setText('Saving shared entry to the office server…')
+                callback_received = False
+                def completed(note, error):
+                    nonlocal callback_received
+                    callback_received = True
+                    self.set_business_pending(False)
+                    if error or not note:
+                        self.status.setText('Not saved: ' + str(error or 'The server did not return the saved entry.') + ' Your draft is preserved.')
+                        return
+                    self.finish_saved_note(note, was_document)
+                begun = self.shared_business.save(self.editing_id, title, body, self.repeat.value(), due, details, completed)
+                if not begun and not callback_received:
+                    self.set_business_pending(False)
+                    self.status.setText('Not saved. Sign in to Work Chat and check the office server connection. Your draft is preserved.')
+                return bool(begun)
             note = self.service.save_note(self.editing_id, title, body, self.repeat.value(), due, details)
-            self.loading = True
-            self.title.setText(note['title'])
-            self.loading = False
-            self.editing_id = note["id"]
-            self.dirty = False
-            if note.get('document_id') and not was_document:
-                self.load_note(note['id'])
-            self.refresh()
-            self.status.setText("Saved · " + reminder_time(note) + ". Jeffery's advice updates when Groq is connected.")
+            self.finish_saved_note(note, was_document)
             return True
         except (OSError, ValueError) as exc:
-            QMessageBox.warning(self, "Save note", str(exc))
+            self.set_business_pending(False)
+            QMessageBox.warning(self, 'Save entry', str(exc))
             return False
+
+    def reload_saved(self):
+        identifier = self.editing_id
+        if identifier and self.maybe_leave():
+            if self.service.store.find(identifier) is None:
+                self.dirty = False
+                self.new_note()
+                self.status.setText('This shared entry was deleted. Your editor is ready for a new entry.')
+                return
+            self.load_note(identifier)
+            self.status.setText('Loaded the latest saved entry.')
 
     def update_buttons(self):
         note = self.service.store.find(self.editing_id)
+        self.reload_button.setEnabled(self.editing_id is not None)
         self.pin.setEnabled(note is not None and not note["done"])
         self.done_button.setEnabled(note is not None)
         self.remove.setEnabled(note is not None)
@@ -1021,21 +1633,51 @@ class NotepadWindow(QDialog):
         self.pin.setText("Unpin" if note and note["pinned"] else "Pin")
         self.done_button.setText("Restore" if note and note["done"] else "Done")
 
+    def business_change(self, operation, *args, after=None):
+        if self.business_pending:
+            return False
+        self.set_business_pending(True)
+        self.status.setText('Updating shared entry on the office server…')
+        callback_received = False
+        def completed(note, error):
+            nonlocal callback_received
+            callback_received = True
+            self.set_business_pending(False)
+            if error:
+                self.status.setText('Not updated: ' + str(error) + '. Your draft is preserved.')
+                return
+            if after:
+                after()
+            else:
+                self.refresh()
+                self.status.setText('Shared entry updated.')
+        begun = operation(*args, completed)
+        if not begun and not callback_received:
+            self.set_business_pending(False)
+            self.status.setText('Not updated. Sign in to Work Chat and check the office server connection.')
+        return bool(begun)
+
     def delete_note(self):
-        if not self.editing_id:
+        if not self.editing_id or self.business_pending:
             return
         if self.intake.busy or self.transfer.busy:
-            self.status.setText('Finish or cancel the notebook operation before deleting a note.')
+            self.status.setText('Finish or cancel the notebook operation before deleting an entry.')
             return
-        if QMessageBox.question(self, "Delete note", "Permanently delete this note?", QMessageBox.Yes | QMessageBox.No, QMessageBox.No) != QMessageBox.Yes:
+        if QMessageBox.question(self, 'Delete entry', 'Permanently delete this entry?', QMessageBox.Yes | QMessageBox.No, QMessageBox.No) != QMessageBox.Yes:
             return
-        try:
-            self.service.delete(self.editing_id)
+        note = self.service.store.find(self.editing_id)
+        def deleted():
             self.dirty = False
             self.new_note()
             self.refresh()
+        if note and note['kind'] in ('list', 'order') and self.shared_business is not None:
+            self.business_change(self.shared_business.delete, note['id'], after=deleted)
+            return
+        try:
+            self.service.delete(self.editing_id)
+            deleted()
         except OSError as exc:
-            QMessageBox.warning(self, "Delete note", str(exc))
+            QMessageBox.warning(self, 'Delete entry', str(exc))
 
     def export_notes(self, file=None):
         if not file:
@@ -1045,18 +1687,24 @@ class NotepadWindow(QDialog):
     def toggle_pin(self):
         note = self.service.store.find(self.editing_id)
         if note:
+            if note['kind'] in ('list', 'order') and self.shared_business is not None:
+                self.business_change(self.shared_business.modify, note['id'], {'pinned': not note['pinned']})
+                return
             try:
-                self.service.modify(note["id"], pinned=not note["pinned"])
+                self.service.modify(note['id'], pinned=not note['pinned'])
             except (OSError, ValueError) as exc:
-                QMessageBox.warning(self, "Pin note", str(exc))
+                QMessageBox.warning(self, 'Pin entry', str(exc))
 
     def toggle_done(self):
         note = self.service.store.find(self.editing_id)
         if note:
+            if note['kind'] in ('list', 'order') and self.shared_business is not None:
+                self.business_change(self.shared_business.complete, note['id'], not note['done'])
+                return
             try:
-                self.service.complete(note["id"], not note["done"])
+                self.service.complete(note['id'], not note['done'])
             except (OSError, ValueError) as exc:
-                QMessageBox.warning(self, "Update note", str(exc))
+                QMessageBox.warning(self, 'Update entry', str(exc))
 
     def choose_link(self):
         file, _ = QFileDialog.getOpenFileName(self, "Link a notepad text file", "", "Text files (*.txt)")

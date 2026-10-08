@@ -10,7 +10,7 @@ from PySide6.QtWidgets import QApplication, QWidget
 from config import ASSETS, clamp_position
 from themes import palette
 from alerts import LoadAlerts
-from characters import draw_character, ANIMATION_STATES
+from characters import draw_character, ANIMATION_STATES, BUSINESS_ANIMATIONS
 from motion import ParachuteMotion, HopMotion
 from sliding_text import SlidingText, plain_reply
 
@@ -205,9 +205,18 @@ class PixelPet(QWidget):
         self.perform("PEEK", 2)
 
     def interact(self, action):
-        messages = {"PET": "That's nice!", "EAT": "Snack time!", "WAVE": "Hey boss!", "DANCE": "Tiny dance break!", "JUMP": "Here we go!", "SLEEP": "A tiny nap…"}
+        if action not in ANIMATION_STATES:
+            return
+        business = self.settings["business_name"].strip() or "Famous Twins"
+        messages = {"PET": "That's nice!", "EAT": "Snack time!", "WAVE": "Hey boss!", "DANCE": "Tiny dance break!", "JUMP": "Here we go!", "SLEEP": "A tiny nap…",
+                    "CHECK_STOCK": "Check the shelf count before promising a part to a customer.",
+                    "SCAN_PART": "Match the part number and vehicle details before handover.",
+                    "PACK_ORDER": "Count the parts, check the order and label the parcel.",
+                    "WRENCH": "A tiny tune-up! Verify the fitment with your parts catalogue.",
+                    "HIGH_FIVE": f"High five, {business} team! One careful step at a time.",
+                    "COFFEE": "A quick coffee break. Save your work before stepping away."}
         self.perform(action, 8 if action == "SLEEP" else 3)
-        if self.ai_speech_connected:
+        if self.ai_speech_connected and self.settings["speech"] and not self.settings["quiet_mode"]:
             self.conversation_requested.emit('interaction', action)
         else:
             self.say(messages.get(action, "I'm here!"))
@@ -310,6 +319,11 @@ class PixelPet(QWidget):
         elif now >= self.next_state or self.state == "EXCITED":
             tricks = ["WAVE", "YAWN", "STRETCH", "SPIN", "FLIP", "ROLL", "SNEEZE", "SCARED", "LAUGH", "SIT", "BALANCE", "TIPTOE", "RUN", "CLIMB", "SLIDE", "SKATE", "BOUNCE", "MAGIC", "UMBRELLA", "JUGGLE", "GROOM", "SALUTE", "FACEPALM", "LEAN", "SNEAK"]
             choices, weights = (["WALK", "IDLE", "SLEEP"] + tricks, [7, 3, 0.5] + [0.45] * len(tricks)) if self.settings["playful"] else (["WALK", "IDLE", "SLEEP"], [7, 3, 1])
+            if self.settings["business_mode"] and self.settings["playful"] and not self.settings["quiet_mode"] and not self.settings["low_power"]:
+                business_tricks = [state for _, state in BUSINESS_ANIMATIONS if state not in ("HIGH_FIVE", "COFFEE")]
+                choices += business_tricks
+                weights += [0.18] * len(business_tricks)
+                tricks += business_tricks
             self.state = random.choices(choices, weights)[0]
             self.direction, self.vertical_direction = random.choice([-1, 1]), random.uniform(-0.7, 0.7)
             if self.state == "WALK":

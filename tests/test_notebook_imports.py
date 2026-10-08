@@ -143,7 +143,7 @@ class NotebookImportTests(unittest.TestCase):
         self.assertFalse(self.window.save_import_button.isEnabled())
         self.window.intake.finish(document())
         self.assertEqual(len(self.store.notes), 1, 'Extracting saved notes before review')
-        self.window.editor_tabs.setCurrentIndex(3)
+        self.window.show_section('import')
         self.assertTrue(self.window.save_current_tab())
         self.assertEqual(self.window.editing_id, original['id'])
         self.assertEqual(self.window.body.toPlainText(), 'Unsaved draft with private details')
@@ -151,9 +151,10 @@ class NotebookImportTests(unittest.TestCase):
         self.assertEqual(self.store.find(original['id']), existing)
         self.assertEqual(len(self.store.notes), 3)
         self.assertFalse(self.window.save_import(), 'Saving the same preview twice duplicated notes')
-        # Existing tab indexes are part of the order and advice workflows.
-        self.assertEqual(self.window.editor_tabs.tabText(2), 'Checklist and order')
-        self.assertEqual(self.window.editor_tabs.tabText(3), 'Sources / Import')
+        # Workflows navigate semantic sections rather than fixed tab positions.
+        self.assertEqual(self.window.editor_tabs.tabText(self.window.section_indices['orders']), 'Orders')
+        self.assertEqual(self.window.editor_tabs.tabText(self.window.section_indices['checklists']), 'Checklists')
+        self.assertEqual(self.window.editor_tabs.tabText(self.window.section_indices['import']), 'Sources / Import')
         self.window.dirty = False
 
     def test_edited_review_saves_only_reviewed_content_and_keeps_web_source(self):
@@ -201,7 +202,7 @@ class NotebookImportTests(unittest.TestCase):
         self.assertTrue(self.window.review_document(document('web')))
         self.assertFalse(self.window.intake.busy)
         self.assertEqual(self.window.import_result['kind'], 'web')
-        self.assertEqual(self.window.editor_tabs.currentIndex(), 3)
+        self.assertEqual(self.window.editor_tabs.currentIndex(), self.window.section_indices['import'])
 
     def test_imported_sections_reach_smart_reminders_without_changing_schedule(self):
         class Client(QObject):

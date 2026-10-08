@@ -29,7 +29,7 @@ DEFAULTS = {
     "mini_hud": True, "monitor_style": "medieval", "desktop_enabled": True, "desktop_random": True,
     "portal_toys": False,
     "ai_autonomy": True, "ai_interval_seconds": 120, "ai_share_desktop_names": False,
-    "business_mode": True, "business_name": "", "ai_greetings": True,
+    "business_mode": True, "business_name": "Famous Twins", "ai_greetings": True,
     "memory_enabled": True, "memory_ai": True, "ai_share_memory": True,
     "pdf_engine": "auto", "pdf_ocr": False, "ocr_language": "eng", "tesseract_path": "",
     "semantic_memory_enabled": False, "semantic_model_path": "",

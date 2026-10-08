@@ -35,6 +35,8 @@ jobs:
           python -m playwright install --with-deps chromium
       - name: Check server authentication, privacy, persistence, and limits
         run: python -m unittest discover -s tests -p "test_work_server.py" -v
+      - name: Check shared orders, checklists, revisions, and persistence
+        run: python -m unittest discover -s tests -p "test_work_business.py" -v
       - name: Check the browser chat workflow
         run: python tests/check_work_chat_web.py
   desktop:
@@ -83,7 +85,7 @@ jobs:
           & .\.venv\Scripts\python.exe -m unittest discover -s tests -p "test_*.py" -v
           if ($LASTEXITCODE -ne 0) { throw "Desktop regression tests failed." }
 
-      - name: Run all seven GUI integration checks
+      - name: Run desktop GUI integration checks
         run: |
           $checks = @(
             "check_gui.py",
@@ -92,6 +94,7 @@ jobs:
             "check_desktop_gui.py",
             "check_notes_gui.py",
             "check_business_gui.py",
+            "check_famous_twins_gui.py",
             "check_imports_gui.py"
           )
           foreach ($check in $checks) {
@@ -100,6 +103,15 @@ jobs:
             & .\.venv\Scripts\python.exe (Join-Path "tests" $check)
             if ($LASTEXITCODE -ne 0) { throw "$check failed with exit code $LASTEXITCODE." }
           }
+
+      - name: Check two desktop accounts against the shared office server
+        run: |
+          & .\.venv\Scripts\python.exe -m venv .server-venv
+          if ($LASTEXITCODE -ne 0) { throw "Server test environment creation failed." }
+          & .\.server-venv\Scripts\python.exe -m pip install -r requirements-server.txt
+          if ($LASTEXITCODE -ne 0) { throw "Server test dependencies failed." }
+          & .\.venv\Scripts\python.exe tests/check_shared_business_integration.py
+          if ($LASTEXITCODE -ne 0) { throw "Shared office integration failed." }
 
       - name: Build the Windows executable
         run: |

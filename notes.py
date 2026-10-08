@@ -16,13 +16,16 @@ from PySide6.QtCore import QObject, QTimer, Signal, QFileSystemWatcher
 
 from fuzzy_search import search_words, typo_score
 from memory import contains_secret
+from auto_parts import MAX_PAYMENT_CENTS, MAX_UNIT_PRICE_CENTS, STOCK_STATUSES, dashboard_summary, validated_cents
 
 MAX_NOTES = 2000
 MAX_DOCUMENT_NOTES = 200
 MAX_DOCUMENT_CHARACTERS = 1_000_000_000
 MAX_INLINE_CHARACTERS = 10_000
 ORDER_STATUSES = ('new', 'preparing', 'ready', 'delivered', 'cancelled')
-BUSINESS_FIELDS = ('kind', 'customer', 'contact', 'order_ref', 'order_status', 'order_due', 'checklist')
+BUSINESS_FIELDS = ('kind', 'customer', 'contact', 'order_ref', 'order_status', 'order_due',
+                   'vehicle', 'registration', 'vin', 'priority', 'order_type', 'currency',
+                   'payment_received_cents', 'checklist')
 
 
 def clean_text(value, limit):
@@ -46,12 +49,18 @@ def pending_items(note):
 
 def note_search_text(note):
     return ' '.join([note['title'], note['body'], note.get('customer', ''), note.get('contact', ''),
-                     note.get('order_ref', ''), *[i['text'] for i in note.get('checklist', [])]])
+                     note.get('order_ref', ''), note.get('order_status', ''), note.get('vehicle', ''),
+                     note.get('registration', ''), note.get('vin', ''), note.get('priority', ''),
+                     note.get('order_type', ''), note.get('currency', ''),
+                     *[' '.join([i['text'], i.get('part_number', ''), i.get('supplier', ''),
+                                 i.get('bin_location', ''), i.get('stock_status', '')])
+                       for i in note.get('checklist', [])]])
 
 
 def note_search_label(note):
     """Keep approximate matching on bounded labels, never complete note bodies."""
     label = ' '.join([note['title'], note.get('customer', ''), note.get('order_ref', ''),
+                      note.get('vehicle', ''), note.get('registration', ''),
                       note.get('document_source', '')])[:600]
     return '' if contains_secret(label) else label
 
@@ -59,10 +68,7 @@ def note_search_label(note):
 def business_summary(notes, now=None):
     now = time.time() if now is None else now
     active = [n for n in notes if not n['done']]
-    orders = [n for n in active if n.get('kind') == 'order']
-    return {'active_notes': len(active), 'open_orders': len(orders),
-            'ready_orders': sum(n['order_status'] == 'ready' for n in orders),
-            'late_orders': sum(bool(n['order_due'] and n['order_due'] < now) for n in orders),
+    return {'active_notes': len(active), **dashboard_summary(notes, now),
             'unchecked_items': sum(len(pending_items(n)) for n in active)}
 
 
@@ -196,7 +202,12 @@ class NoteStore:
             item_ids.add(item_id)
             qty = row.get('quantity', 1)
             checklist.append({'id': item_id, 'text': clean_text(row.get('text'), 200),
-                              'quantity': max(1, min(9999, qty)) if type(qty) is int else 1, 'done': row.get('done') is True})
+                              'quantity': max(1, min(9999, qty)) if type(qty) is int else 1, 'done': row.get('done') is True,
+                              'part_number': clean_text(row.get('part_number'), 80),
+                              'supplier': clean_text(row.get('supplier'), 100),
+                              'bin_location': clean_text(row.get('bin_location'), 60),
+                              'unit_price_cents': validated_cents(row.get('unit_price_cents'), MAX_UNIT_PRICE_CENTS),
+                              'stock_status': row.get('stock_status') if row.get('stock_status') in STOCK_STATUSES else 'check_stock'})
         done = data.get('done') is True or kind == 'order' and status in ('delivered', 'cancelled')
         if kind == 'order' and done and status not in ('delivered', 'cancelled'):
             status = 'delivered'
@@ -223,6 +234,10 @@ class NoteStore:
                 "ai_guidance": validate_guidance(data.get("ai_guidance")),
                 "kind": kind, "customer": clean_text(data.get('customer'), 100), 'contact': clean_text(data.get('contact'), 100),
                 'order_ref': clean_text(data.get('order_ref'), 80), 'order_status': status, 'order_due': timestamp('order_due'),
+                'vehicle': clean_text(data.get('vehicle'), 160), 'registration': clean_text(data.get('registration'), 32),
+                'vin': clean_text(data.get('vin'), 32), 'priority': 'urgent' if data.get('priority') == 'urgent' else 'normal',
+                'order_type': 'quote' if data.get('order_type') == 'quote' else 'order', 'currency': 'JMD',
+                'payment_received_cents': validated_cents(data.get('payment_received_cents'), MAX_PAYMENT_CENTS),
                 'checklist': checklist, 'reminder_history': [clean_text(t, 280) for t in data.get('reminder_history', [])[-5:] if isinstance(t, str)] if isinstance(data.get('reminder_history'), list) else [], **document}
 
     @property

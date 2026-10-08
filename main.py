@@ -9,6 +9,7 @@ if __name__ == "__main__":
 import argparse
 import logging
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 from PySide6.QtCore import (QObject, QThread, Signal, Qt, QMetaObject, QTimer, QLockFile, QSignalBlocker)
@@ -28,13 +29,15 @@ from launcher import QuickLauncher, LauncherWindow, start_app
 from credentials import CredentialStore
 from ai_chat import ChatWindow
 from work_chat import WorkChatWindow
+from shared_business import SharedBusinessController
 from folder_play import FolderHabitat
 from letter_play import LetterPlayground
 from real_desktop import RealDesktopPlay
 from ai_brain import AutonomousBrain
 from smart_notes import SmartNoteAssistant
 from business_voice import BusinessVoice
-from characters import ANIMATION_STATES
+from characters import ANIMATION_STATES, BUSINESS_ANIMATIONS
+from auto_parts import dashboard_summary
 from memory import MemoryStore
 from memory_window import MemoryWindow
 from memory_learning import MemoryLearner
@@ -81,6 +84,13 @@ class BuddyApp(QObject):
         self.chat = ChatWindow(self.settings, self.credentials, self.ai_context, self.run_buddy_action,
             memory_store=self.memory_store, notebook_store=self.notes_store, semantic_service=self.semantic)
         self.work_chat = WorkChatWindow(self.settings)
+        self.business_sync = SharedBusinessController(self.note_service, self)
+        self.notepad.shared_business = self.business_sync
+        self.business_sync.status_changed.connect(self.notepad.set_shared_status)
+        self.work_chat.session_changed.connect(self.business_sync.set_session)
+        self.business_sync.session_expired.connect(self.work_chat._clear_session)
+        self.notepad.connection_work_chat_requested.connect(self.show_work_chat)
+        self.notepad.set_shared_status('Sign in to Work Chat to use shared orders and checklists.', False)
         self.chat.user_message.connect(self.memory_learner.observe)
         self.chat.notepad_requested.connect(self.show_notepad)
         self.chat.memory_requested.connect(self.show_memory)
@@ -90,6 +100,7 @@ class BuddyApp(QObject):
         self.memory_window.preferences_changed.connect(self.apply_ai_preferences)
         self.memory_window.changed.connect(self.memory_learner.reset)
         self.notepad.chat_requested.connect(self.show_chat)
+        self.notepad.business_event.connect(self.business_interaction)
         self.chat.connection_changed.connect(self.memory_learner.reset)
         self.chat.preferences_changed.connect(self.apply_ai_preferences)
         self.chat.reply_ready.connect(self.pet.say)
@@ -185,9 +196,20 @@ class BuddyApp(QObject):
         chat = menu.addMenu("Chat")
         chat.addAction("Work Chat · Coworkers", self.show_work_chat)
         chat.addAction("Talk to Jeffery · Groq", self.show_chat)
-        notes = menu.addMenu("Notes && Focus")
-        notes.addAction("Jeffery's Notepad", self.show_notepad)
-        notes.addAction("Open Linked Text File", self.open_linked_notepad)
+        notes = menu.addMenu("Famous Twins")
+        notes.addAction("Business Overview", lambda: self.show_business_workspace("overview"))
+        sections = notes.addMenu("Workspace")
+        for label, section in (("Writing", "writing"), ("Checklists", "checklists"),
+                               ("Orders and Quotes", "orders"), ("Schedule", "schedule")):
+            sections.addAction(label, lambda checked=False, value=section: self.show_business_workspace(value))
+        create = notes.addMenu("Create")
+        create.addAction("New Writing", lambda: self.new_business_entry("note"))
+        create.addAction("New Checklist", lambda: self.new_business_entry("list"))
+        create.addAction("New Customer Order", lambda: self.new_business_entry("order"))
+        notes.addAction("Today's Business Brief", self.business_briefing)
+        files = notes.addMenu("Files and Sources")
+        files.addAction("Read PDF or Webpage", lambda: self.show_business_workspace("import"))
+        files.addAction("Open Linked Text File", self.open_linked_notepad)
         notes.addSeparator()
         self.reminder_action = notes.addAction("Note Reminders")
         self.reminder_action.setCheckable(True)
@@ -225,8 +247,18 @@ class BuddyApp(QObject):
         for label, state in (("Pet", "PET"), ("Feed", "EAT"), ("Wave", "WAVE"), ("Dance", "DANCE"), ("Jump", "JUMP"), ("Take a nap", "SLEEP")):
             self.interact_actions[state] = interact_menu.addAction(label, lambda checked=False, s=state: self.pet.interact(s))
         tricks = interact_menu.addMenu("More Moves")
+        business_moves = interact_menu.addMenu("At the Parts Counter")
+        business_states = {state for _, state in BUSINESS_ANIMATIONS}
+        for label, state in BUSINESS_ANIMATIONS:
+            business_moves.addAction(label, lambda checked=False, value=state: self.pet.interact(value))
+        expressions = tricks.addMenu("Expressions")
+        props = tricks.addMenu("Props and Tricks")
+        movement = tricks.addMenu("Movement")
         for state in ANIMATION_STATES[25:]:
-            tricks.addAction(state.replace('_', ' ').title(), lambda checked=False, s=state: self.run_buddy_action({'action': 'animate', 'animation': s}))
+            if state in business_states:
+                continue
+            group = expressions if state in {"SNEEZE", "SCARED", "LAUGH", "GROOM", "SALUTE", "FACEPALM"} else props if state in {"MAGIC", "UMBRELLA", "JUGGLE"} else movement
+            group.addAction(state.replace('_', ' ').title(), lambda checked=False, s=state: self.run_buddy_action({'action': 'animate', 'animation': s}))
         buddy = menu.addMenu("Buddy Controls")
         buddy.addAction("Show / Hide Buddy", self.toggle_pet)
         self.pause_action = buddy.addAction("Pause Buddy", self.toggle_pause)
@@ -607,6 +639,32 @@ class BuddyApp(QObject):
         self.notepad.activateWindow()
         self.pet.perform("READ", 3)
 
+    def show_business_workspace(self, section="overview"):
+        self.show_notepad()
+        self.notepad.show_section(section)
+
+    def new_business_entry(self, kind):
+        self.show_notepad()
+        if kind == "note":
+            self.notepad.new_note()
+        else:
+            self.notepad.new_entry(kind)
+
+    def business_interaction(self, event):
+        if self.shutting_down or not self.settings["business_mode"]:
+            return
+        animation = {"order_saved": "SCAN_PART", "order_ready": "PACK_ORDER",
+                     "checklist_saved": "CHECK_STOCK"}.get(event, "HIGH_FIVE")
+        self.pet.perform(animation, 2.5)
+
+    def business_briefing(self):
+        self.show_business_workspace("overview")
+        counts = dashboard_summary(self.notes_store.notes)
+        self.pet.perform("CHECK_STOCK", 3)
+        self.pet.say(f"{self.settings['business_name']}: {counts['open_orders']} open orders, "
+                     f"{counts['ready_orders']} ready for pickup, and {counts['late_orders']} past deadline. "
+                     f"{counts['parts_to_source']} part units need a sourcing check.")
+
     def open_note(self, identifier):
         if self.notepad.maybe_leave():
             self.show_notepad()
@@ -618,6 +676,12 @@ class BuddyApp(QObject):
 
     def note_action(self, identifier, action):
         try:
+            if self.business_sync.is_business(identifier) and action in ('done', 'snooze'):
+                if action == 'done':
+                    self.business_sync.complete(identifier, True, self.shared_note_result)
+                else:
+                    self.business_sync.modify(identifier, {'next_due': time.time() + 5 * 60}, self.shared_note_result)
+                return
             if action == "done":
                 self.note_service.complete(identifier)
                 self.pet.perform("CELEBRATE", 3)
@@ -627,6 +691,12 @@ class BuddyApp(QObject):
                 self.note_service.modify(identifier, pinned=False)
         except (OSError, ValueError) as exc:
             self.note_error(str(exc))
+
+    def shared_note_result(self, note, error):
+        if error:
+            self.note_error(error)
+        elif note:
+            self.pet.perform('CHECK_STOCK', 3)
 
     def deliver_note(self, note, kind):
         if self.shutting_down:
@@ -665,6 +735,9 @@ class BuddyApp(QObject):
         if minutes not in (5, 15, 30, 60):
             return
         try:
+            if self.business_sync.is_business(identifier):
+                self.business_sync.modify(identifier, {'next_due': time.time() + minutes * 60}, self.shared_note_result)
+                return
             self.note_service.snooze(identifier, minutes)
             self.pet.say(f"Okay, I’ll remind you in {minutes} minutes.")
         except (OSError, ValueError) as exc:
@@ -807,6 +880,7 @@ class BuddyApp(QObject):
         self.overlay.stop_animation()
         self.notepad.shutdown()
         self.chat.shutdown()
+        self.business_sync.shutdown()
         self.work_chat.shutdown()
         self.memory_learner.stop()
         self.memory_window.hide()

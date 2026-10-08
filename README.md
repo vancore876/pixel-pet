@@ -1,11 +1,15 @@
 # PixelSystem Buddy 6.0 — Jeffery
 
 Jeffery is a Windows desktop companion with a small system HUD, an animated
-character, a notebook and reminders, and optional Groq chat. Version 6 adds
-business-minded greetings, fresh reminders grounded in outstanding work,
-customer orders with quantities and checklists, and an Android/iPhone companion
-in the mobile folder. Sliding replies, the tiny HUD, and real Windows desktop
-play remain available.
+character, a notebook and reminders, and optional Groq chat. The desktop
+notebook is now the **Famous Twins auto-parts workspace**, with separate
+Writing, Checklists, Orders, Schedule, and Overview pages, exact JMD totals,
+shared office business records, and six new parts-counter animations.
+The Android/iPhone companion remains in the mobile folder. Sliding replies,
+the tiny HUD, and real Windows desktop play remain available.
+
+See **[Famous Twins workflow](FAMOUS_TWINS.md)** for quotes, customer/vehicle
+details, manual sourcing, pickup summaries, and daily checklist templates.
 
 ## Start or update
 
@@ -15,7 +19,8 @@ play remain available.
 
 For accounts and coworker messaging on a shared office server, see
 **[Work Chat setup](WORK_CHAT.md)**. The Python server provides username/password
-sign-up, a shared Team Room, private direct messages, and a browser interface.
+sign-up, a shared Team Room, private direct messages, shared orders/checklists,
+and a browser chat interface.
 Desktop clients open **Chat → Work Chat · Coworkers**. Jeffery's existing Groq AI
 chat is under **Chat → Talk to Jeffery · Groq**. On the main office PC, run
 **Start_Work_Server.bat** using the project's local disk path, then share that
@@ -25,12 +30,15 @@ Each PC needs 64-bit Python 3.11 or newer and internet access for its first
 dependency installation. Coworkers enter the main PC's IP in Work Chat and
 create their own unique username and password. The shared launcher keeps
 dependencies and personal notebooks/settings in each Windows user's local
-profile. Accounts and chat messages stay outside the shared project, in the
+profile. Signing in loads the shared orders and checklists for every
+authenticated coworker; Writing and full documents remain local. Existing local
+business entries are only published when explicitly saved. Accounts, chat, and
+shared business records stay outside the shared project, in the
 server Windows account's `%LOCALAPPDATA%\PixelSystemBuddy\work-server` folder.
 Do not publish personal `data` or older `server-data` folders in the share.
 The server launcher uses office-only HTTP on port 8765 without certificates;
-passwords and messages travel unencrypted. Optional verified HTTPS is documented
-in the setup guide.
+passwords, chat, and business records travel unencrypted. Optional verified
+HTTPS is documented in the setup guide.
 
 The launcher installs PySide6, psutil, pypdf, PDFium, Pillow, Trafilatura, and
 RapidFuzz into its own virtual environment
@@ -66,8 +74,9 @@ py -3 -m venv .venv
 
 The built-in robot, cat, and knight use rounded forms, material shading, soft
 highlights, expressive eyes, and gentle breathing. A subtle cyan ground light
-keeps their virtual companion feel. All 49 animation states, palette choices,
-and desktop interactions remain available. The mobile app uses the same
+keeps their virtual companion feel. The original 49 animation states, palette
+choices, and desktop interactions remain available, plus six desktop business
+poses for 55 desktop states. The mobile app uses the original
 character renderer and adds a quiet halo around its pet stage.
 
 ![Original and updated virtual companions](preview/virtual-pets.png)
@@ -75,7 +84,8 @@ character renderer and adds a quiet halo around its pet stage.
 After changing `characters.py`, regenerate the mobile animation sheets with
 `python tools/export_pet_sprites.py` from an environment with the desktop
 dependencies installed. The exporter keeps the eight-frame, 49-state layout
-used by the phone app. Local notebook data, credentials, installed dependencies,
+used by the phone app, excluding the six desktop business poses. Local notebook
+data, credentials, installed dependencies,
 and generated build outputs are excluded from Git.
 
 ## What changed
@@ -93,9 +103,14 @@ the Windows desktop app. The mobile companion keeps its existing workflow.
 | Animated medieval system monitor | Settings → Overlay → Monitor style → Medieval; choose Classic for the previous look |
 | Varied Groq greetings and interaction remarks | Talk to Jeffery → Connection → Use Groq for varied greetings and interactions |
 | Business-minded personality | Connection → Business name and Business-minded greetings and advice |
-| Customer orders with preparation progress | Notepad → + Order → Checklist and order |
-| Checklists and item quantities | Notepad → + List; check prepared items and Save |
-| Pickup deadlines and status | Checklist and order → Deadline; New / Preparing / Ready / Delivered / Cancelled |
+| Famous Twins workspace | Right-click → Famous Twins → Business Overview or Workspace; separate Writing, Checklists, Orders, and Schedule pages |
+| Shared orders and checklists | Sign in through Work Chat with the office server IP; each coworker uses their own account |
+| Customer orders and quotes | Orders → + Create customer order / quote; customer, vehicle, VIN/chassis, priority, parts, supplier, bin, and manual stock status |
+| Exact JMD amounts | Orders → Unit JMD and Payment received JMD; totals, remaining balance, and credit use integer cents |
+| Operational checklist templates | Checklists → Opening / Closing / Parts handover → Add template tasks → Save entry |
+| Pickup deadlines and status | Orders → Pickup deadline; New / Preparing / Ready / Delivered / Cancelled |
+| Sourcing and customer history | Overview → Parts to source and Customer history; double-click a history row to open it |
+| Pickup details to share | Orders → Copy pickup summary; review the clipboard text before sending it yourself |
 | Fresh reminders of remaining work | Due reminders request new Groq wording and filter repeated phrases |
 | Android and iPhone app | mobile/README.md; Today, Orders, Notes, Chat, Settings |
 | Desktop-to-phone notebook transfer | Desktop Backup → Mobile small-note JSON / Import backup; phone Settings → Move your notebook |
@@ -107,6 +122,7 @@ the Windows desktop app. The mobile companion keeps its existing workflow.
 | Plain replies slide down one line at a time | Chat and Jeffery's speech bubbles |
 | Tiny HUD, 224 pixels wide | On by default; Settings → Overlay → Tiny HUD |
 | 49 animation states, including 24 new moves | Random play; Play with Jeffery → More Moves |
+| Six desktop business animations | Play with Jeffery → At the Parts Counter; stock check, part scan, packing, wrench, high five, coffee |
 | Actual visible folder icons | Desktop Play → Real Folders, Tabs and Windows |
 | Actual browser or Explorer tab controls | Choose a tab → Jump / ride, or Select tab |
 | Selected letters from an editor | Select text → Ctrl+Alt+J → drag letters → Apply to editor |
@@ -294,25 +310,32 @@ exact repeats with varied local wording. Greeting requests have a one-minute
 cooldown. Startup, mouse greetings, and everyday interactions use this voice;
 random Groq moves retain their separate interval.
 
-In Notepad, **+ Order** opens **Checklist and order**. Enter the customer,
-optional contact and order number, then add each item and quantity. Check items
-as you prepare them and save. **Ready** keeps the order open for collection;
-**Delivered**, **Cancelled**, or **Done** stops reminders. Restoring a completed
-order returns it to New. Use **Write and schedule** for a title, details, and
-repeat settings. Search also finds customers, order numbers, and checklist items.
+Open **Famous Twins → Workspace** for separate Writing, Checklists, Orders,
+and Schedule pages. **+ Order** captures customer/vehicle details, manual
+part sourcing, prices, payments, pickup deadlines, and order/quote status.
+Amounts are JMD; quotes are excluded from receivables and open-order counts.
+**+ List** provides a dedicated task table with Opening, Closing, and Parts
+handover templates. Overview shows order queues, sourcing requests, balances,
+and customer history. [The workflow guide](FAMOUS_TWINS.md) describes each page.
 
-The pickup deadline and next reminder are separate. **Remind at deadline** copies
-the deadline into the reminder schedule; save to apply it. Checking an item or
-changing status invalidates old advice. Groq receives what is still unchecked
-and prompts focus on preparation, customer follow-up, or handover. It is told
-not to invent stock, payments, customer promises, or completed work.
+Sign in through **Work Chat · Coworkers** to load shared orders/checklists from
+the office server. Every authenticated coworker can edit these records;
+Writing and documents stay local. Old local business entries require an
+explicit **Save entry** to publish. A stale save is rejected and its editor
+draft stays intact; use **Reload saved** to review the coworker's saved version
+before reapplying changes. The main server must be available for business saves.
 
-**+ List** creates a checklist without customer fields. Both lists and orders
-can be exported with **Backup → Mobile small-note backup (.json)** and merged
-back with **Import backup**. Use a desktop ZIP for a notebook containing full documents.
-Matching IDs keep the newer entry. Import preserves existing local sticky-note
-positions and text-file links; it never deletes entries merely absent from a
-backup. Transfers are manual, without automatic cloud synchronization.
+Pickup deadlines and reminder schedules remain separate. **Use pickup deadline
+as reminder** copies the deadline into Schedule; save to apply it. Ready keeps
+the order open for pickup; Delivered, Cancelled, or Done stops reminders.
+Jeffery's optional Groq advice is grounded in saved work and is prompted not to
+invent stock, payments, fitment, promises, or completed work. Manual stock
+labels are not live inventory or a supplier connection.
+
+Use a desktop ZIP for complete local notebook backups, and back up the server's
+private database folder to preserve shared business data and chat. Mobile
+small-note transfers do not provide the richer shared order workflow. The
+desktop text export includes vehicle/part details and exact JMD totals.
 
 ## Replies and the small HUD
 

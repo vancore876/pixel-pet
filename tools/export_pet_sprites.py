@@ -18,10 +18,13 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QImage, QPainter
 from PySide6.QtWidgets import QApplication
 
-from characters import ANIMATION_STATES, draw_character
+from characters import ANIMATION_STATES, BUSINESS_ANIMATIONS, draw_character
 
 FRAME_SIZE = 96
 FRAME_COUNT = 8
+# The phone renderer has a fixed 49-row contract; business poses are desktop-only.
+MOBILE_STATES = tuple(state for state in ANIMATION_STATES
+                      if state not in {key for _, key in BUSINESS_ANIMATIONS})
 
 
 def export_sheets(destination: Path) -> None:
@@ -29,13 +32,13 @@ def export_sheets(destination: Path) -> None:
     for character in ("robot", "cat", "knight"):
         sheet = QImage(
             FRAME_SIZE * FRAME_COUNT,
-            FRAME_SIZE * len(ANIMATION_STATES),
+            FRAME_SIZE * len(MOBILE_STATES),
             QImage.Format_ARGB32_Premultiplied,
         )
         sheet.fill(Qt.transparent)
         painter = QPainter(sheet)
         try:
-            for row, state in enumerate(ANIMATION_STATES):
+            for row, state in enumerate(MOBILE_STATES):
                 for frame in range(FRAME_COUNT):
                     painter.save()
                     painter.translate(frame * FRAME_SIZE, row * FRAME_SIZE)
@@ -58,7 +61,7 @@ def export_sheets(destination: Path) -> None:
         path = destination / f"{character}.png"
         if not sheet.save(str(path)):
             raise OSError(f"Could not save {path}")
-        print(f"Exported {character}: {len(ANIMATION_STATES)} states, {FRAME_COUNT} frames")
+        print(f"Exported {character}: {len(MOBILE_STATES)} states, {FRAME_COUNT} frames")
 
 
 def main() -> None:

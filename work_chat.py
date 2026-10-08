@@ -11,7 +11,7 @@ import re
 from datetime import datetime
 from urllib.parse import urlencode, urlsplit, urlunsplit
 
-from PySide6.QtCore import QByteArray, QObject, QSignalBlocker, Qt, QTimer, QUrl
+from PySide6.QtCore import QByteArray, QObject, QSignalBlocker, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequest
 from PySide6.QtWidgets import (QCheckBox, QDialog, QFormLayout, QHBoxLayout,
@@ -106,10 +106,15 @@ class _ApiClient(QObject):
         request.setRawHeader(b"Accept", b"application/json")
         if token:
             request.setRawHeader(b"Authorization", ("Bearer " + token).encode("ascii"))
-        if method == "POST":
+        if method in ("POST", "PUT", "DELETE"):
             request.setHeader(QNetworkRequest.ContentTypeHeader, "application/json")
             payload = QByteArray(json.dumps(body or {}, ensure_ascii=False).encode("utf-8"))
-            reply = self.manager.post(request, payload)
+            if method == "POST":
+                reply = self.manager.post(request, payload)
+            elif method == "PUT":
+                reply = self.manager.put(request, payload)
+            else:
+                reply = self.manager.sendCustomRequest(request, QByteArray(b"DELETE"), payload)
         else:
             reply = self.manager.get(request)
         reply.setReadBufferSize(64 * 1024)
@@ -200,6 +205,8 @@ def _positive_id(value):
 
 class WorkChatWindow(QDialog):
     """Sign in to the office server, then use Team Room or direct messages."""
+
+    session_changed = Signal(str, str, object)
 
     def __init__(self, settings):
         super().__init__()
@@ -441,6 +448,7 @@ class WorkChatWindow(QDialog):
                 self.status.setText("The server returned an invalid sign-in response.")
                 return
             self.token, self.user = token, user
+            self.session_changed.emit(self.api.base_url, token, user)
             self.account_label.setText(f"Signed in as {user['username']}")
             self.pages.setCurrentIndex(1)
             self._peer_id = None
@@ -697,6 +705,7 @@ class WorkChatWindow(QDialog):
         self.api.cancel_all()
         self.token = ""
         self.user = None
+        self.session_changed.emit(self.api.base_url, "", None)
         self._users_pending = self._messages_pending = self._send_pending = False
         self._message_reply = self._send_reply = None
         self._drafts.clear()

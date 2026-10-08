@@ -4,6 +4,7 @@ from __future__ import annotations
 from contextlib import closing
 from datetime import datetime, timezone
 import hashlib
+import json
 import os
 from pathlib import Path
 import re
@@ -14,6 +15,7 @@ import time
 
 from argon2 import PasswordHasher
 from argon2.exceptions import InvalidHashError, VerificationError, VerifyMismatchError
+from server_business_schema import BusinessValidationError, validate_business_entry, validate_business_id
 
 
 USERNAME_PATTERN = re.compile(r"[A-Za-z0-9_.-]{3,32}\Z")
@@ -47,7 +49,7 @@ def utc_timestamp(value: float) -> str:
 
 class ChatStore:
     def __init__(self, database_path, *, clock=time.time, session_seconds=8 * 60 * 60,
-                 hash_slots=4, max_users=1000):
+                 hash_slots=4, max_users=1000, max_business_entries=2000):
         self.path = Path(database_path).expanduser().resolve()
         if str(self.path).startswith("\\\\"):
             raise ValueError("Keep the chat database on the server's local disk, not a network share.")
@@ -61,6 +63,7 @@ class ChatStore:
         self.clock = clock
         self.session_seconds = session_seconds
         self.max_users = max_users
+        self.max_business_entries = max_business_entries
         self.hasher = PasswordHasher()  # Argon2id, independently salted on every hash.
         self.hash_slots = BoundedSemaphore(hash_slots)
         # Unknown usernames still perform the same password-verification work.
@@ -90,6 +93,19 @@ class ChatStore:
                 );
                 CREATE INDEX IF NOT EXISTS messages_recipient ON messages(recipient_id, id);
                 CREATE INDEX IF NOT EXISTS messages_pair ON messages(sender_id, recipient_id, id);
+                CREATE TABLE IF NOT EXISTS business_state (
+                    id INTEGER PRIMARY KEY CHECK(id = 1),
+                    revision INTEGER NOT NULL
+                );
+                INSERT OR IGNORE INTO business_state(id, revision) VALUES (1, 0);
+                CREATE TABLE IF NOT EXISTS business_entries (
+                    id TEXT PRIMARY KEY,
+                    revision INTEGER NOT NULL UNIQUE,
+                    deleted INTEGER NOT NULL DEFAULT 0,
+                    entry_json TEXT,
+                    updated_by INTEGER NOT NULL REFERENCES users(id),
+                    updated_at TEXT NOT NULL
+                );
             """)
 
     def _connect(self):
@@ -251,3 +267,96 @@ class ChatStore:
                 raise StoreError(404, "That user was not found.")
             connection.execute("UPDATE users SET password_hash = ? WHERE id = ?", (password_hash, user["id"]))
             connection.execute("DELETE FROM sessions WHERE user_id = ?", (user["id"],))
+
+    @staticmethod
+    def _business_identifier(identifier):
+        try:
+            return validate_business_id(identifier)
+        except BusinessValidationError as error:
+            raise StoreError(422, str(error)) from None
+
+    @staticmethod
+    def _business_revision(value):
+        if type(value) is not int or not 0 <= value < 2**63 - 1:
+            raise StoreError(422, 'The expected revision must be a nonnegative integer.')
+        return value
+
+    @staticmethod
+    def _business_record(row):
+        return {'id': row['id'], 'revision': row['revision'], 'deleted': bool(row['deleted']),
+                'entry': None if row['deleted'] else json.loads(row['entry_json']),
+                'updated_by_username': row['updated_by_username'], 'updated_at': row['updated_at']}
+
+    @staticmethod
+    def _business_row(connection, identifier):
+        return connection.execute('''
+            SELECT b.id, b.revision, b.deleted, b.entry_json, u.username AS updated_by_username, b.updated_at
+            FROM business_entries b JOIN users u ON u.id = b.updated_by WHERE b.id = ?
+        ''', (identifier,)).fetchone()
+
+    def business_entries(self, *, after_revision=0, limit=3):
+        self._business_revision(after_revision)
+        if type(limit) is not int or not 1 <= limit <= 3:
+            raise StoreError(422, 'Shared business page size must be from 1 to 3.')
+        with closing(self._connect()) as connection:
+            rows = connection.execute('''
+                SELECT b.id, b.revision, b.deleted, b.entry_json, u.username AS updated_by_username, b.updated_at
+                FROM business_entries b JOIN users u ON u.id = b.updated_by
+                WHERE b.revision > ? ORDER BY b.revision LIMIT ?
+            ''', (after_revision, limit + 1)).fetchall()
+            page = rows[:limit]
+            return {'entries': [self._business_record(row) for row in page],
+                    'cursor': page[-1]['revision'] if page else after_revision, 'has_more': len(rows) > limit}
+
+    def save_business_entry(self, actor_id, identifier, expected_revision, entry):
+        self._business_identifier(identifier)
+        self._business_revision(expected_revision)
+        now = self.clock()
+        try:
+            canonical = validate_business_entry(entry, identifier, now=now)
+        except BusinessValidationError as error:
+            raise StoreError(422, str(error)) from None
+        with closing(self._connect()) as connection, connection:
+            connection.execute('BEGIN IMMEDIATE')
+            existing = self._business_row(connection, identifier)
+            if (existing['revision'] if existing else 0) != expected_revision:
+                raise StoreError(409, 'This entry changed on another computer. Reload it before saving your changes.')
+            if existing and existing['deleted']:
+                raise StoreError(409, 'This shared entry was deleted. Create a new entry instead.')
+            if existing is None:
+                count = connection.execute('SELECT COUNT(*) FROM business_entries WHERE deleted = 0').fetchone()[0]
+                if count >= self.max_business_entries:
+                    raise StoreError(409, 'The shared notebook is full. Back up and delete older entries before adding more.')
+            else:
+                previous = json.loads(existing['entry_json'])
+                canonical['created'] = previous['created']
+                canonical['written'] = now if (previous['title'], previous['body']) != (canonical['title'], canonical['body']) else previous['written']
+            canonical['updated'] = now
+            connection.execute('UPDATE business_state SET revision = revision + 1 WHERE id = 1')
+            revision = connection.execute('SELECT revision FROM business_state WHERE id = 1').fetchone()[0]
+            connection.execute('''
+                INSERT INTO business_entries(id, revision, deleted, entry_json, updated_by, updated_at)
+                VALUES (?, ?, 0, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET revision=excluded.revision, deleted=0,
+                    entry_json=excluded.entry_json, updated_by=excluded.updated_by, updated_at=excluded.updated_at
+            ''', (identifier, revision, json.dumps(canonical, ensure_ascii=False, separators=(',', ':')),
+                  actor_id, utc_timestamp(now)))
+            return self._business_record(self._business_row(connection, identifier))
+
+    def delete_business_entry(self, actor_id, identifier, expected_revision):
+        self._business_identifier(identifier)
+        self._business_revision(expected_revision)
+        with closing(self._connect()) as connection, connection:
+            connection.execute('BEGIN IMMEDIATE')
+            existing = self._business_row(connection, identifier)
+            if existing is None:
+                raise StoreError(404, 'That shared entry was not found.')
+            if existing['revision'] != expected_revision:
+                raise StoreError(409, 'This entry changed on another computer. Reload it before deleting.')
+            if existing['deleted']:
+                raise StoreError(409, 'This shared entry was already deleted.')
+            connection.execute('UPDATE business_state SET revision = revision + 1 WHERE id = 1')
+            revision = connection.execute('SELECT revision FROM business_state WHERE id = 1').fetchone()[0]
+            connection.execute('UPDATE business_entries SET revision=?, deleted=1, entry_json=NULL, updated_by=?, updated_at=? WHERE id=?',
+                               (revision, actor_id, utc_timestamp(self.clock()), identifier))
+            return self._business_record(self._business_row(connection, identifier))

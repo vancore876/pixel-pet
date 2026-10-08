@@ -19,6 +19,8 @@ import re
 import tempfile
 import zipfile
 
+from auto_parts import MAX_UNIT_PRICE_CENTS, format_money, order_totals, validated_cents
+
 
 MAX_NOTEBOOK_CHARACTERS = 1_000_000_000
 MAX_METADATA_BYTES = 128 * 1024 * 1024
@@ -193,11 +195,14 @@ def export_text(argument, cancel=None):
                 if note.get("document_source"):
                     header += f"Source: {note['document_source']}\n"
                 if note.get("kind") == "order":
+                    header += f"Record type: {'Quote' if note.get('order_type') == 'quote' else 'Order'}\n"
                     header += f"Order status: {note.get('order_status', 'new')}\n"
                     for label, key in (("Customer", "customer"), ("Contact", "contact"),
-                                       ("Order reference", "order_ref")):
+                                       ("Order reference", "order_ref"), ("Vehicle", "vehicle"),
+                                       ("Registration", "registration"), ("VIN", "vin")):
                         if note.get(key):
                             header += f"{label}: {note[key]}\n"
+                    header += f"Priority: {'Urgent' if note.get('priority') == 'urgent' else 'Normal'}\n"
                 handle.write(header.encode("utf-8"))
                 identifier = note.get("document_id")
                 if identifier:
@@ -207,8 +212,22 @@ def export_text(argument, cancel=None):
                 handle.write(b"\n")
                 for item in note.get("checklist", []):
                     _check_cancel(cancel)
-                    row = f"[{'x' if item.get('done') else ' '}] {item.get('quantity', 1)} x {item.get('text', '')}\n"
+                    row = f"[{'x' if item.get('done') else ' '}] {item.get('quantity', 1)} x {item.get('text', '')}"
+                    for label, key in (("Part number", "part_number"), ("Supplier", "supplier"),
+                                       ("Bin", "bin_location")):
+                        if item.get(key):
+                            row += f" | {label}: {item[key]}"
+                    if note.get('kind') == 'order':
+                        stock = str(item.get('stock_status', 'check_stock')).replace('_', ' ')
+                        price = format_money(validated_cents(item.get('unit_price_cents'), MAX_UNIT_PRICE_CENTS))
+                        row += f" | Manual stock status: {stock} | Unit price: {price}"
+                    row += "\n"
                     handle.write(row.encode("utf-8"))
+                if note.get('kind') == 'order':
+                    totals = order_totals(note)
+                    for label, key in (("Subtotal", "subtotal_cents"), ("Payment recorded", "paid_cents"),
+                                       ("Balance", "balance_cents"), ("Credit", "credit_cents")):
+                        handle.write(f"{label}: {format_money(totals[key])}\n".encode('utf-8'))
                 handle.write(b"\n")
         _check_cancel(cancel)
         os.replace(temporary, destination)

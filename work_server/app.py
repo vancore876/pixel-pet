@@ -7,7 +7,7 @@ import ipaddress
 from pathlib import Path
 from threading import Lock
 import time
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.exceptions import RequestValidationError
@@ -19,6 +19,7 @@ from .store import ChatStore, StoreError
 
 
 MAX_REQUEST_BYTES = 16 * 1024
+MAX_BUSINESS_REQUEST_BYTES = 256 * 1024
 SECURITY_HEADERS = {
     "Cache-Control": "no-store",
     "X-Content-Type-Options": "nosniff",
@@ -101,8 +102,11 @@ class RequestGuard:
         if content_length < 0:
             await reject(400, "Invalid request length.")
             return
-        if content_length > MAX_REQUEST_BYTES:
-            await reject(413, "Request is too large (maximum 16 KiB).")
+        is_business = scope.get('path', '') == '/api/business' or scope.get('path', '').startswith('/api/business/')
+        request_limit = MAX_BUSINESS_REQUEST_BYTES if is_business else MAX_REQUEST_BYTES
+        limit_detail = '256 KiB' if is_business else '16 KiB'
+        if content_length > request_limit:
+            await reject(413, f"Request is too large (maximum {limit_detail}).")
             return
         chunks = []
         size = 0
@@ -116,8 +120,8 @@ class RequestGuard:
                         continue
                     chunk = message.get("body", b"")
                     size += len(chunk)
-                    if size > MAX_REQUEST_BYTES:
-                        await reject(413, "Request is too large (maximum 16 KiB).")
+                    if size > request_limit:
+                        await reject(413, f"Request is too large (maximum {limit_detail}).")
                         return
                     chunks.append(chunk)
                     if not message.get("more_body", False):
@@ -177,20 +181,32 @@ class NewMessage(BaseModel):
     recipient_id: Annotated[StrictInt, Field(ge=1, le=2**63 - 1)] | None = None
 
 
+class BusinessRevision(BaseModel):
+    model_config = ConfigDict(extra='forbid', strict=True)
+    expected_revision: Annotated[StrictInt, Field(ge=0, lt=2**63 - 1)]
+
+
+class BusinessWrite(BusinessRevision):
+    entry: dict[str, Any]
+
+
 def create_app(database_path="server-data/work-chat.sqlite", *, clock=time.time,
                session_seconds=8 * 60 * 60, auth_limit=20, send_limit=60,
                rate_window_seconds=60, static_directory=None, account_auth_limit=10,
-               max_users=1000, allow_lan_http=False):
+               max_users=1000, allow_lan_http=False, max_business_entries=2000, business_limit=60):
     app = FastAPI(title="Jeffery Work Chat", docs_url=None, redoc_url=None, openapi_url=None,
                   telemetry={"tracing": False, "metrics": False, "logs": False, "auto_configure": False})
-    store = ChatStore(database_path, clock=clock, session_seconds=session_seconds, max_users=max_users)
+    store = ChatStore(database_path, clock=clock, session_seconds=session_seconds, max_users=max_users,
+                      max_business_entries=max_business_entries)
     auth_limiter = RateLimiter(auth_limit, rate_window_seconds)
     account_limiter = RateLimiter(account_auth_limit, rate_window_seconds)
     send_limiter = RateLimiter(send_limit, rate_window_seconds)
+    business_limiter = RateLimiter(business_limit, rate_window_seconds)
     app.state.store = store
     app.state.auth_limiter = auth_limiter
     app.state.account_limiter = account_limiter
     app.state.send_limiter = send_limiter
+    app.state.business_limiter = business_limiter
     app.add_middleware(RequestGuard, allow_lan_http=allow_lan_http)
 
     @app.exception_handler(StoreError)
@@ -249,6 +265,21 @@ def create_app(database_path="server-data/work-chat.sqlite", *, clock=time.time,
     def send_message(message: NewMessage, user=Depends(signed_in)):
         send_limiter.check(user["id"])
         return {"message": store.send(user["id"], message.body, message.recipient_id)}
+
+    @app.get('/api/business')
+    def business(after_revision: Annotated[int, Query(ge=0, lt=2**63 - 1)] = 0,
+                 limit: Annotated[int, Query(ge=1, le=3)] = 3, user=Depends(signed_in)):
+        return store.business_entries(after_revision=after_revision, limit=limit)
+
+    @app.put('/api/business/{identifier}')
+    def save_business(identifier: str, payload: BusinessWrite, user=Depends(signed_in)):
+        business_limiter.check(user['id'])
+        return store.save_business_entry(user['id'], identifier, payload.expected_revision, payload.entry)
+
+    @app.delete('/api/business/{identifier}')
+    def delete_business(identifier: str, payload: BusinessRevision, user=Depends(signed_in)):
+        business_limiter.check(user['id'])
+        return store.delete_business_entry(user['id'], identifier, payload.expected_revision)
 
     static_path = Path(static_directory) if static_directory else Path(__file__).parent / "static"
     if static_path.is_dir():
