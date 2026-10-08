@@ -1,16 +1,23 @@
 # Jeffery 6.0 verification
 
-The optional Work Chat update passed 18 backend authentication/privacy/storage
-checks, 18 desktop client/transport checks, and disposable two-account Qt and
-browser workflows. Checks include unauthorized private-message reads, session
-expiration/revocation, password reset, request/rate limits, HTTPS/LAN boundaries,
+The office HTTP Work Chat update passed 22 backend authentication/privacy/storage
+checks, 23 desktop client/transport checks, and disposable two-account Qt and
+browser workflows. Two real Qt clients connected through this development PC's
+private IPv4 socket without certificates, using bare-IP entry and receiving
+direct messages in both directions, including normal polling. Checks include
+unauthorized private-message reads, session expiration/revocation, password
+reset, request/rate limits, default HTTPS and opted-in LAN HTTP boundaries,
 literal message rendering, late conversation replies, and preserved drafts.
+The Windows server dependency setup batch completed successfully with both an
+existing environment and a fresh temporary folder, creating its environment
+and installing the pinned packages from scratch.
 Windows and browser layouts were visually inspected. The full desktop unit
 run completed 353 tests with 15 errors and 19 skips on this Windows/Python 3.14
 host. Errors concern existing Windows epoch-time conversion and locked SQLite
 files during test cleanup; representative failures reproduce on the pristine
-pre-chat commit. Office deployment, certificate trust, firewall/service setup,
-and real workplace load remain unverified. See WORK_CHAT.md for setup.
+pre-chat commit. Office deployment, firewall/service setup, and real workplace
+load remain unverified. Certificate trust needs validation if optional HTTPS is
+enabled. See WORK_CHAT.md for setup.
 
 The one-billion-character notebook update passed 213 desktop unit tests, seven
 Qt GUI workflows, and the desktop startup smoke test. Checks cover streamed

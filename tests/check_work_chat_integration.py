@@ -1,9 +1,12 @@
-"""Real Qt/API integration with a disposable loopback server and database.
+"""Real Qt/API integration with a disposable local server and database.
 
 Run with the desktop interpreter: python tests/check_work_chat_integration.py
 Set WORK_CHAT_SERVER_PYTHON to an interpreter with requirements-server.txt;
 otherwise .server-venv is used. No existing account or app data is touched.
+Set WORK_CHAT_TEST_LAN_IP to this PC's private IPv4 address to test LAN HTTP
+and bare-IP entry instead of the default loopback connection.
 """
+import ipaddress
 import json
 import os
 from pathlib import Path
@@ -31,6 +34,12 @@ APP = QApplication.instance() or QApplication([])
 APP.setQuitOnLastWindowClosed(False)
 SERVER_PYTHON = Path(os.environ.get("WORK_CHAT_SERVER_PYTHON", str(ROOT / ".server-venv" /
     ("Scripts/python.exe" if os.name == "nt" else "bin/python"))))
+LAN_IP = os.environ.get("WORK_CHAT_TEST_LAN_IP", "")
+if LAN_IP:
+    lan_address = ipaddress.IPv4Address(LAN_IP)
+    if not any(lan_address in ipaddress.IPv4Network(network) for network in
+               ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")):
+        raise ValueError("WORK_CHAT_TEST_LAN_IP must be this PC's private IPv4 address.")
 
 
 def wait_for(predicate, seconds=10):
@@ -93,12 +102,15 @@ class RealServerTests(unittest.TestCase):
         cls.children = {}
         # Class cleanups also run when setUpClass fails or is interrupted.
         cls.addClassCleanup(cls.cleanup_server)
+        host = LAN_IP or "127.0.0.1"
         with socket.socket() as probe:
-            probe.bind(("127.0.0.1", 0))
+            probe.bind((host, 0))
             port = probe.getsockname()[1]
-        cls.origin = f"http://127.0.0.1:{port}"
+        cls.origin = f"http://{host}:{port}"
+        cls.server_entry = f"{host}:{port}" if LAN_IP else cls.origin
+        lan_arguments = ["--host", host, "--allow-lan-http"] if LAN_IP else []
         cls.process = subprocess.Popen([str(SERVER_PYTHON), "-m", "work_server", "--port", str(port),
-            "--database", str(Path(cls.temp.name) / "chat.sqlite")], cwd=ROOT,
+            "--database", str(Path(cls.temp.name) / "chat.sqlite"), *lan_arguments], cwd=ROOT,
             stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
             creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
         deadline = time.monotonic() + 12
@@ -139,7 +151,7 @@ class RealServerTests(unittest.TestCase):
         window = WorkChatWindow(AppSettings(Path(self.temp.name) / (username + ".json")))
         self.windows.append(window)
         window.show()
-        window.server.setText(self.origin)
+        window.server.setText(self.server_entry)
         window.username.setText(username)
         window.signup.setChecked(True)
         window.password.setText("disposable-password-123")
@@ -147,6 +159,7 @@ class RealServerTests(unittest.TestCase):
         window.authenticate()
         wait_for(lambda: not window._auth_busy)
         self.assertTrue(window.token, window.status.text())
+        self.assertEqual(window.api.base_url, self.origin)
         wait_for(lambda: not window._users_pending and not window._messages_pending)
         return window
 
@@ -190,6 +203,14 @@ class RealServerTests(unittest.TestCase):
         wait_for(lambda: not bob._messages_pending)
         self.assertIn(direct_text, bob.transcript.toPlainText())
         self.assertNotIn(team_text, bob.transcript.toPlainText())
+        reply_text = "Reply from Bob: both directions work."
+        bob.composer.setPlainText(reply_text)
+        bob.send_message()
+        wait_for(lambda: not bob._send_pending)
+        self.assertEqual(bob.composer.toPlainText(), "", bob.status.text())
+        # Alice receives the return message through normal polling, without
+        # clicking Refresh or depending on the sender's POST response.
+        wait_for(lambda: reply_text in alice.transcript.toPlainText())
         self.choose(bob, None)
         self.assertIn(team_text, bob.transcript.toPlainText())
         self.assertNotIn(direct_text, bob.transcript.toPlainText())
@@ -197,7 +218,7 @@ class RealServerTests(unittest.TestCase):
         conflict = WorkChatWindow(AppSettings(Path(self.temp.name) / "conflict.json"))
         self.windows.append(conflict)
         conflict.show()
-        conflict.server.setText(self.origin)
+        conflict.server.setText(self.server_entry)
         conflict.username.setText("qa_alice")
         conflict.signup.setChecked(True)
         conflict.password.setText("disposable-password-123")

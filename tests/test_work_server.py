@@ -278,7 +278,8 @@ class WorkServerHTTPTests(unittest.TestCase):
 
 @unittest.skipUnless(SERVER_AVAILABLE, "Optional backend dependencies: install requirements-server.txt")
 class WorkServerGuardTests(unittest.TestCase):
-    def guarded_request(self, *, client="127.0.0.1", scheme="http", headers=None, chunks=None):
+    def guarded_request(self, *, client="127.0.0.1", scheme="http", headers=None, chunks=None,
+                        allow_lan_http=False):
         called, sent = [], []
         events = list(chunks or [{"type": "http.request", "body": b"", "more_body": False}])
 
@@ -295,7 +296,7 @@ class WorkServerGuardTests(unittest.TestCase):
 
         scope = {"type": "http", "method": "POST", "scheme": scheme,
                  "client": (client, 1234), "headers": headers or []}
-        asyncio.run(RequestGuard(downstream)(scope, receive, send))
+        asyncio.run(RequestGuard(downstream, allow_lan_http=allow_lan_http)(scope, receive, send))
         return called, sent
 
     def test_socket_peer_allowlist_ignores_forwarded_headers_and_demands_tls(self):
@@ -312,6 +313,47 @@ class WorkServerGuardTests(unittest.TestCase):
         called, sent = self.guarded_request(client="192.168.1.5", scheme="https")
         self.assertTrue(called)
         self.assertEqual(sent[0]["status"], 200)
+
+    def test_opted_in_lan_http_still_rejects_public_socket_peers(self):
+        for address in ("192.168.50.32", "10.2.3.4", "fc12::3", "::ffff:192.168.50.32"):
+            called, sent = self.guarded_request(client=address, allow_lan_http=True)
+            self.assertTrue(called, address)
+            self.assertEqual(sent[0]["status"], 200)
+            self.assertNotIn(b"strict-transport-security", dict(sent[0]["headers"]))
+        for address in ("8.8.8.8", "2001:4860:4860::8888", "not-an-ip"):
+            called, sent = self.guarded_request(client=address, allow_lan_http=True,
+                headers=[(b"x-forwarded-for", b"192.168.50.32")])
+            self.assertFalse(called, address)
+            self.assertEqual(sent[0]["status"], 403)
+
+    def test_create_app_lan_http_option_preserves_session_and_origin_checks(self):
+        async def request(app, path, *, client="192.168.50.32", method="GET", headers=None):
+            sent = []
+
+            async def receive():
+                return {"type": "http.request", "body": b"", "more_body": False}
+
+            async def send(message):
+                sent.append(message)
+
+            scope = {"type": "http", "http_version": "1.1", "method": method,
+                     "scheme": "http", "path": path, "raw_path": path.encode(),
+                     "root_path": "", "query_string": b"", "client": (client, 1234),
+                     "server": ("192.168.50.194", 8765), "headers": headers or []}
+            await app(scope, receive, send)
+            return sent[0]["status"]
+
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "chat.sqlite"
+            default_app = create_app(database)
+            app = create_app(database, allow_lan_http=True)
+            self.assertEqual(asyncio.run(request(default_app, "/api/health")), 426)
+            self.assertEqual(asyncio.run(request(app, "/api/health")), 200)
+            self.assertEqual(asyncio.run(request(app, "/api/me")), 401)
+            self.assertEqual(asyncio.run(request(app, "/api/health", client="8.8.8.8")), 403)
+            self.assertEqual(asyncio.run(request(app, "/api/auth/register", method="POST",
+                headers=[(b"host", b"192.168.50.194:8765"),
+                         (b"origin", b"http://another-site.example")])), 403)
 
     def test_streamed_request_cap_before_downstream_and_validation(self):
         called, sent = self.guarded_request(chunks=[
@@ -386,10 +428,53 @@ class WorkServerGuardTests(unittest.TestCase):
 
     def test_cli_rejects_lan_http_before_opening_database(self):
         project = Path(__file__).resolve().parents[1]
-        result = subprocess.run([sys.executable, "-m", "work_server", "--host", "0.0.0.0"],
-                                cwd=project, capture_output=True, text=True, timeout=10)
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("LAN connections require HTTPS", result.stderr)
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "uncreated" / "chat.sqlite"
+            result = subprocess.run([sys.executable, "-m", "work_server", "--host", "0.0.0.0",
+                                     "--database", str(database)],
+                                    cwd=project, capture_output=True, text=True, timeout=10)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("LAN connections require HTTPS", result.stderr)
+            self.assertFalse(database.parent.exists())
+
+    def test_cli_allows_explicit_lan_http_and_keeps_proxy_headers_disabled(self):
+        from work_server.__main__ import main
+
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "chat.sqlite"
+            with patch("work_server.app.create_app", wraps=create_app) as factory, patch("uvicorn.run") as run:
+                main(["--host", "0.0.0.0", "--port", "8765", "--allow-lan-http",
+                      "--database", str(database)])
+            factory.assert_called_once_with(str(database), allow_lan_http=True)
+            self.assertTrue(database.is_file())
+            self.assertEqual(run.call_args.kwargs["host"], "0.0.0.0")
+            self.assertEqual(run.call_args.kwargs["port"], 8765)
+            self.assertIsNone(run.call_args.kwargs["ssl_certfile"])
+            self.assertIsNone(run.call_args.kwargs["ssl_keyfile"])
+            self.assertFalse(run.call_args.kwargs["proxy_headers"])
+
+    def test_cli_tls_still_works_and_invalid_options_have_no_database_side_effects(self):
+        from work_server.__main__ import main
+
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "chat.sqlite"
+            certificate, key = Path(directory) / "server.crt", Path(directory) / "server.key"
+            certificate.write_text("certificate", encoding="utf-8")
+            key.write_text("private key", encoding="utf-8")
+            base = ["--host", "0.0.0.0", "--database", str(database)]
+            for options in (["--allow-lan-http", "--certfile", str(certificate)],
+                            ["--allow-lan-http", "--port", "0"],
+                            ["--allow-lan-http", "--certfile", str(certificate),
+                             "--keyfile", str(Path(directory) / "missing.key")]):
+                with self.subTest(options=options), patch("sys.stderr"), self.assertRaises(SystemExit) as error:
+                    main(base + options)
+                self.assertEqual(error.exception.code, 2)
+                self.assertFalse(database.exists())
+            with patch("work_server.app.create_app", wraps=create_app) as factory, patch("uvicorn.run") as run:
+                main(base + ["--certfile", str(certificate), "--keyfile", str(key)])
+            factory.assert_called_once_with(str(database), allow_lan_http=False)
+            self.assertEqual(run.call_args.kwargs["ssl_certfile"], str(certificate))
+            self.assertEqual(run.call_args.kwargs["ssl_keyfile"], str(key))
 
 
 if __name__ == "__main__":

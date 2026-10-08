@@ -17,8 +17,11 @@ For accounts and coworker messaging on a shared office server, see
 **[Work Chat setup](WORK_CHAT.md)**. The Python server provides username/password
 sign-up, a shared Team Room, private direct messages, and a browser interface.
 Desktop clients open **Chat → Work Chat · Coworkers**. Jeffery's existing Groq AI
-chat is under **Chat → Talk to Jeffery · Groq**. Work Chat needs a separately
-installed server and a trusted HTTPS connection on the office network.
+chat is under **Chat → Talk to Jeffery · Groq**. On the main office PC, run
+**Start_Work_Server.bat**; on each coworker's PC, enter the main PC's IP in Work
+Chat and create an account. The launcher uses office-only HTTP on port 8765
+without certificates; passwords and messages travel unencrypted. Optional
+verified HTTPS is documented in the setup guide.
 
 The launcher installs PySide6, psutil, pypdf, PDFium, Pillow, Trafilatura, and
 RapidFuzz into its own virtual environment

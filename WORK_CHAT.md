@@ -7,85 +7,112 @@ in a locally installed copy of Buddy. Chat updates approximately every two secon
 while open. This chat is separate from the existing Groq AI conversation.
 
 The proposed work server is Windows at **192.168.50.194**. Confirm its IPv4
-address with `ipconfig` on that machine before setting up DNS, certificates, or
-client connections. The intended workplace address is:
+address with `ipconfig` on that machine. The simple office setup uses:
 
 ```text
-https://192.168.50.194:8443
+http://192.168.50.194:8765
 ```
+
+In Jeffery, entering just **192.168.50.194** selects that address and port
+automatically. This setup requires no certificates. Passwords, session tokens,
+and messages travel unencrypted over the office network; use it only on the
+trusted office LAN. Verified HTTPS remains available as an optional setup below.
 
 The code has been tested locally. It has not been installed on that work server.
 
 ## Install on the Windows work server
 
-Install 64-bit Python 3.11 or newer. Clone or update this repository into a local
-folder such as `C:\Jeffery\pixel-pet`, then open PowerShell in that folder:
+1. Install 64-bit Python 3.11 or newer on the main PC.
+2. Download the updated GitHub ZIP, or clone/update this repository, into a local
+   folder such as `C:\Jeffery\pixel-pet`. Use the complete project files.
+3. Double-click **Start_Work_Server.bat**. It creates `.server-venv` and installs
+   or refreshes the server dependencies automatically. The first setup needs
+   internet access. No certificate files are required.
+4. Leave its window open. Ctrl+C stops the service. Keep the main PC on and awake
+   whenever coworkers need chat. The desktop pet does not need to be open on
+   the server for chat to work.
+
+You can also prepare dependencies separately with **Setup_Work_Server.bat**.
+For a manual PowerShell setup, run these commands from the project folder:
 
 ```powershell
 py -3 -m venv .server-venv
 .\.server-venv\Scripts\python.exe -m pip install -r requirements-server.txt
 .\.server-venv\Scripts\python.exe -m pip check
+.\.server-venv\Scripts\python.exe -m work_server --host 0.0.0.0 --port 8765 --database server-data\work-chat.sqlite --allow-lan-http
 ```
 
 The server has its own optional dependencies; desktop clients do not need them.
 Keep the database on the server's local disk. Do not put SQLite on an SMB share
 or give workstations write access to it.
 
-Ask your administrator for a TLS certificate and private key in PEM format.
-The certificate must include `192.168.50.194` as an IP subject alternative name,
-or use an internal DNS name with a matching DNS subject alternative name instead.
-Every client must trust the issuing CA. The Windows browser and Buddy's Qt TLS
-backend can use different trust configuration; verify both clients on the actual
-work PCs. Certificate checks are enforced and cannot be bypassed in Work Chat.
-Store the certificate chain as `server-data\tls\server.crt` and the key as
-`server-data\tls\server.key`; protect that folder so only the server service
-account and administrators can access it. These files and the database are
-excluded from Git.
-
-Start the server in PowerShell:
-
-```powershell
-.\.server-venv\Scripts\python.exe -m work_server --host 0.0.0.0 --port 8443 --database server-data\work-chat.sqlite --certfile server-data\tls\server.crt --keyfile server-data\tls\server.key
-```
-
-Alternatively, after completing the dependency and certificate setup, run
-**Start_Work_Server.bat** from the server's local copy. Keep its window open while
-testing; Ctrl+C stops the service. For regular use, have your administrator run
-the same command through Windows Task Scheduler or your usual service manager,
-using this repository as its working directory and a dedicated Windows account.
-Start the chat service rather than the desktop pet on the server.
-
-Allow incoming TCP port 8443 only from the actual office subnet. For example, if
+Allow incoming TCP port 8765 only from the actual office subnet. For example, if
 your administrator confirms the office uses `192.168.50.0/24`, this elevated
 PowerShell command adds a Windows firewall rule for that subnet:
 
 ```powershell
-New-NetFirewallRule -DisplayName "Jeffery Work Chat - office LAN" -Direction Inbound -Action Allow -Protocol TCP -LocalPort 8443 -RemoteAddress 192.168.50.0/24 -Profile Domain,Private
+New-NetFirewallRule -DisplayName "Jeffery Work Chat - office LAN HTTP" -Direction Inbound -Action Allow -Protocol TCP -LocalPort 8765 -RemoteAddress 192.168.50.0/24 -Profile Domain,Private
 ```
 
 No router port forwarding is needed. The application rejects public socket
-addresses, ignores forwarded-address headers, and requires HTTPS for connections
-from another computer. The subnet-specific firewall rule determines which
-workplace network can reach it. This version is intended for the office LAN.
+addresses and ignores forwarded-address headers even in HTTP mode. The
+subnet-specific firewall rule determines which workplace network can reach it.
+Do not expose this service to the internet. Keep the server IP consistent so
+coworkers do not have to change their saved address.
+
+For automatic startup later, have your administrator run the manual server
+command through Windows Task Scheduler or your usual service manager, using
+this repository as its working directory and a dedicated Windows account.
 
 ## Connect coworkers
 
-1. On each work PC, open `https://192.168.50.194:8443` in a browser. If you used
-   internal DNS, use that matching HTTPS name instead.
-2. Choose **Create account**, enter a unique username, a password, and its
+1. Put a clean, complete project copy in a separate local folder on each work
+   PC. Install 64-bit Python 3.11 or newer, then run **Start_Buddy.bat**. It installs
+   the desktop dependencies on first launch, which also needs internet access.
+2. Right-click Jeffery, open **Chat → Work Chat · Coworkers**, and enter
+   **192.168.50.194** in the server field. Use the actual server IP if different.
+   Bare IPs use HTTP port 8765; for another port, enter `192.168.50.194:PORT`.
+   An explicit URL such as `http://192.168.50.194:8765` also works.
+3. Choose **Create account**, enter a unique username, a password, and its
    confirmation. Usernames contain 3–32 letters, numbers, underscores, dots, or
    dashes; they are case-insensitive. Passwords contain 12–128 characters.
-3. Open **Team Room** for everyone, or select a coworker for direct messages.
+4. Open **Team Room** for everyone, or select a coworker for direct messages.
    Coworkers appear after creating accounts. Use Refresh if needed.
-4. To use the desktop pet as well, install a separate local Buddy copy on each
-   workstation. Open **Chat → Work Chat · Coworkers**, enter the same server
-   address, and sign in with the same account.
+
+Only the main PC runs **Start_Work_Server.bat**. Everyone connects to that one
+server; they do not start their own chat servers. Accounts and message history
+stay in the main PC's `server-data` folder and survive restarts.
+
+As an alternative to installing Jeffery, coworkers can open
+`http://192.168.50.194:8765` in a browser and use the same accounts and chats.
 
 Each desktop copy keeps its existing notebook, memory, and settings locally.
 Do not have everyone launch the portable desktop app from the same writable
 server folder: that would share its `data` folder. Work Chat itself is shared
 through the Python API. The current mobile app has not been connected to this
 API; its existing Groq chat and manual notebook transfers continue to work.
+
+Distribute the clean source ZIP or Git checkout, excluding `.venv`,
+`.server-venv`, `data`, and `server-data`. Do not copy virtual environments or
+someone else's notebook/settings to coworkers' PCs. Existing packaged EXEs
+need rebuilding to include these changes; use **Start_Buddy.bat** with the new
+source files for this setup.
+
+## Check the connection at work
+
+Create different accounts on two PCs, select each other in the coworker list,
+and send a message in each direction. New messages should appear in about two
+seconds while the conversation is open. Then send a Team Room message and
+check that both accounts see it. Direct messages should stay out of Team Room.
+
+If another PC cannot connect, open `http://192.168.50.194:8765/api/health` in its
+browser. It should show a JSON response with `"status":"ok"`. Confirm the actual
+server IP, that the server window is still open, the Windows network profile,
+and the port 8765 firewall rule. From that PC, PowerShell can also check:
+
+```powershell
+Test-NetConnection 192.168.50.194 -Port 8765
+```
 
 ## Accounts and message storage
 
@@ -100,6 +127,9 @@ API; its existing Groq chat and manual notebook transfers continue to work.
   recipient; Team Room messages are visible to every signed-in user. Message
   history is stored in the server database. Administrators with database access
   can read it; this is not end-to-end encryption.
+- In certificate-free HTTP mode, these access checks do not protect against
+  someone intercepting traffic on the network. Password hashes protect stored
+  passwords; they do not encrypt passwords sent during sign-in.
 - The clients initially load the latest 50 messages in the selected conversation
   and retain up to 500 visible messages as new ones arrive. Older messages remain
   in the database; this version has no scroll-back browser or retention policy.
@@ -119,17 +149,44 @@ revokes all sessions for that account. Restart the server afterward.
 For backups, stop the server, copy the complete `server-data` folder to a
 protected backup location, then restart. Preserve the database and any existing
 SQLite WAL/SHM files together. Backups contain workplace chat history and TLS
-private keys; limit access accordingly. Restore while the server is stopped.
+private keys if HTTPS is configured; limit access accordingly. Restore while
+the server is stopped.
+
+## Optional HTTPS later
+
+For encrypted traffic, ask your administrator for a TLS certificate and
+private key in PEM format. The certificate must include `192.168.50.194` as an
+IP subject alternative name, or use an internal DNS name with a matching DNS
+subject alternative name. Every client must trust the issuing CA. The Windows
+browser and Buddy's Qt TLS backend can use different trust configuration;
+verify both clients on the actual work PCs. HTTPS certificate checks remain
+enforced and cannot be bypassed.
+
+Store the certificate chain as `server-data\tls\server.crt` and the key as
+`server-data\tls\server.key`; protect that folder so only the server service
+account and administrators can access it. These files and the database are
+excluded from Git. Stop the HTTP server and use this command instead of the
+HTTP launcher:
+
+```powershell
+.\.server-venv\Scripts\python.exe -m work_server --host 0.0.0.0 --port 8443 --database server-data\work-chat.sqlite --certfile server-data\tls\server.crt --keyfile server-data\tls\server.key
+```
+
+Allow TCP port 8443 from the office subnet, enter
+`https://192.168.50.194:8443` in each client, and close the old port 8765 firewall
+rule if it is no longer needed. The same database preserves accounts and
+history. Direct CLI LAN starts without `--allow-lan-http` still require HTTPS.
 
 ## Local development and checks
 
-Plain HTTP is permitted only on the same computer for development:
+The default CLI starts a loopback-only development server without certificates:
 
 ```powershell
 .\.server-venv\Scripts\python.exe -m work_server --port 8765 --database server-data\development.sqlite
 ```
 
-Open `http://127.0.0.1:8765` locally; other computers must use the HTTPS setup.
+Open `http://127.0.0.1:8765` locally. LAN HTTP requires the explicit
+`--allow-lan-http` option used by **Start_Work_Server.bat**.
 To run the backend and desktop checks:
 
 ```powershell
@@ -137,6 +194,11 @@ To run the backend and desktop checks:
 .\.venv\Scripts\python.exe -m unittest discover -s tests -p test_work_chat.py -v
 .\.venv\Scripts\python.exe tests\check_work_chat_integration.py
 ```
+
+To exercise the same two-client Qt workflow through a private IPv4 socket on
+this computer, set `WORK_CHAT_TEST_LAN_IP` to its actual LAN IP before running
+the integration script. It uses a disposable database and temporary port, then
+stops its own server. It does not connect to the work server or existing accounts.
 
 The optional browser workflow creates its own temporary server, database, and
 synthetic accounts, then shuts them down:
@@ -148,8 +210,9 @@ synthetic accounts, then shuts them down:
 ```
 
 The server and browser checks also run in their own GitHub Actions job. Office
-certificate trust, firewall configuration, concurrent real-workplace use, and
-Windows service deployment still need validation on the actual work network.
+firewall configuration, concurrent real-workplace use, and Windows service
+deployment still need validation on the actual work network. Certificate trust
+needs validation only if you enable HTTPS later.
 
 References: [Argon2 password storage guidance](https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html),
 [SQLite on network filesystems](https://www.sqlite.org/useovernet.html),

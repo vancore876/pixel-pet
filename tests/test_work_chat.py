@@ -94,6 +94,18 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(self.window.pages.currentIndex(), 1)
         self.assertTrue(self.window.poll_timer.isActive())
 
+    def test_office_ip_connects_and_saves_default_http_address(self):
+        self.window.server.setText("192.168.50.194")
+        self.window.username.setText("alice")
+        self.window.password.setText("an-example-password")
+        self.window.authenticate()
+        self.assertEqual(self.api.base_url, "http://192.168.50.194:8765")
+        self.assertEqual(self.window.server.text(), "http://192.168.50.194:8765")
+        self.assertEqual(self.api.pending("/api/auth/login")["body"],
+                         {"username": "alice", "password": "an-example-password"})
+        saved = json.loads(self.settings.path.read_text())
+        self.assertEqual(saved["work_chat_server"], "http://192.168.50.194:8765")
+
     def test_signup_confirmation_prevents_mistyped_password(self):
         self.window.signup.setChecked(True)
         self.assertFalse(self.window.confirm_password.isHidden())
@@ -260,15 +272,51 @@ class ClientTests(unittest.TestCase):
 
 
 class UrlTests(unittest.TestCase):
-    def test_https_and_literal_loopback_only(self):
-        for value, expected in ((" https://CHAT.office.example:8443/ ", "https://chat.office.example:8443"),
+    def test_bare_office_ip_gets_default_http_port(self):
+        for value, expected in ((" 192.168.50.194 ", "http://192.168.50.194:8765"),
+                                ("10.20.30.40", "http://10.20.30.40:8765"),
+                                ("172.31.255.254:9000", "http://172.31.255.254:9000"),
+                                ("fd00::194", "http://[fd00::194]:8765"),
+                                ("[FD00:0:0:0:0:0:0:194]", "http://[fd00::194]:8765"),
+                                ("[fd00::194]:9000", "http://[fd00::194]:9000"),
+                                ("localhost", "http://localhost:8765")):
+            with self.subTest(value=value):
+                self.assertEqual(normalize_server_url(value), expected)
+
+    def test_explicit_http_accepts_only_office_and_loopback_addresses(self):
+        for value, expected in (("http://192.168.50.194:8765/", "http://192.168.50.194:8765"),
+                                ("http://10.0.0.1", "http://10.0.0.1"),
+                                ("http://172.16.0.1:9000", "http://172.16.0.1:9000"),
+                                ("http://[fc00::1]:8765", "http://[fc00::1]:8765"),
+                                ("http://[::ffff:192.168.50.194]:8765", "http://[::ffff:192.168.50.194]:8765"),
                                 ("http://127.0.0.1:8765", "http://127.0.0.1:8765"),
+                                ("http://127.0.0.2", "http://127.0.0.2"),
                                 ("http://localhost/", "http://localhost"),
                                 ("http://[::1]:8765", "http://[::1]:8765")):
             with self.subTest(value=value):
                 self.assertEqual(normalize_server_url(value), expected)
-        for value in ("http://192.168.1.5:8765", "http://office-server", "http://127.0.0.2",
-                      "http://localhost.evil.example", "http://2130706433", "http://127.1",
+
+    def test_https_remains_available_for_verified_server_names_and_public_ips(self):
+        for value, expected in ((" https://CHAT.office.example:8443/ ", "https://chat.office.example:8443"),
+                                ("https://8.8.8.8", "https://8.8.8.8"),
+                                ("https://[2001:4860:4860::8888]", "https://[2001:4860:4860::8888]")):
+            with self.subTest(value=value):
+                self.assertEqual(normalize_server_url(value), expected)
+
+    def test_plaintext_outside_office_and_ambiguous_numeric_addresses_are_rejected(self):
+        for value in ("8.8.8.8", "http://8.8.8.8:8765", "http://172.15.255.255", "http://172.32.0.1",
+                      "http://192.169.0.1", "http://169.254.10.20", "http://100.64.0.1",
+                      "http://0.0.0.0", "http://255.255.255.255", "http://[::]", "http://[fe80::1]",
+                      "http://[2001:db8::1]", "http://[2001:4860:4860::8888]", "http://[::ffff:8.8.8.8]",
+                      "office-server", "http://office-server", "http://localhost.evil.example",
+                      "http://2130706433", "http://127.1", "http://0177.0.0.1", "http://0x7f000001",
+                      "192.168.050.194", "https://2130706433", "https://127.1", "https://0x7f.0.0.1"):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                normalize_server_url(value)
+
+    def test_invalid_origins_are_rejected(self):
+        for value in ("", "192.168.50.194:0", "192.168.50.194:65536", "192.168.50.194:",
+                      "192.168.50.194/api", "user:pass@192.168.50.194", "http://[fd00::1%eth0]",
                       "https://user:pass@office-server", "https://office-server/api", "https://office-server?",
                       "https://office-server#", "https://office-server:0", "https://office-server:65536",
                       "https://office-server:", "https://office-server\\@evil", "https://office\nserver", "file:///server"):

@@ -42,13 +42,15 @@ def main(argv=None):
     parser.add_argument("--database", default="server-data/work-chat.sqlite")
     parser.add_argument("--certfile", help="TLS certificate PEM, trusted by the work computers")
     parser.add_argument("--keyfile", help="TLS private-key PEM")
+    parser.add_argument("--allow-lan-http", action="store_true",
+                        help="Allow unencrypted HTTP from local-network clients without certificates")
     arguments = parser.parse_args(argv)
     if not 1 <= arguments.port <= 65535:
         parser.error("Port must be between 1 and 65535.")
     if bool(arguments.certfile) != bool(arguments.keyfile):
         parser.error("Provide both --certfile and --keyfile for HTTPS.")
-    if not loopback_host(arguments.host) and not arguments.certfile:
-        parser.error("LAN connections require HTTPS. Provide --certfile and --keyfile; HTTP is allowed only on loopback for development.")
+    if not loopback_host(arguments.host) and not arguments.certfile and not arguments.allow_lan_http:
+        parser.error("LAN connections require HTTPS by default. Provide --certfile and --keyfile, or explicitly use --allow-lan-http for an unencrypted office LAN.")
     for value in (arguments.certfile, arguments.keyfile):
         if value and not Path(value).is_file():
             parser.error("The certificate or private-key file does not exist.")
@@ -57,7 +59,7 @@ def main(argv=None):
         from .app import create_app
     except ImportError:
         parser.error("Install the optional server dependencies with: python -m pip install -r requirements-server.txt")
-    app = create_app(arguments.database)
+    app = create_app(arguments.database, allow_lan_http=arguments.allow_lan_http)
     uvicorn.run(app, host=arguments.host, port=arguments.port,
                 ssl_certfile=arguments.certfile, ssl_keyfile=arguments.keyfile,
                 proxy_headers=False, access_log=False, server_header=False,

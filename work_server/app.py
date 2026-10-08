@@ -55,9 +55,10 @@ def is_loopback_address(value):
 class RequestGuard:
     """Reject off-LAN clients and oversized streamed bodies before parsing JSON."""
 
-    def __init__(self, app, body_timeout_seconds=10):
+    def __init__(self, app, body_timeout_seconds=10, *, allow_lan_http=False):
         self.app = app
         self.body_timeout_seconds = body_timeout_seconds
+        self.allow_lan_http = allow_lan_http
 
     async def __call__(self, scope, receive, send):
         if scope["type"] != "http":
@@ -83,7 +84,7 @@ class RequestGuard:
         if not client or not is_lan_address(client[0]):
             await reject(403, "Work chat is available only on the local work network.")
             return
-        if not is_loopback_address(client[0]) and scope.get("scheme") != "https":
+        if not self.allow_lan_http and not is_loopback_address(client[0]) and scope.get("scheme") != "https":
             await reject(426, "Work network connections require HTTPS.")
             return
         headers = {name.lower(): value for name, value in scope.get("headers", [])}
@@ -179,7 +180,7 @@ class NewMessage(BaseModel):
 def create_app(database_path="server-data/work-chat.sqlite", *, clock=time.time,
                session_seconds=8 * 60 * 60, auth_limit=20, send_limit=60,
                rate_window_seconds=60, static_directory=None, account_auth_limit=10,
-               max_users=1000):
+               max_users=1000, allow_lan_http=False):
     app = FastAPI(title="Jeffery Work Chat", docs_url=None, redoc_url=None, openapi_url=None,
                   telemetry={"tracing": False, "metrics": False, "logs": False, "auto_configure": False})
     store = ChatStore(database_path, clock=clock, session_seconds=session_seconds, max_users=max_users)
@@ -190,7 +191,7 @@ def create_app(database_path="server-data/work-chat.sqlite", *, clock=time.time,
     app.state.auth_limiter = auth_limiter
     app.state.account_limiter = account_limiter
     app.state.send_limiter = send_limiter
-    app.add_middleware(RequestGuard)
+    app.add_middleware(RequestGuard, allow_lan_http=allow_lan_http)
 
     @app.exception_handler(StoreError)
     async def expected_error(request, error):

@@ -5,6 +5,7 @@ tokens live in memory, and all network work runs asynchronously on Qt's loop.
 """
 from __future__ import annotations
 
+import ipaddress
 import json
 import re
 from datetime import datetime
@@ -25,14 +26,26 @@ REQUEST_TIMEOUT_MS = 10_000
 MAX_VISIBLE_MESSAGES = 500
 MESSAGE_BATCH_LIMIT = 50  # 4000 four-byte Unicode characters × 50 fits in 1 MiB.
 USERNAME_RE = re.compile(r"[A-Za-z0-9_.-]{3,32}\Z")
+_NUMERIC_HOST_RE = re.compile(r"(?:0[xX][0-9a-fA-F]+|[0-9]+)(?:\.(?:0[xX][0-9a-fA-F]+|[0-9]+)){0,3}\.?\Z")
+_OFFICE_NETWORKS = tuple(ipaddress.ip_network(network) for network in
+                         ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "fc00::/7"))
 _CURRENT_CONVERSATION = object()
 
 
 def normalize_server_url(value: str) -> str:
-    """Validate an API origin without ever permitting plaintext LAN passwords."""
+    """Accept an office IP or origin, restricting HTTP to literal private IPs."""
     value = value.strip()
-    if not value or any(char.isspace() or ord(char) < 32 for char in value) or "\\" in value:
-        raise ValueError("Enter the office server's HTTPS address, such as https://chat.office.example:8443.")
+    if (not value or any(char.isspace() or ord(char) < 32 for char in value)
+            or "\\" in value or "%" in value):
+        raise ValueError("Enter the office server's IP address, such as 192.168.50.194.")
+    bare_address = "://" not in value
+    if bare_address:
+        try:
+            address = ipaddress.ip_address(value)
+        except ValueError:
+            value = "http://" + value
+        else:
+            value = "http://" + (f"[{address}]" if address.version == 6 else str(address))
     try:
         parts = urlsplit(value)
         port = parts.port
@@ -41,12 +54,30 @@ def normalize_server_url(value: str) -> str:
     if (parts.scheme.lower() not in ("http", "https") or not parts.hostname
             or parts.username is not None or parts.password is not None or "@" in parts.netloc
             or parts.path not in ("", "/") or "?" in value or "#" in value):
-        raise ValueError("Use only the server's HTTPS address and optional port, without a path or login details.")
+        raise ValueError("Use only the server IP or HTTP/HTTPS address and optional port, without a path or login details.")
     host = parts.hostname.lower()
-    if parts.scheme.lower() == "http" and host not in ("127.0.0.1", "localhost", "::1"):
-        raise ValueError("Office connections require HTTPS. HTTP is allowed only on this computer for testing.")
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        address = None
+        if _NUMERIC_HOST_RE.fullmatch(host):
+            raise ValueError("Enter a complete IP address, such as 192.168.50.194.") from None
+    if address is not None:
+        # IPv4-mapped IPv6 addresses follow the same office range restrictions.
+        checked_address = address.ipv4_mapped if address.version == 6 else None
+        host = "::ffff:" + str(checked_address) if checked_address else str(address)
+        checked_address = checked_address or address
+        office_address = (checked_address.is_loopback or any(
+            checked_address.version == network.version and checked_address in network
+            for network in _OFFICE_NETWORKS))
+    else:
+        office_address = host == "localhost"
+    if parts.scheme.lower() == "http" and not office_address:
+        raise ValueError("HTTP requires a private office IP address. For a server name or public IP, use HTTPS.")
     if parts.netloc.endswith(":") or port == 0:
         raise ValueError("The server port must be between 1 and 65535.")
+    if bare_address and port is None:
+        port = 8765
     authority = f"[{host}]" if ":" in host else host
     if port is not None:
         authority += f":{port}"
@@ -109,7 +140,7 @@ class _ApiClient(QObject):
         state = self._pending.get(reply)
         if state:
             state["error"] = "The server certificate could not be verified. Ask your administrator to install a trusted certificate."
-            # Never call ignoreSslErrors: office credentials require verified TLS.
+            # HTTPS always verifies certificates, even when LAN HTTP is enabled.
             reply.abort()
 
     def _timeout(self, reply):
@@ -130,7 +161,7 @@ class _ApiClient(QObject):
         error = state["error"]
         data = None
         if not error and 300 <= status < 400:
-            error = "The server redirected this request. Enter its final HTTPS address and try again."
+            error = "The server redirected this request. Enter its final address and try again."
         if not error and state["buffer"]:
             try:
                 data = json.loads(state["buffer"].decode("utf-8"))
@@ -210,7 +241,7 @@ class WorkChatWindow(QDialog):
         layout.addWidget(self.pages, 1)
         self._build_auth()
         self._build_chat()
-        self.status = QLabel("Enter the server address supplied by your office administrator.")
+        self.status = QLabel("Enter the main computer's office IP address. HTTP office connections are unencrypted.")
         self.status.setObjectName("hint")
         self.status.setTextFormat(Qt.PlainText)
         self.status.setWordWrap(True)
@@ -226,7 +257,7 @@ class WorkChatWindow(QDialog):
         form.setSpacing(12)
         self.server = QLineEdit()
         self.server.setMaxLength(2048)
-        self.server.setPlaceholderText("https://chat.office.example:8443")
+        self.server.setPlaceholderText("192.168.50.194")
         self.server.setAccessibleName("Office Work Chat server address")
         self.username = QLineEdit()
         self.username.setMaxLength(32)
@@ -240,7 +271,7 @@ class WorkChatWindow(QDialog):
         self.confirm_password.setMaxLength(128)
         self.confirm_password.setEchoMode(QLineEdit.Password)
         self.confirm_password.setAccessibleName("Confirm Work Chat password")
-        for name, widget in (("Server", self.server), ("Username", self.username), ("Password", self.password)):
+        for name, widget in (("Server IP or address", self.server), ("Username", self.username), ("Password", self.password)):
             label = QLabel(name)
             label.setBuddy(widget)
             form.addRow(label, widget)
