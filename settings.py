@@ -61,6 +61,10 @@ class AppSettings:
                 result[key] = cleaned or default
             elif key == "business_name":
                 result[key] = "".join(c for c in value if c.isprintable()).strip()[:80] if isinstance(value, str) else ""
+            elif key == "work_chat_server":
+                result[key] = value.strip()[:500] if isinstance(value, str) and all(c.isprintable() for c in value) else ""
+            elif key == "work_chat_username":
+                result[key] = value.strip()[:32] if isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9_.-]*", value.strip()) else ""
             elif key == "ai_model":
                 cleaned = value.strip() if isinstance(value, str) else ""
                 result[key] = cleaned if 0 < len(cleaned) <= 100 and all(c.isalnum() or c in '/-._' for c in cleaned) else default

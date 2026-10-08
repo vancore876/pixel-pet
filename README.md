@@ -13,6 +13,13 @@ play remain available.
 2. Run **Start_Buddy.bat**. Python 3.11 or newer, 64-bit, is needed.
 3. Right-click Jeffery to open his menu.
 
+For accounts and coworker messaging on a shared office server, see
+**[Work Chat setup](WORK_CHAT.md)**. The Python server provides username/password
+sign-up, a shared Team Room, private direct messages, and a browser interface.
+Desktop clients open **Chat → Work Chat · Coworkers**. Jeffery's existing Groq AI
+chat is under **Chat → Talk to Jeffery · Groq**. Work Chat needs a separately
+installed server and a trusted HTTPS connection on the office network.
+
 The launcher installs PySide6, psutil, pypdf, PDFium, Pillow, Trafilatura, and
 RapidFuzz into its own virtual environment
 on the first run, and refreshes missing or changed dependencies after updates.

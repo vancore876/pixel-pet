@@ -1,5 +1,17 @@
 # Jeffery 6.0 verification
 
+The optional Work Chat update passed 18 backend authentication/privacy/storage
+checks, 18 desktop client/transport checks, and disposable two-account Qt and
+browser workflows. Checks include unauthorized private-message reads, session
+expiration/revocation, password reset, request/rate limits, HTTPS/LAN boundaries,
+literal message rendering, late conversation replies, and preserved drafts.
+Windows and browser layouts were visually inspected. The full desktop unit
+run completed 353 tests with 15 errors and 19 skips on this Windows/Python 3.14
+host. Errors concern existing Windows epoch-time conversion and locked SQLite
+files during test cleanup; representative failures reproduce on the pristine
+pre-chat commit. Office deployment, certificate trust, firewall/service setup,
+and real workplace load remain unverified. See WORK_CHAT.md for setup.
+
 The one-billion-character notebook update passed 213 desktop unit tests, seven
 Qt GUI workflows, and the desktop startup smoke test. Checks cover streamed
 full text beyond the preview, Unicode character quotas, indexed recall after

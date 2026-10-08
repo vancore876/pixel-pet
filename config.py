@@ -33,6 +33,7 @@ DEFAULTS = {
     "memory_enabled": True, "memory_ai": True, "ai_share_memory": True,
     "pdf_engine": "auto", "pdf_ocr": False, "ocr_language": "eng", "tesseract_path": "",
     "semantic_memory_enabled": False, "semantic_model_path": "",
+    "work_chat_server": "", "work_chat_username": "",
 }
 
 

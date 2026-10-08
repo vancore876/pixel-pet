@@ -27,6 +27,7 @@ from notepad_window import NotepadWindow, ReminderPopup, StickyNote
 from launcher import QuickLauncher, LauncherWindow, start_app
 from credentials import CredentialStore
 from ai_chat import ChatWindow
+from work_chat import WorkChatWindow
 from folder_play import FolderHabitat
 from letter_play import LetterPlayground
 from real_desktop import RealDesktopPlay
@@ -79,6 +80,7 @@ class BuddyApp(QObject):
         self.latest_snapshot = None
         self.chat = ChatWindow(self.settings, self.credentials, self.ai_context, self.run_buddy_action,
             memory_store=self.memory_store, notebook_store=self.notes_store, semantic_service=self.semantic)
+        self.work_chat = WorkChatWindow(self.settings)
         self.chat.user_message.connect(self.memory_learner.observe)
         self.chat.notepad_requested.connect(self.show_notepad)
         self.chat.memory_requested.connect(self.show_memory)
@@ -180,7 +182,9 @@ class BuddyApp(QObject):
         self.note_service.start()
 
     def build_menu(self, menu):
-        menu.addAction("Talk to Jeffery · Groq", self.show_chat)
+        chat = menu.addMenu("Chat")
+        chat.addAction("Work Chat · Coworkers", self.show_work_chat)
+        chat.addAction("Talk to Jeffery · Groq", self.show_chat)
         notes = menu.addMenu("Notes && Focus")
         notes.addAction("Jeffery's Notepad", self.show_notepad)
         notes.addAction("Open Linked Text File", self.open_linked_notepad)
@@ -311,6 +315,7 @@ class BuddyApp(QObject):
         self.note_popup.configure()
         self.launcher_window.configure()
         self.chat.configure()
+        self.work_chat.configure()
         self.configure_semantic_memory(changes)
         self.memory_window.configure()
         if not self.settings["memory_enabled"] or not self.settings["memory_ai"] or not self.settings["ai_share_memory"]:
@@ -731,6 +736,11 @@ class BuddyApp(QObject):
         self.launcher_window.raise_()
         self.launcher_window.activateWindow()
 
+    def show_work_chat(self):
+        self.work_chat.show()
+        self.work_chat.raise_()
+        self.work_chat.activateWindow()
+
     def popup_menu(self, position):
         self.pause_action.setText("Resume Buddy" if self.pet.paused else "Pause Buddy")
         self.menu.popup(position)
@@ -797,6 +807,7 @@ class BuddyApp(QObject):
         self.overlay.stop_animation()
         self.notepad.shutdown()
         self.chat.shutdown()
+        self.work_chat.shutdown()
         self.memory_learner.stop()
         self.memory_window.hide()
         self.pet.timer.stop()

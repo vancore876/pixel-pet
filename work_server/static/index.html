@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Jeffery · Work Chat</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <main id="auth-view" class="auth-shell">
+    <aside class="welcome">
+      <div class="brand"><span class="buddy-mark" aria-hidden="true">J</span><span>JEFFERY <small>WORK CHAT</small></span></div>
+      <div class="welcome-copy"><span class="eyebrow">A LITTLE BUDDY. A CONNECTED TEAM.</span><h1>Your team,<br>one conversation away.</h1><p>Catch up in the team room or message a coworker directly. Everyone has their own account.</p></div>
+      <div class="network-note"><span class="status-dot"></span><span>Hosted on your work server<br><small id="server-name"></small></span></div>
+    </aside>
+    <section class="auth-panel" aria-labelledby="auth-title">
+      <div class="auth-card">
+        <span class="eyebrow">WELCOME TO WORK CHAT</span><h2 id="auth-title">Good to see you.</h2><p class="muted" id="auth-subtitle">Sign in to join your coworkers.</p>
+        <div class="auth-tabs" aria-label="Account action"><button id="signin-tab" type="button" class="selected" aria-pressed="true">Sign in</button><button id="signup-tab" type="button" aria-pressed="false">Create account</button></div>
+        <form id="auth-form">
+          <label for="username">Username</label><input id="username" name="username" autocomplete="username" minlength="3" maxlength="32" pattern="[A-Za-z0-9_.\-]{3,32}" required spellcheck="false" placeholder="Your username">
+          <label for="password">Password</label><input id="password" name="password" type="password" autocomplete="current-password" maxlength="128" required>
+          <div id="confirm-field" hidden><label for="confirm-password">Confirm password</label><input id="confirm-password" type="password" autocomplete="new-password" maxlength="128"></div>
+          <p id="signup-hint" class="field-hint" hidden>Use 3–32 letters, numbers, dots, dashes, or underscores for your username, and at least 12 characters for your password.</p>
+          <p id="auth-error" class="error" role="alert"></p><button id="auth-submit" class="primary" type="submit">Sign in</button>
+        </form>
+        <p class="field-hint">Your account belongs to this work server. Chat messages stay on the server; they are separate from Jeffery’s AI conversations.</p>
+      </div>
+    </section>
+  </main>
+  <main id="chat-view" class="chat-shell" hidden>
+    <aside class="sidebar">
+      <div class="brand"><span class="buddy-mark" aria-hidden="true">J</span><span>JEFFERY <small>WORK CHAT</small></span></div>
+      <div class="sidebar-section"><span class="eyebrow">YOUR WORKSPACE</span><button id="team-room" class="conversation selected" type="button"><span class="room-icon" aria-hidden="true">#</span><span>Team Room<small>Everyone in your workplace</small></span></button></div>
+      <div class="people-heading"><span class="eyebrow">DIRECT MESSAGES</span><button id="refresh-users" class="icon-button" type="button" aria-label="Refresh coworkers">↻</button></div>
+      <label class="sr-only" for="people-search">Find a coworker</label><input id="people-search" class="people-search" type="search" placeholder="Find a coworker…" autocomplete="off">
+      <div id="people-list" class="people-list" aria-label="Coworkers"></div>
+      <p id="people-empty" class="field-hint">Coworkers will appear here after they create an account.</p>
+      <div class="account"><div class="avatar" id="account-avatar" aria-hidden="true"></div><div><strong id="account-name"></strong><small>Signed in</small></div><button id="signout" type="button" class="text-button">Sign out</button></div>
+    </aside>
+    <section class="conversation-panel" aria-labelledby="conversation-title">
+      <header class="conversation-header"><div><span class="eyebrow">WORKSPACE CHAT</span><h1 id="conversation-title">Team Room</h1><p id="conversation-subtitle">A shared space for your team.</p></div><button id="refresh-messages" class="secondary" type="button">Refresh</button></header>
+      <div id="connection-status" class="connection-status" role="status">Connecting…</div>
+      <div id="messages-scroll" class="messages-scroll"><div id="empty-conversation" class="empty-conversation"><span class="empty-mark" aria-hidden="true">✦</span><h2>Start the conversation.</h2><p>A quick hello is a good place to begin.</p></div><ol id="messages" class="messages" aria-label="Messages" aria-live="polite" aria-relevant="additions"></ol></div>
+      <form id="message-form" class="composer"><label class="sr-only" for="message-body">Message</label><textarea id="message-body" rows="3" maxlength="4000" placeholder="Message the team…" required></textarea><div class="composer-footer"><span id="message-hint">Ctrl+Enter to send · Latest 50 messages on opening</span><button id="send-message" class="primary" type="submit">Send message <span aria-hidden="true">↗</span></button></div></form>
+    </section>
+  </main>
+  <noscript>Enable JavaScript to use Work Chat.</noscript>
+</body>
+</html>

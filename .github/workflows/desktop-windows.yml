@@ -14,6 +14,29 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  work-chat:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            requirements-server.txt
+            requirements-server-dev.txt
+      - name: Install optional work server and browser test dependencies
+        run: |
+          python -m pip install -r requirements-server-dev.txt
+          python -m pip check
+          python -m playwright install --with-deps chromium
+      - name: Check server authentication, privacy, persistence, and limits
+        run: python -m unittest discover -s tests -p "test_work_server.py" -v
+      - name: Check the browser chat workflow
+        run: python tests/check_work_chat_web.py
   desktop:
     runs-on: windows-latest
     timeout-minutes: 35
