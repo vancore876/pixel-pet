@@ -123,6 +123,8 @@ def hidden_checks():
         buddy.folders.emerge(silent=True)
         buddy.pet.move(300, 400)
         buddy.pet.real_x, buddy.pet.real_y = 300.0, 400.0
+        # Cursor checks must not race the real CPU meter's EXCITED reaction.
+        buddy.apply_settings({"reactions": False})
         for mode, expected in (("chase", "CHASE"), ("shy", "SHY"), ("watch", "LOOK")):
             buddy.set_mouse_mode(mode)
             buddy.pet.action_state = None

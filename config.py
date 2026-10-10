@@ -11,6 +11,7 @@ ROOT = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) el
 ASSETS = Path(getattr(sys, "_MEIPASS", ROOT)) / "assets" / "pet"
 DEFAULTS = {
     "always_on_top": True, "start_with_windows": False, "launch_minimized": False,
+    "interface_appearance": "light", "home_on_start": True,
     "show_cpu": True, "show_ram": True, "show_disk": True, "show_network": True,
     "show_gpu": True, "opacity": 88, "interval_ms": 1000, "compact": False,
     "graphs": True, "click_through": False, "overlay_visible": True,

@@ -1,62 +1,68 @@
 """Accessible settings with explicit Apply/Cancel behavior."""
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel, QTabWidget,
+from PySide6.QtCore import Qt, Signal, QSize
+from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel, QStackedWidget,
     QWidget, QFormLayout, QCheckBox, QSpinBox, QComboBox, QDialogButtonBox,
-    QLineEdit, QScrollArea, QPushButton, QFileDialog, QMessageBox, QApplication)
+    QLineEdit, QScrollArea, QPushButton, QFileDialog, QMessageBox, QApplication,
+    QListWidget, QListWidgetItem, QSizePolicy)
 from pathlib import Path
 import json
 import sys
-from themes import palette
 from settings import AppSettings
-
-STYLE = """
-QDialog { background: #131b28; color: #e4edf9; }
-QWidget { color: #e4edf9; font-family: 'Segoe UI'; font-size: 13px; }
-QLabel#subtitle { color: #9eafc5; }
-QTabWidget::pane { border: 1px solid #334158; border-radius: 8px; background: #192333; }
-QTabBar::tab { background: #131b28; padding: 10px 22px; color: #9eafc5; }
-QTabBar::tab:selected { color: #83dbaf; background: #192333; }
-QCheckBox { spacing: 8px; padding: 4px; }
-QCheckBox::indicator { width: 16px; height: 16px; border: 1px solid #64758e; border-radius: 4px; background: #131b28; }
-QCheckBox::indicator:checked { background: #83dbaf; border: 1px solid #83dbaf; }
-QSpinBox, QComboBox, QLineEdit { background: #111a28; border: 1px solid #40516a; border-radius: 5px; padding: 5px 9px; min-width: 90px; }
-QComboBox QAbstractItemView { background: #192333; selection-background-color: #315448; }
-QPushButton { padding: 8px 18px; border: 1px solid #40516a; border-radius: 6px; background: #243246; }
-QPushButton:hover { background: #35485f; }
-QPushButton:default { background: #2c6655; border-color: #83dbaf; }
-QWidget:disabled { color: #607088; }
-QScrollArea { border: 0; background: transparent; }
-QWidget#settingsPage, QWidget#scrollViewport { background: #192333; }
-QTabBar QToolButton { background: #192333; border: 1px solid #334158; color: #e4edf9; }
-QScrollBar:vertical { background: #192333; width: 10px; }
-QScrollBar::handle:vertical { background: #40516a; border-radius: 4px; min-height: 24px; }
-QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
-"""
-
+from ui_style import apply_window_style
 
 class SettingsWindow(QDialog):
     apply_requested = Signal(object)
+    home_requested = Signal()
 
     def __init__(self, settings):
         super().__init__()
         self.settings = settings
-        self.setWindowTitle("PixelSystem Buddy · Settings")
-        self.setMinimumWidth(540)
-        self.setMinimumHeight(400)
-        self.resize(560, min(600, QApplication.primaryScreen().availableGeometry().height() - 80))
+        self.setWindowTitle("Jeffery · Settings")
+        self.setMinimumSize(660, 440)
+        self.resize(800, min(650, QApplication.primaryScreen().availableGeometry().height() - 80))
         self.configure()
         self.controls = {}
+        self.page_labels = []
+        self.page_hints = []
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(24, 24, 24, 20)
-        title = QLabel("Make yourself at home")
+        layout.setContentsMargins(24, 22, 24, 18)
+        title = QLabel("Make Jeffery work for you")
         title.setStyleSheet("font-size: 22px; font-weight: 600; padding-bottom: 6px;")
-        layout.addWidget(title)
-        subtitle = QLabel("A quiet monitor. A little company.")
+        heading = QHBoxLayout()
+        heading.addWidget(title, 1)
+        home = QPushButton("Home")
+        home.clicked.connect(self.home_requested.emit)
+        heading.addWidget(home)
+        layout.addLayout(heading)
+        subtitle = QLabel("Choose a section. Your changes stay a draft until you click Apply.")
         subtitle.setObjectName("subtitle")
+        subtitle.setWordWrap(True)
         layout.addWidget(subtitle)
-        self.tabs = QTabWidget()
-        layout.addWidget(self.tabs)
-        general = self.tab("General")
+        body = QHBoxLayout()
+        body.setSpacing(18)
+        self.navigation = QListWidget()
+        self.navigation.setObjectName("navList")
+        self.navigation.setAccessibleName("Settings sections")
+        self.navigation.setFixedWidth(166)
+        self.navigation.setSpacing(3)
+        body.addWidget(self.navigation)
+        content = QVBoxLayout()
+        self.page_title = QLabel()
+        self.page_title.setObjectName("sectionTitle")
+        self.page_hint = QLabel()
+        self.page_hint.setObjectName("subtitle")
+        self.page_hint.setWordWrap(True)
+        content.addWidget(self.page_title)
+        content.addWidget(self.page_hint)
+        self.tabs = QStackedWidget()
+        self.tabs.setObjectName("settingsPages")
+        self.tabs.currentChanged.connect(self.page_changed)
+        self.navigation.currentRowChanged.connect(self.tabs.setCurrentIndex)
+        content.addWidget(self.tabs, 1)
+        body.addLayout(content, 1)
+        layout.addLayout(body, 1)
+        general = self.tab("Getting started", "Set your daily defaults and back up your preferences.")
+        self.checkbox(general, "home_on_start", "Open Home when Jeffery starts")
         self.checkbox(general, "always_on_top", "Keep monitor and buddy on top")
         self.checkbox(general, "launch_minimized", "Launch with monitor hidden")
         self.checkbox(general, "low_power", "Low power mode: slower sampling and animation")
@@ -64,6 +70,11 @@ class SettingsWindow(QDialog):
         startup = self.checkbox(general, "start_with_windows", "Start with Windows")
         startup.setEnabled(sys.platform == "win32")
         self.hint(general, "Startup uses your account only; no administrator access needed.")
+        business_name = QLineEdit()
+        business_name.setMaxLength(80)
+        self.controls["business_name"] = business_name
+        general.addRow("Business name", business_name)
+        self.section(general, "Back up preferences")
         backup = QHBoxLayout()
         export = QPushButton("Export Settings")
         export.clicked.connect(self.export_settings)
@@ -73,13 +84,13 @@ class SettingsWindow(QDialog):
         backup.addWidget(load)
         general.addRow(backup)
         self.hint(general, "Imported preferences are a draft until you click Apply. Startup and saved positions are kept local.")
-        overlay = self.tab("Overlay")
+        overlay = self.tab("PC monitor", "Choose what the small desktop monitor shows.")
         for key, label in (("show_cpu", "CPU"), ("show_ram", "Memory"), ("show_disk", "Disk"), ("show_network", "Network"), ("show_gpu", "GPU, when supported")):
             self.checkbox(overlay, key, label)
         self.spinbox(overlay, "opacity", "Opacity", 35, 100, " %")
         self.spinbox(overlay, "interval_ms", "Refresh interval", 500, 5000, " ms", 500)
         self.checkbox(overlay, "compact", "Compact layout")
-        self.checkbox(overlay, "mini_hud", "Tiny HUD: 224 pixels wide")
+        self.checkbox(overlay, "mini_hud", "Use the small 224-pixel monitor")
         self.combobox(overlay, "monitor_style", "Monitor style", [("Medieval keep", "medieval"), ("Classic", "classic")])
         self.hint(overlay, "The keep's torch follows CPU activity. Quiet and low power modes keep the decoration still.")
         self.checkbox(overlay, "graphs", "Show 60-second graphs")
@@ -89,7 +100,7 @@ class SettingsWindow(QDialog):
         hint = QLabel("To unlock click-through: right-click the buddy or tray icon.")
         hint.setObjectName("subtitle")
         overlay.addRow(hint)
-        pet = self.tab("Buddy")
+        pet = self.tab("Your buddy", "Give your companion a name and choose how he moves.")
         self.checkbox(pet, "pet_enabled", "Show desktop buddy")
         name = QLineEdit()
         name.setMaxLength(20)
@@ -103,34 +114,38 @@ class SettingsWindow(QDialog):
         self.checkbox(pet, "speech", "Speech bubbles")
         self.spinbox(pet, "speech_frequency", "Random message interval", 30, 1800, " sec", 30)
         self.checkbox(pet, "reactions", "React to CPU and memory activity")
-        self.checkbox(pet, "follow_active_monitor", "Walk on the monitor containing the mouse")
+        self.checkbox(pet, "follow_active_monitor", "Follow the mouse to another screen")
         self.checkbox(pet, "follow_mouse", "Walk toward the mouse")
-        self.checkbox(pet, "parachute", "Open a parachute after dragging and dropping")
-        self.checkbox(pet, "playful", "Random dances, flips, skating, juggling and more")
+        self.checkbox(pet, "parachute", "Parachute after dragging and dropping")
+        self.checkbox(pet, "playful", "Play animations during breaks")
         self.combobox(pet, "mouse_mode", "Mouse play", [("Off", "off"), ("Watch and greet", "watch"), ("Chase the cursor", "chase"), ("Shy: run away", "shy")])
-        self.checkbox(pet, "desktop_enabled", "Interact with real Windows folders, tabs and text")
-        self.checkbox(pet, "desktop_random", "Randomly visit visible folders and tab edges")
+        self.section(pet, "Desktop interactions")
+        self.checkbox(pet, "desktop_enabled", "Explore visible folders, tabs and text")
+        self.checkbox(pet, "desktop_random", "Visit folders and tab edges during breaks")
         self.checkbox(pet, "folder_play", "Allow optional folder portal toys")
         self.checkbox(pet, "portal_toys", "Show the separate folder portal toys")
         self.spinbox(pet, "hide_seconds", "Hide-and-seek duration", 3, 120, " sec")
         self.hint(pet, "Parachuting lands at the bottom in either walking mode. Turn it off to keep a dragged height in Free Buddy mode. Click Jeffery to pet him; use his menu to feed or play.")
-        look = self.tab("Appearance")
-        self.combobox(look, "theme", "Theme", [("Midnight", "midnight"), ("Forest", "forest"), ("Plum", "plum")])
-        self.hint(look, "The theme updates settings, the classic monitor, process window, and speech bubble together. Choose the medieval monitor in Overlay.")
-        alerts = self.tab("Alerts")
+        look = self.tab("Appearance", "Choose a comfortable look for your workspace and desktop companion.")
+        self.combobox(look, "interface_appearance", "Workspace appearance", [("Light", "light"), ("Dark", "dark"), ("Follow Windows", "system")])
+        self.hint(look, "Home, notebook, chat and settings use this appearance. Follow Windows uses your computer's current light or dark preference.")
+        self.section(look, "Desktop monitor and speech")
+        self.combobox(look, "theme", "Desktop color theme", [("Midnight", "midnight"), ("Forest", "forest"), ("Plum", "plum")])
+        self.hint(look, "Choose the medieval or classic monitor in PC monitor. Buddy colors are in Your buddy.")
+        alerts = self.tab("PC alerts", "Get a gentle warning when your computer is working hard.")
         self.spinbox(alerts, "cpu_alert", "CPU warning level", 40, 100, " %")
         self.spinbox(alerts, "ram_alert", "Memory warning level", 40, 100, " %")
         self.spinbox(alerts, "alert_duration", "CPU must stay high for", 1, 60, " sec")
         self.spinbox(alerts, "alert_cooldown", "Repeat warning cooldown", 30, 900, " sec", 30)
         self.hint(alerts, "Warnings use buddy speech and activity reactions. Quiet mode silences them. Memory warnings do not require a sustained delay.")
-        focus = self.tab("Focus")
+        focus = self.tab("Focus timer", "Work in short sessions and get a reminder to take a break.")
         self.spinbox(focus, "focus_minutes", "Session length", 1, 120, " min", 5)
         self.hint(focus, "Start, pause/resume, or reset from the Focus Timer menu. The remaining time appears on the monitor; completion shows a break reminder.")
-        notes = self.tab("Notes")
+        notes = self.tab("Reminders", "Keep track of notebook entries while Jeffery is running.")
         self.checkbox(notes, "note_reminders", "Remind me about notes")
         self.spinbox(notes, "note_repeat_minutes", "Default repeat interval", 0, 1440, " min", 5)
         self.hint(notes, "Open Jeffery's Notepad from his menu. New notes get an acknowledgment, then repeat at their own interval. Set 0 for an acknowledgment without repeats. Quiet mode holds reminders until you turn it off. Jeffery must stay running.")
-        documents = self.tab("Documents & memory")
+        documents = self.tab("Files & memory", "Optional tools for importing documents and finding related writing.")
         self.combobox(documents, "pdf_engine", "PDF reader", [("Automatic", "auto"),
             ("Native PDFium", "pdfium"), ("Compatibility (pypdf)", "pypdf")])
         self.hint(documents, "Use Compatibility if a complex PDF cannot be read by the native reader. OCR requires the native reader.")
@@ -152,7 +167,8 @@ class SettingsWindow(QDialog):
                 browse.clicked.connect(lambda checked=False, field=key: self.choose_local_path(field))
                 row.addWidget(browse)
                 documents.addRow(label, row)
-        self.checkbox(documents, "semantic_memory_enabled", "Find related notebook memories by meaning")
+        self.section(documents, "Find related writing")
+        self.checkbox(documents, "semantic_memory_enabled", "Find related writing by meaning")
         self.semantic_status = QLabel("Meaning-based recall is optional. Choose a downloaded local model before enabling it.")
         self.semantic_status.setObjectName("subtitle")
         self.semantic_status.setTextFormat(Qt.PlainText)
@@ -163,24 +179,54 @@ class SettingsWindow(QDialog):
         self.status = QLabel("")
         self.status.setObjectName("subtitle")
         footer.addWidget(self.status, 1)
-        buttons = QDialogButtonBox(QDialogButtonBox.Apply | QDialogButtonBox.Close)
-        buttons.button(QDialogButtonBox.Apply).clicked.connect(self.apply)
-        buttons.rejected.connect(self.reject)
-        footer.addWidget(buttons)
+        self.buttons = QDialogButtonBox(QDialogButtonBox.Apply | QDialogButtonBox.Cancel)
+        self.buttons.button(QDialogButtonBox.Apply).setObjectName("primary")
+        self.buttons.button(QDialogButtonBox.Apply).setDefault(True)
+        self.buttons.button(QDialogButtonBox.Apply).clicked.connect(self.apply)
+        self.buttons.rejected.connect(self.reject)
+        footer.addWidget(self.buttons)
         layout.addLayout(footer)
+        for key, control in self.controls.items():
+            control.setAccessibleName(key.replace("_", " "))
+            signal = control.toggled if isinstance(control, QCheckBox) else control.currentIndexChanged if isinstance(control, QComboBox) else control.textChanged if isinstance(control, QLineEdit) else control.valueChanged
+            signal.connect(self.draft_changed)
+        self.refresh()
 
-    def tab(self, label):
+    def tab(self, label, hint=""):
         page = QWidget()
         page.setObjectName("settingsPage")
         form = QFormLayout(page)
         form.setContentsMargins(18, 16, 18, 16)
         form.setSpacing(8)
+        form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+        form.setRowWrapPolicy(QFormLayout.WrapLongRows)
+        form.setLabelAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         scroll = QScrollArea()
         scroll.viewport().setObjectName("scrollViewport")
         scroll.setWidgetResizable(True)
         scroll.setWidget(page)
-        self.tabs.addTab(scroll, label)
+        self.tabs.addWidget(scroll)
+        self.page_labels.append(label)
+        self.page_hints.append(hint)
+        item = QListWidgetItem(label)
+        item.setToolTip(hint)
+        item.setSizeHint(QSize(142, 42))
+        self.navigation.addItem(item)
         return form
+
+    def page_changed(self, index):
+        if 0 <= index < len(self.page_labels):
+            self.page_title.setText(self.page_labels[index])
+            self.page_hint.setText(self.page_hints[index])
+            self.navigation.setCurrentRow(index)
+
+    def section(self, form, title):
+        label = QLabel(title)
+        label.setObjectName("sectionTitle")
+        form.addRow(label)
+
+    def draft_changed(self, *args):
+        self.status.setText("Unsaved changes · click Apply to keep them.")
 
     def choose_local_path(self, key):
         if key == "semantic_model_path":
@@ -191,14 +237,7 @@ class SettingsWindow(QDialog):
             self.controls[key].setText(selected)
 
     def configure(self):
-        colors = palette(self.settings)
-        style = STYLE
-        for original, replacement in {"#131b28": colors["bg"], "#192333": colors["panel"],
-                "#334158": colors["border"], "#40516a": colors["border"],
-                "#e4edf9": colors["text"], "#9eafc5": colors["muted"],
-                "#83dbaf": colors["accent"]}.items():
-            style = style.replace(original, replacement)
-        self.setStyleSheet(style)
+        apply_window_style(self, self.settings)
 
     def hint(self, form, text):
         label = QLabel(text)
@@ -208,6 +247,7 @@ class SettingsWindow(QDialog):
 
     def combobox(self, form, key, text, choices):
         widget = QComboBox()
+        widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         for label, value in choices:
             widget.addItem(label, value)
         form.addRow(text, widget)
@@ -229,6 +269,7 @@ class SettingsWindow(QDialog):
 
     def refresh(self, tab=0):
         for key, widget in self.controls.items():
+            blocked = widget.blockSignals(True)
             if isinstance(widget, QCheckBox):
                 widget.setChecked(self.settings[key])
             elif isinstance(widget, QComboBox):
@@ -237,8 +278,11 @@ class SettingsWindow(QDialog):
                 widget.setText(self.settings[key])
             else:
                 widget.setValue(self.settings[key])
+            widget.blockSignals(blocked)
         self.status.clear()
-        self.tabs.setCurrentIndex(tab)
+        index = max(0, min(int(tab), self.tabs.count() - 1))
+        self.tabs.setCurrentIndex(index)
+        self.page_changed(index)
 
     def apply(self):
         values = {key: widget.isChecked() if isinstance(widget, QCheckBox) else widget.currentData() if isinstance(widget, QComboBox) else widget.text() if isinstance(widget, QLineEdit) else widget.value() for key, widget in self.controls.items()}

@@ -4,11 +4,18 @@ Work Chat gives each coworker a username and password, a shared **Team Room**,
 and private direct messages. The same login also enables shared Famous Twins
 orders and checklists in desktop Jeffery. A Python service stores accounts,
 messages, and shared business records on the work server. People can use their
-browser for chat, or **Chat → Work Chat · Coworkers**
-in Buddy opened from the office's shared application folder. Each coworker
+browser for chat, or **Home → Coworkers** in Jeffery opened from the office's
+shared application folder. Each coworker
 creates a different chat username and password. Chat updates approximately
 every two seconds while open. This chat is separate from the existing Groq AI
-conversation.
+conversation under **Home → Ask Jeffery**.
+
+The desktop interface renewal adds a central Home, readable sign-in and
+create-account forms, and **Find a coworker** search after signing in. The
+office server, account credentials, private-message checks, shared business
+records, and certificate-free LAN setup continue to work as before. An AI
+key is configured separately in **Ask Jeffery → AI setup**; coworkers do not
+need one for office chat or shared orders/checklists.
 
 The proposed work server is Windows at **192.168.50.194**. Confirm its IPv4
 address with `ipconfig` on that machine. The simple office setup uses:
@@ -106,7 +113,7 @@ changing accounts changes `%LOCALAPPDATA%` and otherwise starts a new database.
    Windows user's local profile on first launch, which needs internet access.
    Coworkers do not need a separate project copy or access to the server's
    Python environment.
-3. Right-click Jeffery, open **Chat → Work Chat · Coworkers**, and enter
+3. On Jeffery Home, choose **Coworkers** or **Connect to office**, and enter
    **192.168.50.194** in the server field. Use the actual server IP if different.
    Bare IPs use HTTP port 8765; for another port, enter `192.168.50.194:PORT`.
    An explicit URL such as `http://192.168.50.194:8765` also works.
@@ -114,10 +121,20 @@ changing accounts changes `%LOCALAPPDATA%` and otherwise starts a new database.
    confirmation. Usernames contain 3–32 letters, numbers, underscores, dots, or
    dashes; they are case-insensitive. Passwords contain 12–128 characters.
 5. Open **Team Room** for everyone, or select a coworker for direct messages.
-   Coworkers appear after creating accounts. Use Refresh if needed.
-6. Open **Famous Twins → Business Overview**. Wait for **Shared with coworkers**
-   before saving an order or checklist. The login automatically loads shared
+   Use **Find a coworker** to narrow the list. Coworkers appear after creating
+   accounts. Use Refresh if needed.
+6. Choose **Home**, then **Orders & quotes** or **Checklists**. Wait for
+   **Connected to your team** before saving an order or checklist. The login
+   automatically loads shared
    records; there is no separate business account or database path to configure.
+
+Home opens at normal desktop startup when **Open Home when Jeffery starts**
+is enabled in **Settings → Getting started** and **Launch with monitor hidden**
+is off. Click the tray icon, double-click Jeffery, or use a main window's Home
+button to return. Closing Home leaves Jeffery running. Appearance can be
+changed under **Settings → Appearance → Workspace appearance**; Light, Dark,
+and Follow Windows are separate from desktop monitor themes. Click Apply to
+save settings.
 
 Only the main PC runs **Start_Work_Server.bat**. Everyone connects to that one
 server; they do not start their own chat servers. Accounts, message history,
@@ -181,11 +198,13 @@ pickup summaries, templates, and animations.
   desktop business workspace.
 - Personal Writing entries and full documents remain local. Existing local
   orders/checklists are not uploaded at login. Opening one and choosing **Save
-  entry** explicitly publishes it to coworkers.
+  changes** explicitly publishes it to coworkers.
 - Concurrent changes use version checks. A stale save/delete returns a conflict
   instead of overwriting another coworker. An unsaved editor draft is preserved
-  in the current window. Copy desired edits before choosing **Reload saved**
-  and **Discard**, then review the latest version and reapply them.
+  in the current window. **Reload saved** appears beside the save controls after
+  a failed shared edit; it is also available under **More → Reload saved entry**.
+  Copy desired edits before choosing it and **Discard**, then review the latest
+  version and reapply them. **More → Delete entry** uses the same version checks.
 - Prices, payments, stock status, VIN, and fitment notes are entered by staff.
   This is not live inventory, a supplier catalogue, or an automatic payment
   system. Quotes do not count toward open orders or receivables.

@@ -41,6 +41,7 @@ class AppSettings:
                   "note_repeat_minutes": (0, 1440), "hide_seconds": (3, 120),
                   "ai_interval_seconds": (60, 1800)}
         options = {"theme": ("midnight", "forest", "plum"), "pet_palette": ("mint", "sky", "amber", "rose"),
+                   "interface_appearance": ("light", "dark", "system"),
                    "roaming_mode": ("bottom", "free"), "character": ("robot", "cat", "knight"),
                    "monitor_style": ("medieval", "classic"),
                    "pdf_engine": ("auto", "pdfium", "pypdf"),

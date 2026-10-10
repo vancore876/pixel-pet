@@ -154,7 +154,7 @@ class NotebookImportTests(unittest.TestCase):
         # Workflows navigate semantic sections rather than fixed tab positions.
         self.assertEqual(self.window.editor_tabs.tabText(self.window.section_indices['orders']), 'Orders')
         self.assertEqual(self.window.editor_tabs.tabText(self.window.section_indices['checklists']), 'Checklists')
-        self.assertEqual(self.window.editor_tabs.tabText(self.window.section_indices['import']), 'Sources / Import')
+        self.assertEqual(self.window.editor_tabs.tabText(self.window.section_indices['import']), 'Files')
         self.window.dirty = False
 
     def test_edited_review_saves_only_reviewed_content_and_keeps_web_source(self):

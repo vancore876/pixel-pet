@@ -6,10 +6,9 @@ import re
 from PySide6.QtCore import QObject, Signal, QTimer, QUrl, Qt
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkRequest
 from PySide6.QtWidgets import (QApplication, QDialog, QVBoxLayout, QHBoxLayout,
-    QLabel, QPlainTextEdit, QLineEdit, QPushButton, QCheckBox, QComboBox, QTabWidget, QWidget, QFormLayout, QSpinBox, QScrollArea)
+    QLabel, QPlainTextEdit, QLineEdit, QPushButton, QCheckBox, QComboBox, QTabWidget, QWidget, QFormLayout, QSpinBox, QScrollArea, QFrame, QMenu)
 from credentials import redact
-from notepad_window import notes_style
-from themes import palette
+from ui_style import window_style, ui_palette
 from sliding_text import SlideTranscript, plain_reply
 from content_intake import IntakeService, cleanup_result
 
@@ -68,9 +67,9 @@ def validate_action(call):
 
 def parse_reply(status, payload):
     if not 200 <= status < 300:
-        labels = {401: "Groq rejected the key. Save a working key in Connection.",
+        labels = {401: "Groq rejected the key. Save a working key in AI setup.",
                   403: "Groq denied this request. Check network access, account, and model permissions.",
-                  404: "The model was not found. Choose another Groq model in Connection.",
+                  404: "The model was not found. Choose another Groq model in AI setup.",
                   429: "Groq's rate limit was reached. Wait a little and try again."}
         if status in labels:
             raise ValueError(labels[status])
@@ -123,7 +122,7 @@ class GroqClient(QObject):
         try:
             key = self.credentials.get()
             if not key:
-                raise ValueError("Add your Groq key in the Connection tab first. Play buttons work offline.")
+                raise ValueError("Add your Groq key in AI setup first. Play buttons work offline.")
         except (OSError, UnicodeError, ValueError) as exc:
             self.failed.emit(redact(exc))
             return False
@@ -179,6 +178,7 @@ class GroqClient(QObject):
 
 
 class ChatWindow(QDialog):
+    home_requested = Signal()
     preferences_changed = Signal(object)
     reply_ready = Signal(str)
     connection_changed = Signal()
@@ -216,43 +216,84 @@ class ChatWindow(QDialog):
         self.followup, self.testing = False, False
         self.turn_tools = False
         self.turn_model = settings["ai_model"]
-        self.setWindowTitle("Talk to Jeffery · Groq")
-        self.resize(650, min(660, QApplication.primaryScreen().availableGeometry().height() - 70))
-        self.setMinimumSize(520, 440)
+        self.setWindowTitle("Ask Jeffery · Assistant")
+        self.resize(850, min(780, QApplication.primaryScreen().availableGeometry().height() - 70))
+        self.setMinimumSize(640, 560)
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(20, 18, 20, 18)
-        title = QLabel("A little buddy. A bigger brain.")
-        title.setStyleSheet("font-size: 21px; font-weight: 600;")
-        layout.addWidget(title)
+        layout.setContentsMargins(24, 24, 24, 18)
+        layout.setSpacing(14)
+        heading = QHBoxLayout()
+        home_button = QPushButton("‹ Home")
+        home_button.clicked.connect(self.home_requested.emit)
+        heading.addWidget(home_button)
+        title = QLabel("Ask Jeffery")
+        title.setObjectName("pageHeading")
+        heading.addWidget(title, 1)
+        badge = QLabel("AI ASSISTANT")
+        badge.setObjectName("statusBadge")
+        heading.addWidget(badge)
+        layout.addLayout(heading)
+        introduction = QLabel("Get help with your work, draft a message, or take a little break.")
+        introduction.setObjectName("hint")
+        introduction.setWordWrap(True)
+        layout.addWidget(introduction)
         self.tabs = QTabWidget()
         layout.addWidget(self.tabs, 1)
         page = QWidget()
         chat = QVBoxLayout(page)
+        chat.setContentsMargins(12, 16, 12, 12)
+        chat.setSpacing(12)
+        prompts = QHBoxLayout()
+        for label, prompt in (("Plan my day", "Help me plan my work today using my saved notes."),
+                              ("Draft a reply", "Help me draft a reply to a customer. "),
+                              ("Parts counter advice", "Give me practical advice for the auto parts counter.")):
+            button = QPushButton(label)
+            button.setObjectName("suggestion")
+            button.setToolTip("Put this suggestion in the message box. Review it, then send.")
+            button.clicked.connect(lambda checked=False, text=prompt: self.draft_prompt(text))
+            prompts.addWidget(button)
+        chat.addLayout(prompts)
         self.transcript = SlideTranscript()
+        self.empty_state = QFrame()
+        self.empty_state.setObjectName("hero")
+        empty_layout = QVBoxLayout(self.empty_state)
+        empty_layout.setContentsMargins(22, 22, 22, 22)
+        empty_title = QLabel("What can I help you with?")
+        empty_title.setObjectName("sectionTitle")
+        empty_layout.addWidget(empty_title)
+        empty_hint = QLabel("Choose a suggestion above, or write your own question below. You review every message before sending it.")
+        empty_hint.setWordWrap(True)
+        empty_hint.setObjectName("hint")
+        empty_layout.addWidget(empty_hint)
+        self.transcript.layout.insertWidget(0, self.empty_state)
         chat.addWidget(self.transcript, 1)
         quick = QHBoxLayout()
-        for label, signal in (("Notepad", self.notepad_requested), ("Memory", self.memory_requested)):
+        for label, signal in (("Workspace", self.notepad_requested), ("Memory", self.memory_requested)):
             button = QPushButton(label)
             button.clicked.connect(signal.emit)
             quick.addWidget(button)
-        for label, action in (("Wave", "wave"), ("Hide", "hide"), ("Come out", "come_out"), ("Selected text", "selected_text")):
-            button = QPushButton(label)
-            button.clicked.connect(lambda checked=False, a=action: self.local_action({"action": a, "text": "HELLO JEFFERY"}))
-            quick.addWidget(button)
-        chat.addLayout(quick)
-        self.memory_hint = QLabel("Your saved notebook and local memory can help Jeffery remember.")
+        play = QPushButton("Play with Jeffery")
+        play_menu = QMenu(play)
+        for label, action in (("Wave hello", "wave"), ("Hide", "hide"), ("Come out", "come_out"), ("Play with selected text", "selected_text")):
+            item = play_menu.addAction(label)
+            item.triggered.connect(lambda checked=False, a=action: self.local_action({"action": a, "text": "HELLO JEFFERY"}))
+        play.setMenu(play_menu)
+        quick.addWidget(play)
+        quick.addStretch(1)
+        self.memory_hint = QLabel("This is your AI conversation. Use Coworkers to message your team.")
         self.memory_hint.setObjectName("hint")
         self.memory_hint.setWordWrap(True)
         chat.addWidget(self.memory_hint)
         row = QHBoxLayout()
         self.input = QLineEdit()
         self.input.setMaxLength(4000)
-        self.input.setPlaceholderText("Talk to Jeffery…")
+        self.input.setPlaceholderText("Ask a question or describe what you need…")
+        self.input.setAccessibleName("Message to Jeffery AI assistant")
         self.input.returnPressed.connect(self.submit)
-        self.send_button = QPushButton("Send")
+        self.send_button = QPushButton("Ask Jeffery")
         self.send_button.setObjectName("primary")
         self.send_button.clicked.connect(self.submit)
-        self.cancel_button = QPushButton("Cancel")
+        self.cancel_button = QPushButton("Stop")
         self.cancel_button.clicked.connect(self.cancel_request)
         self.cancel_button.setEnabled(False)
         row.addWidget(self.input, 1)
@@ -262,8 +303,9 @@ class ChatWindow(QDialog):
         reset = QPushButton("Clear conversation")
         reset.clicked.connect(self.clear_conversation)
         self.clear_button = reset
-        chat.addWidget(reset)
-        self.tabs.addTab(page, "Chat and play")
+        quick.addWidget(reset)
+        chat.addLayout(quick)
+        self.tabs.addTab(page, "Conversation")
         web_page = QWidget()
         web_layout = QVBoxLayout(web_page)
         web_hint = QLabel("Read a public webpage or search the web. Jeffery uses fetched source text for replies when enabled; save useful information to Notepad to keep it.")
@@ -302,6 +344,16 @@ class ChatWindow(QDialog):
         connection = QWidget()
         connection.setObjectName('connectionPage')
         form = QFormLayout(connection)
+        form.setContentsMargins(20, 22, 20, 22)
+        form.setSpacing(12)
+        form.setRowWrapPolicy(QFormLayout.WrapLongRows)
+        setup_heading = QLabel("Connect your assistant")
+        setup_heading.setObjectName("sectionTitle")
+        form.addRow(setup_heading)
+        setup_intro = QLabel("Add your Groq API key to chat with Jeffery. This connection is separate from your office account. Play and local reminders work without a key.")
+        setup_intro.setObjectName("hint")
+        setup_intro.setWordWrap(True)
+        form.addRow(setup_intro)
         self.key_input = QLineEdit()
         self.key_input.setEchoMode(QLineEdit.Password)
         self.key_input.setMaxLength(256)
@@ -324,6 +376,22 @@ class ChatWindow(QDialog):
         self.model.addItems(["openai/gpt-oss-20b", "openai/gpt-oss-120b"])
         self.model.setCurrentText(settings["ai_model"])
         form.addRow("Groq model", self.model)
+        self.test_button = QPushButton("Test connection")
+        self.test_button.clicked.connect(self.test_connection)
+        form.addRow(self.test_button)
+        self.advanced_toggle = QPushButton("Show preferences and privacy")
+        self.advanced_toggle.setCheckable(True)
+        form.addRow(self.advanced_toggle)
+        self.advanced_panel = QWidget()
+        form.addRow(self.advanced_panel)
+        form = QFormLayout(self.advanced_panel)
+        form.setContentsMargins(0, 8, 0, 0)
+        form.setSpacing(12)
+        self.advanced_panel.hide()
+        self.advanced_toggle.toggled.connect(self._show_advanced)
+        privacy_heading = QLabel("Choose what Jeffery can use")
+        privacy_heading.setObjectName("sectionTitle")
+        form.addRow(privacy_heading)
         self.business_name = QLineEdit(settings['business_name'])
         self.business_name.setMaxLength(80)
         self.business_name.setPlaceholderText('Your business name (optional)')
@@ -365,9 +433,6 @@ class ChatWindow(QDialog):
         self.behavior_status.setTextFormat(Qt.PlainText)
         self.behavior_status.setWordWrap(True)
         form.addRow(self.behavior_status)
-        self.test_button = QPushButton("Test connection")
-        self.test_button.clicked.connect(self.test_connection)
-        form.addRow(self.test_button)
         hint = QLabel("With notes enabled, saved notes and imported Notepad lines go to Groq for short reminders and time suggestions. Jeffery keeps your chosen reminder schedule. Selected editor text stays on this computer. Local reminders work without a key.")
         hint.setObjectName("hint")
         hint.setWordWrap(True)
@@ -376,9 +441,9 @@ class ChatWindow(QDialog):
         connection_scroll.setWidgetResizable(True)
         connection_scroll.viewport().setObjectName('connectionViewport')
         connection_scroll.setWidget(connection)
-        self.tabs.addTab(connection_scroll, "Connection")
+        self.tabs.addTab(connection_scroll, "AI setup")
         self.tabs.addTab(web_page, "Web sources")
-        self.status = QLabel("Add your Groq key in Connection, then start chatting.")
+        self.status = QLabel("Add your Groq key in AI setup to chat. Play works offline.")
         self.status.setObjectName("hint")
         self.status.setWordWrap(True)
         layout.addWidget(self.status)
@@ -386,12 +451,38 @@ class ChatWindow(QDialog):
         self.client.failed.connect(self.failed)
         self.client.busy_changed.connect(self.set_busy)
         self.configure()
+        try:
+            has_key = bool(self.credentials.get())
+        except (AttributeError, OSError, UnicodeError, ValueError):
+            has_key = False
+        if not has_key:
+            self.tabs.setCurrentIndex(1)
 
     def configure(self):
-        c = palette(self.settings)
+        c = ui_palette(self.settings)
         self.transcript.page.setObjectName('transcriptPage')
         self.transcript.viewport().setObjectName('transcriptViewport')
-        self.setStyleSheet(notes_style(self.settings) + f"QTabWidget::pane {{ border: 1px solid {c['border']}; }} QTabBar::tab {{ background: {c['panel']}; padding: 9px 18px; }} QTabBar::tab:selected {{ color: {c['accent']}; }} QScrollArea#transcript {{ background: {c['panel']}; border: 1px solid {c['border']}; border-radius: 8px; }} QWidget#transcriptPage, QWidget#transcriptViewport {{ background: {c['panel']}; }} QScrollArea, QWidget#connectionPage, QWidget#connectionViewport {{ background: {c['bg']}; border: 0; }}")
+        self.setStyleSheet(window_style(self.settings) + f"QScrollArea#transcript {{ background: {c['panel']}; border: 1px solid {c['border']}; border-radius: 12px; }} QWidget#transcriptPage, QWidget#transcriptViewport {{ background: {c['panel']}; }} QScrollArea, QWidget#connectionPage, QWidget#connectionViewport {{ background: {c['panel']}; border: 0; }}")
+        self._style_transcript_cards()
+
+    def _show_advanced(self, shown):
+        self.advanced_panel.setVisible(shown)
+        self.advanced_toggle.setText("Hide preferences and privacy" if shown else "Show preferences and privacy")
+
+    def draft_prompt(self, text):
+        self.input.setText(text)
+        self.input.setFocus()
+
+    def _style_transcript_cards(self):
+        color = ui_palette(self.settings)["accent"]
+        for card in self.transcript.cards:
+            title = card.layout().itemAt(0).widget()
+            title.setStyleSheet(f"color: {color}; font-weight: 600; font-size: 12px;")
+
+    def _append_message(self, text):
+        self.empty_state.hide()
+        self.transcript.appendPlainText(text)
+        self._style_transcript_cards()
 
     def set_busy(self, busy):
         busy = busy or self.web_loading or self.semantic_loading
@@ -494,7 +585,7 @@ class ChatWindow(QDialog):
             command, _, argument = text[1:].partition(" ")
             aliases = {"wave": "wave", "hide": "hide", "peek": "peek", "comeout": "come_out", "chase": "follow_mouse", "shy": "shy_mouse", "watch": "watch_mouse", "letters": "selected_text", "tiles": "letters", "tab": "ride_tab"}
             if command.lower() in aliases:
-                self.transcript.appendPlainText("You: " + redact(text))
+                self._append_message("You: " + redact(text))
                 self.local_action({"action": aliases[command.lower()], "text": argument or "HELLO JEFFERY"})
                 self.input.clear()
                 return
@@ -511,7 +602,7 @@ class ChatWindow(QDialog):
         self.turn_model = model
         self.turn_query = text
         self.user_message.emit(text)
-        self.transcript.appendPlainText("You: " + redact(text))
+        self._append_message("You: " + redact(text))
         self.input.clear()
         self.turn_tools = play_requested(text)
         if self.web_enabled.isChecked():
@@ -662,7 +753,7 @@ class ChatWindow(QDialog):
             result = self.execute_action(action)
         except (OSError, ValueError) as exc:
             result = redact(exc)
-        self.transcript.appendPlainText(f"{self.settings['pet_name']}: {result}\n")
+        self._append_message(f"{self.settings['pet_name']}: {result}\n")
         self.status.setText("Play action handled on your computer.")
 
     def received(self, message):
@@ -686,7 +777,7 @@ class ChatWindow(QDialog):
             self.client.send(self.turn_model, self.pending, tools=False)
             return
         text = plain_reply(message.get("content") or "The play action is ready.")
-        self.transcript.appendPlainText(f"{self.settings['pet_name']}: {text}\n")
+        self._append_message(f"{self.settings['pet_name']}: {text}\n")
         self.reply_ready.emit(text)
         user = next((m for m in reversed(self.pending) if m["role"] == "user"), None)
         if user:
@@ -737,6 +828,7 @@ class ChatWindow(QDialog):
         self.history = []
         self.semantic_notes = []
         self.transcript.clear()
+        self.empty_state.show()
 
     def reject(self):
         self.cancel_request()

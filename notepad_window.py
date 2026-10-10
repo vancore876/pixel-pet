@@ -7,14 +7,13 @@ import json
 import shutil
 import tempfile
 from pathlib import Path
-from PySide6.QtCore import Qt, Signal, QDateTime, QTimer, QSignalBlocker, QEvent
+from PySide6.QtCore import Qt, Signal, QDateTime, QTimer, QSignalBlocker, QEvent, QSize
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (QApplication, QDialog, QWidget, QVBoxLayout, QHBoxLayout,
     QFormLayout, QSplitter, QListWidget, QListWidgetItem, QLabel, QLineEdit,
     QPlainTextEdit, QPushButton, QCheckBox, QSpinBox, QDateTimeEdit, QFileDialog,
-    QMessageBox, QComboBox, QTabWidget, QTableWidget, QTableWidgetItem, QAbstractItemView, QHeaderView, QScrollArea, QProgressBar, QGridLayout, QFrame)
+    QMessageBox, QComboBox, QTabWidget, QTableWidget, QTableWidgetItem, QAbstractItemView, QHeaderView, QScrollArea, QProgressBar, QGridLayout, QFrame, QToolButton, QMenu)
 from config import clamp_position
-from themes import palette
 from notes import current_guidance, ORDER_STATUSES, business_summary, note_search_text
 from auto_parts import (STOCK_STATUSES, CHECKLIST_TEMPLATES, money_to_cents, format_money,
                         order_totals, dashboard_summary, parts_to_source, customer_history)
@@ -22,6 +21,7 @@ from sliding_text import SlidingText
 from content_intake import IntakeService, cleanup_result, own_text_file
 from notebook_backup import notebook_snapshot
 from notebook_ui_jobs import prepare_document, prepare_notebook_backup, export_notebook
+from ui_style import window_style, apply_window_style, ui_palette, ui_icon
 
 
 def reminder_time(note):
@@ -39,37 +39,12 @@ def reminder_time(note):
 
 
 def notes_style(settings):
-    c = palette(settings)
-    return f"""
-        QDialog, QWidget#noteCard, QWidget#notePage, QWidget#advicePage {{ background: {c['bg']}; color: {c['text']}; }}
-        QWidget {{ color: {c['text']}; font-family: 'Segoe UI'; font-size: 12px; }}
-        QLabel#hint {{ color: {c['muted']}; }}
-        QPlainTextEdit, QLineEdit, QListWidget, QSpinBox, QDateTimeEdit, QComboBox, QTableWidget {{ background: {c['panel']}; color: {c['text']}; border: 1px solid {c['border']}; border-radius: 6px; padding: 6px; }}
-        QLineEdit, QSpinBox, QDateTimeEdit, QComboBox {{ min-height: 18px; }}
-        QScrollArea {{ background: {c['bg']}; border: 0; }}
-        QHeaderView::section {{ background: {c['panel']}; color: {c['muted']}; border: 1px solid {c['border']}; padding: 5px; }}
-        QComboBox QAbstractItemView {{ background: {c['panel']}; color: {c['text']}; selection-background-color: {c['border']}; }}
-        QComboBox QLineEdit {{ border: 0; padding: 0; }}
-        QListWidget::item {{ padding: 9px; }}
-        QListWidget::item:selected {{ background: {c['border']}; }}
-        QPushButton {{ background: {c['panel']}; border: 1px solid {c['border']}; border-radius: 6px; padding: 7px 11px; }}
-        QPushButton:hover {{ border-color: {c['accent']}; }}
-        QPushButton#primary {{ background: {c['border']}; border-color: {c['accent']}; }}
-        QProgressBar {{ background: {c['panel']}; color: {c['text']}; border: 1px solid {c['border']}; border-radius: 5px; text-align: center; min-height: 20px; }}
-        QProgressBar::chunk {{ background: {c['border']}; border-radius: 4px; }}
-        QCheckBox {{ spacing: 6px; }}
-        QCheckBox::indicator {{ width: 15px; height: 15px; border: 1px solid {c['muted']}; border-radius: 3px; background: {c['bg']}; }}
-        QCheckBox::indicator:checked {{ background: {c['accent']}; }}
-        QTabWidget::pane {{ background: {c['bg']}; border: 1px solid {c['border']}; }}
-        QTabBar::tab {{ background: {c['panel']}; color: {c['muted']}; padding: 8px 12px; }}
-        QTabBar::tab:selected {{ color: {c['accent']}; }}
-        QScrollBar:vertical {{ background: {c['panel']}; width: 10px; }}
-        QScrollBar::handle:vertical {{ background: {c['border']}; min-height: 24px; border-radius: 4px; }}
-        QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
-    """
+    c = ui_palette(settings)
+    return window_style(settings) + f"\nQWidget#noteCard {{ background: {c['bg']}; border: 1px solid {c['border']}; border-radius: 10px; }}"
 
 
 class NotepadWindow(QDialog):
+    home_requested = Signal()
     open_text_requested = Signal()
     reading = Signal()
     ai_preferences_requested = Signal(object)
@@ -93,6 +68,9 @@ class NotepadWindow(QDialog):
         self.import_loading = False
         self.document_page_index = 0
         self.section_indices = {}
+        self._workspace_ready = False
+        self._record_scope = None
+        self._browser_expanded = True
         self.intake = IntakeService(self)
         self.intake.completed.connect(self.imported)
         self.intake.failed.connect(self.import_failed)
@@ -103,20 +81,29 @@ class NotepadWindow(QDialog):
         self.transfer.busy_changed.connect(self.set_transfer_busy)
         name = settings['business_name'] or 'Famous Twins'
         self.setWindowTitle(name + ' · Auto Parts Workspace')
-        self.resize(1100, min(760, QApplication.primaryScreen().availableGeometry().height() - 50))
+        self.resize(1180, min(780, QApplication.primaryScreen().availableGeometry().height() - 50))
         self.setMinimumSize(760, 560)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(18, 16, 18, 12)
-        layout.setSpacing(10)
+        layout.setSpacing(12)
         header = QHBoxLayout()
         brand = QVBoxLayout()
         self.brand_title = QLabel(name)
-        self.brand_title.setStyleSheet('font-size: 25px; font-weight: 700;')
-        self.brand_subtitle = QLabel('AUTO PARTS WORKSPACE  /  JEFFERY')
+        self.brand_title.setObjectName('pageHeading')
+        self.brand_subtitle = QLabel('Your team workspace')
         self.brand_subtitle.setObjectName('hint')
         brand.addWidget(self.brand_title)
         brand.addWidget(self.brand_subtitle)
         header.addLayout(brand, 1)
+        self.home_button = QPushButton('Home')
+        self.home_button.clicked.connect(self.home_requested.emit)
+        header.addWidget(self.home_button)
+        self.browser_toggle = QPushButton('Show entries')
+        self.browser_toggle.setCheckable(True)
+        self.browser_toggle.setChecked(True)
+        self.browser_toggle.setToolTip('Show or hide the saved-entry browser')
+        self.browser_toggle.toggled.connect(self.toggle_browser)
+        header.addWidget(self.browser_toggle)
         self.talk_button = QPushButton('Talk to Jeffery')
         self.talk_button.clicked.connect(self.chat_requested.emit)
         header.addWidget(self.talk_button)
@@ -124,36 +111,55 @@ class NotepadWindow(QDialog):
         self.summary = QLabel('')
         self.summary.setObjectName('hint')
         self.summary.setWordWrap(True)
-        layout.addWidget(self.summary)
-        shared_row = QHBoxLayout()
-        self.shared_status = QLabel('Sign in to Work Chat to use shared orders and checklists.')
+        self.summary.hide()
+        self.workspace_splitter = QSplitter()
+        splitter = self.workspace_splitter
+        self.navigation_panel = QWidget()
+        self.navigation_panel.setObjectName('workspaceSidebar')
+        self.navigation_panel.setMinimumWidth(146)
+        self.navigation_panel.setMaximumWidth(190)
+        navigation = QVBoxLayout(self.navigation_panel)
+        navigation.setContentsMargins(10, 14, 10, 12)
+        navigation.setSpacing(10)
+        section_label = QLabel('WORKSPACE')
+        section_label.setObjectName('hint')
+        navigation.addWidget(section_label)
+        self.sections = QListWidget()
+        self.sections.setObjectName('workspaceSections')
+        self.sections.setIconSize(QSize(18, 18))
+        self.sections.setMinimumHeight(245)
+        self.sections.setStyleSheet('QListWidget#workspaceSections::item { padding: 7px 6px; margin: 1px 0; }')
+        self.sections.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        navigation.addWidget(self.sections, 1)
+        self.shared_status = QLabel('Sign in to share orders and checklists.')
         self.shared_status.setObjectName('hint')
         self.shared_status.setWordWrap(True)
-        shared_row.addWidget(self.shared_status, 1)
-        self.shared_login_button = QPushButton('Coworker login')
+        navigation.addWidget(self.shared_status)
+        self.shared_login_button = QPushButton('Team sign in')
         self.shared_login_button.clicked.connect(self.connection_work_chat_requested.emit)
-        shared_row.addWidget(self.shared_login_button)
-        layout.addLayout(shared_row)
-        splitter = QSplitter()
-        browser = QWidget()
-        browse = QVBoxLayout(browser)
-        browse.setContentsMargins(0, 0, 0, 0)
-        self.sections = QListWidget()
-        self.sections.setObjectName('workspaceNavigation')
-        self.sections.setMaximumHeight(212)
-        self.sections.setMinimumHeight(186)
-        self.sections.setStyleSheet('QListWidget::item { padding: 3px 9px; }')
-        self.sections.setMinimumWidth(180)
-        browse.addWidget(self.sections)
-        new_bar = QHBoxLayout()
-        for label, kind in (('+ Write', 'note'), ('+ List', 'list'), ('+ Order', 'order')):
-            button = QPushButton(label)
-            button.setToolTip('Create a new ' + ('checklist' if kind == 'list' else kind))
-            button.clicked.connect(lambda checked=False, value=kind: self.new_note() if value == 'note' else self.new_entry(value))
-            new_bar.addWidget(button)
-        browse.addLayout(new_bar)
+        navigation.addWidget(self.shared_login_button)
+        splitter.addWidget(self.navigation_panel)
+        self.browser_panel = QWidget()
+        self.browser_panel.setObjectName('workspaceBrowser')
+        self.browser_panel.setMinimumWidth(188)
+        self.browser_panel.setMaximumWidth(290)
+        browse = QVBoxLayout(self.browser_panel)
+        browse.setContentsMargins(12, 14, 12, 12)
+        browse.setSpacing(10)
+        browser_heading = QHBoxLayout()
+        self.browser_title = QLabel('Writing')
+        self.browser_title.setObjectName('sectionTitle')
+        self.record_count = QLabel('0')
+        self.record_count.setObjectName('hint')
+        browser_heading.addWidget(self.browser_title, 1)
+        browser_heading.addWidget(self.record_count)
+        browse.addLayout(browser_heading)
+        self.create_button = QPushButton('+ New writing')
+        self.create_button.setObjectName('primary')
+        self.create_button.clicked.connect(self.create_current_entry)
+        browse.addWidget(self.create_button)
         self.search = QLineEdit()
-        self.search.setPlaceholderText('Find customer, part or note…')
+        self.search.setPlaceholderText('Search entries')
         self.search.textChanged.connect(self.refresh)
         self.filter = QComboBox()
         for label, value in (('All entries', 'all'), ('Open entries', 'open'), ('Completed', 'done'),
@@ -163,20 +169,33 @@ class NotepadWindow(QDialog):
         browse.addWidget(self.search)
         browse.addWidget(self.filter)
         self.list = QListWidget()
-        self.list.setMinimumWidth(180)
+        self.list.setObjectName('entryList')
+        self.list.setTextElideMode(Qt.ElideRight)
+        self.list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.list.setMinimumWidth(155)
         self.list.setMinimumHeight(60)
         self.list.currentItemChanged.connect(self.selection_changed)
         browse.addWidget(self.list, 1)
-        splitter.addWidget(browser)
+        self.browser_empty = QLabel('No entries yet. Create one to get started.')
+        self.browser_empty.setObjectName('hint')
+        self.browser_empty.setWordWrap(True)
+        browse.addWidget(self.browser_empty)
+        splitter.addWidget(self.browser_panel)
         editor = QWidget()
+        editor.setObjectName('workspaceEditor')
         editor_layout = QVBoxLayout(editor)
-        editor_layout.setContentsMargins(10, 0, 0, 0)
+        editor_layout.setContentsMargins(12, 14, 12, 12)
+        editor_layout.setSpacing(10)
+        self.page_title = QLabel('Overview')
+        self.page_title.setObjectName('sectionTitle')
+        editor_layout.addWidget(self.page_title)
         self.entry_heading = QWidget()
         title_row = QHBoxLayout(self.entry_heading)
         title_row.setContentsMargins(0, 0, 0, 0)
         self.title = QLineEdit()
         self.title.setMaxLength(100)
-        self.title.setPlaceholderText('Give this entry a title')
+        self.title.setPlaceholderText('Entry title')
+        self.title.setObjectName('entryTitle')
         self.kind = QComboBox()
         for label, value in (('Writing', 'note'), ('Checklist', 'list'), ('Customer order', 'order')):
             self.kind.addItem(label, value)
@@ -186,6 +205,29 @@ class NotepadWindow(QDialog):
         title_row.addWidget(self.title, 1)
         title_row.addWidget(self.entry_type)
         editor_layout.addWidget(self.entry_heading)
+        self.entry_mismatch = QWidget()
+        empty = QVBoxLayout(self.entry_mismatch)
+        empty.addStretch(1)
+        self.empty_title = QLabel('Choose an entry to get started')
+        self.empty_title.setObjectName('sectionTitle')
+        self.empty_title.setWordWrap(True)
+        self.empty_title.setAlignment(Qt.AlignCenter)
+        empty.addWidget(self.empty_title)
+        self.empty_hint = QLabel('')
+        self.empty_hint.setObjectName('hint')
+        self.empty_hint.setWordWrap(True)
+        self.empty_hint.setAlignment(Qt.AlignCenter)
+        empty.addWidget(self.empty_hint)
+        self.empty_create = QPushButton('+ Create entry')
+        self.empty_create.setObjectName('primary')
+        self.empty_create.clicked.connect(self.create_current_entry)
+        empty.addWidget(self.empty_create, 0, Qt.AlignCenter)
+        self.return_to_entry = QPushButton('Return to your draft')
+        self.return_to_entry.clicked.connect(self.show_current_entry)
+        empty.addWidget(self.return_to_entry, 0, Qt.AlignCenter)
+        empty.addStretch(1)
+        self.entry_mismatch.hide()
+        editor_layout.addWidget(self.entry_mismatch, 1)
         self.editor_tabs = QTabWidget()
         self.editor_tabs.tabBar().hide()
         self.editor_tabs.currentChanged.connect(self.section_changed)
@@ -204,7 +246,7 @@ class NotepadWindow(QDialog):
         self.document_origin.hide()
         form.addWidget(self.document_origin)
         self.body = QPlainTextEdit()
-        self.body.setPlaceholderText('Write here. Use Schedule for reminders and Sources / Import for documents.')
+        self.body.setPlaceholderText('Write freely here. Use Schedule for reminders or Files to import a document.')
         self.body.setMinimumHeight(180)
         form.addWidget(self.body, 1)
         self.document_pages = QWidget()
@@ -234,27 +276,42 @@ class NotepadWindow(QDialog):
         self.kind_changed()
         self.sections.currentRowChanged.connect(self.editor_tabs.setCurrentIndex)
         splitter.addWidget(editor)
-        splitter.setSizes([235, 825])
+        splitter.setChildrenCollapsible(False)
+        splitter.setSizes([165, 230, 785])
         layout.addWidget(splitter, 1)
         self.editor_actions = QWidget()
         actions = QHBoxLayout(self.editor_actions)
         actions.setContentsMargins(0, 0, 0, 0)
-        self.save_button = QPushButton('Save entry')
+        self.save_button = QPushButton('Save changes')
         self.save_button.setObjectName('primary')
         self.save_button.clicked.connect(self.save_note)
         self.pin = QPushButton('Pin')
         self.pin.clicked.connect(self.toggle_pin)
         self.done_button = QPushButton('Done')
         self.done_button.clicked.connect(self.toggle_done)
-        self.remove = QPushButton('Delete')
+        self.remove = QPushButton('Delete', self.editor_actions)
         self.remove.clicked.connect(self.delete_note)
-        actions.addStretch(1)
+        self.edit_state = QLabel('Unsaved entry')
+        self.edit_state.setObjectName('hint')
+        actions.addWidget(self.edit_state, 1)
         self.reload_button = QPushButton('Reload saved')
         self.reload_button.clicked.connect(self.reload_saved)
-        for button in (self.save_button, self.reload_button, self.pin, self.done_button, self.remove):
+        for button in (self.pin, self.done_button):
             actions.addWidget(button)
+        actions.addWidget(self.reload_button)
+        self.more_actions = QToolButton()
+        self.more_actions.setText('More')
+        self.more_actions.setPopupMode(QToolButton.InstantPopup)
+        more_menu = QMenu(self.more_actions)
+        self.reload_action = more_menu.addAction('Reload saved entry', self.reload_button.click)
+        self.delete_action = more_menu.addAction('Delete entry', self.remove.click)
+        self.more_actions.setMenu(more_menu)
+        actions.addWidget(self.more_actions)
+        actions.addWidget(self.save_button)
+        self.reload_button.hide()
+        self.remove.hide()
         layout.addWidget(self.editor_actions)
-        self.status = QLabel('Ctrl+S saves · Ctrl+N starts writing · JMD totals')
+        self.status = QLabel('Ctrl+S to save  |  Personal writing stays on this computer')
         self.status.setObjectName('hint')
         self.status.setWordWrap(True)
         layout.addWidget(self.status)
@@ -282,6 +339,7 @@ class NotepadWindow(QDialog):
         self.order_notes.textChanged.connect(lambda: self.sync_body(self.order_notes))
         service.changed.connect(self.refresh)
         self.configure()
+        self._workspace_ready = True
         self.refresh()
         self.show_section('overview')
         self.update_buttons()
@@ -302,12 +360,24 @@ class NotepadWindow(QDialog):
     def add_section(self, key, title, page):
         index = self.editor_tabs.addTab(page, title)
         self.section_indices[key] = index
-        self.sections.addItem(title)
+        item = QListWidgetItem(title)
+        item.setIcon(ui_icon({'overview': 'home', 'writing': 'write', 'checklists': 'list',
+                              'orders': 'orders', 'schedule': 'calendar', 'advice': 'spark',
+                              'import': 'write'}.get(key, 'home'), self.settings, 18))
+        self.sections.addItem(item)
         return index
 
     def set_shared_status(self, text, connected=False):
-        self.shared_status.setText(str(text))
-        self.shared_login_button.setText('Work Chat' if connected else 'Coworker login')
+        message = str(text)
+        if connected:
+            compact = 'Saving shared work...' if message.startswith('Saving') else 'Connected to your team'
+        else:
+            compact = ('Sign in to share orders and checklists.' if message.startswith('Sign in') else
+                       'Connecting to your team...' if message.startswith('Loading') else 'Team server unavailable')
+        self.shared_status.setText(compact)
+        self.shared_login_button.setText('Team chat' if connected else 'Team sign in')
+        self.shared_status.setToolTip(message)
+        self.shared_status.setAccessibleDescription(message)
 
     def show_section(self, section):
         index = self.section_indices.get(section)
@@ -320,20 +390,90 @@ class NotepadWindow(QDialog):
             with QSignalBlocker(self.sections):
                 self.sections.setCurrentRow(index)
         section = next((key for key, value in self.section_indices.items() if value == index), '')
-        if hasattr(self, 'entry_heading'):
-            self.entry_heading.setVisible(section not in ('overview', 'import'))
-        if hasattr(self, 'editor_actions'):
-            self.editor_actions.setVisible(section not in ('overview', 'import'))
+        if not self._workspace_ready:
+            return
+        self._record_scope = {'writing': 'note', 'checklists': 'list', 'orders': 'order'}.get(section)
+        title = self.editor_tabs.tabText(index)
+        self.page_title.setText(title)
+        self.browser_title.setText(title if self._record_scope else 'Saved entries')
+        label = {'writing': 'writing', 'checklists': 'checklist', 'orders': 'order'}.get(section, 'writing')
+        self.create_button.setText('+ New ' + label)
+        self.empty_create.setText('+ Create ' + label)
+        self.search.setPlaceholderText({'orders': 'Customer, part, reference', 'checklists': 'Search checklists',
+                                        'writing': 'Search writing'}.get(section, 'Search all entries'))
+        matching_kind = self._record_scope is None or self._record_scope == self.kind.currentData()
+        self.entry_mismatch.setVisible(not matching_kind)
+        self.editor_tabs.setVisible(matching_kind)
+        self.entry_heading.setVisible(matching_kind and section not in ('overview', 'import'))
+        self.editor_actions.setVisible(matching_kind and section not in ('overview', 'import'))
+        self.empty_title.setText('Choose a ' + label + ' or create one')
+        self.empty_hint.setText('Your current draft is safe. Use the entries button to choose saved work.' if self.dirty else
+                                'Open a saved entry from the list, or start a new one here.')
+        self.return_to_entry.setVisible(self.dirty)
+        # These filters refine the chosen section; cross-type filters remain available for the agenda.
+        with QSignalBlocker(self.filter):
+            self.filter.setCurrentIndex(0)
+            self.filter.setItemText(0, 'All ' + (title.lower() if self._record_scope else 'entries'))
+            for filter_index in (3, 4, 5):
+                item = self.filter.model().item(filter_index)
+                item.setEnabled(self._record_scope is None)
+        self.update_browser_visibility()
+        self.refresh()
+
+    def current_section(self):
+        return next((key for key, value in self.section_indices.items()
+                     if value == self.editor_tabs.currentIndex()), 'writing')
+
+    def create_current_entry(self):
+        kind = {'checklists': 'list', 'orders': 'order'}.get(self.current_section(), 'note')
+        return self.new_note() if kind == 'note' else self.new_entry(kind)
+
+    def show_current_entry(self):
+        self.show_section({'order': 'orders', 'list': 'checklists'}.get(self.kind.currentData(), 'writing'))
+
+    def toggle_browser(self, expanded):
+        self._browser_expanded = bool(expanded)
+        if hasattr(self, 'browser_panel'):
+            self.update_browser_visibility()
+
+    def update_browser_visibility(self):
+        if not self._workspace_ready:
+            return
+        available = self.current_section() not in ('overview', 'import')
+        self.browser_panel.setVisible(available and self._browser_expanded)
+        self.browser_toggle.setVisible(available)
+        self.browser_toggle.setText('Hide entries' if self._browser_expanded else 'Show entries')
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if not self._workspace_ready:
+            return
+        # Small displays default to a full-width form; entries remain one click away.
+        narrow = self.width() < 1000
+        if getattr(self, '_last_narrow', None) != narrow:
+            self._last_narrow = narrow
+            with QSignalBlocker(self.browser_toggle):
+                self.browser_toggle.setChecked(not narrow)
+            self._browser_expanded = not narrow
+            self.update_browser_visibility()
 
     def build_overview(self):
         page, box = self.make_page(scroll=True)
-        heading = QLabel('Your parts counter, at a glance')
-        heading.setStyleSheet('font-size: 20px; font-weight: 600;')
+        heading = QLabel('A good day starts with a clear counter')
+        heading.setObjectName('sectionTitle')
         box.addWidget(heading)
-        hint = QLabel('Open an order to continue work. Shared business entries sync through your office server after coworker login.')
+        hint = QLabel('Follow up on orders, prepare pickups, and keep your team on the same page.')
         hint.setWordWrap(True)
         hint.setObjectName('hint')
         box.addWidget(hint)
+        start = QHBoxLayout()
+        for label, kind in (('+ Customer order', 'order'), ('+ Daily checklist', 'list')):
+            button = QPushButton(label)
+            button.setObjectName('primary' if kind == 'order' else 'secondary')
+            button.clicked.connect(lambda checked=False, value=kind: self.new_entry(value))
+            start.addWidget(button)
+        start.addStretch(1)
+        box.addLayout(start)
         cards = QGridLayout()
         self.dashboard_cards = {}
         for index, (key, title) in enumerate((('open_orders', 'Open orders'), ('ready_orders', 'Ready for pickup'),
@@ -357,9 +497,13 @@ class NotepadWindow(QDialog):
         self.order_queue.itemActivated.connect(lambda item: self.open_workspace_note(item.data(Qt.UserRole)))
         self.order_queue.itemClicked.connect(lambda item: self.open_workspace_note(item.data(Qt.UserRole)))
         box.addWidget(self.order_queue)
-        source_heading = QLabel('Parts to source')
-        source_heading.setStyleSheet('font-weight: 600;')
-        box.addWidget(source_heading)
+        self.sourcing_toggle = QToolButton()
+        self.sourcing_toggle.setText('Parts to source')
+        self.sourcing_toggle.setCheckable(True)
+        self.sourcing_toggle.setChecked(True)
+        self.sourcing_toggle.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        self.sourcing_toggle.setArrowType(Qt.DownArrow)
+        box.addWidget(self.sourcing_toggle)
         self.sourcing_table = QTableWidget(0, 5)
         self.sourcing_table.setHorizontalHeaderLabels(['Part / number', 'Qty', 'Supplier', 'Stock', 'Customer'])
         self.sourcing_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
@@ -368,14 +512,24 @@ class NotepadWindow(QDialog):
         self.sourcing_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
         self.sourcing_table.setMinimumHeight(135)
         self.sourcing_table.cellDoubleClicked.connect(self.open_sourcing_order)
+        self.sourcing_toggle.toggled.connect(self.sourcing_table.setVisible)
+        self.sourcing_toggle.toggled.connect(lambda value: self.sourcing_toggle.setArrowType(Qt.DownArrow if value else Qt.RightArrow))
         box.addWidget(self.sourcing_table)
+        self.history_toggle = QToolButton()
+        self.history_toggle.setText('Customer history')
+        self.history_toggle.setCheckable(True)
+        self.history_toggle.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        self.history_toggle.setArrowType(Qt.RightArrow)
+        box.addWidget(self.history_toggle)
+        self.history_panel = QWidget()
+        history_box = QVBoxLayout(self.history_panel)
+        history_box.setContentsMargins(0, 0, 0, 0)
         history_bar = QHBoxLayout()
-        history_bar.addWidget(QLabel('Customer history'))
         self.history_search = QLineEdit()
         self.history_search.setPlaceholderText('Customer, phone, registration or VIN')
         self.history_search.textChanged.connect(self.refresh_customer_history)
         history_bar.addWidget(self.history_search, 1)
-        box.addLayout(history_bar)
+        history_box.addLayout(history_bar)
         self.history_table = QTableWidget(0, 5)
         self.history_table.setHorizontalHeaderLabels(['Customer / reference', 'Vehicle', 'Status', 'Total JMD', 'Balance JMD'])
         self.history_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
@@ -384,25 +538,26 @@ class NotepadWindow(QDialog):
         self.history_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
         self.history_table.setMinimumHeight(140)
         self.history_table.cellDoubleClicked.connect(self.open_history_order)
-        box.addWidget(self.history_table)
+        history_box.addWidget(self.history_table)
+        self.history_panel.hide()
+        self.history_toggle.toggled.connect(self.history_panel.setVisible)
+        self.history_toggle.toggled.connect(lambda value: self.history_toggle.setArrowType(Qt.DownArrow if value else Qt.RightArrow))
+        box.addWidget(self.history_panel)
         box.addStretch(1)
         self.add_section('overview', 'Overview', page)
         self.dashboard_mode = 'open_orders'
 
     def build_checklists(self):
         page, box = self.make_page(scroll=True)
-        intro = QLabel('Daily routines and handover checks, separate from customer orders.')
+        intro = QLabel('A simple shared list for opening, closing, and handovers.')
         intro.setWordWrap(True)
         intro.setObjectName('hint')
         box.addWidget(intro)
-        new_list = QPushButton('+ Create checklist')
-        new_list.clicked.connect(lambda: self.new_entry('list'))
-        box.addWidget(new_list)
         template_bar = QHBoxLayout()
         self.checklist_template = QComboBox()
         self.checklist_template.addItems(CHECKLIST_TEMPLATES.keys())
         template_bar.addWidget(self.checklist_template, 1)
-        self.apply_template_button = QPushButton('Add template tasks')
+        self.apply_template_button = QPushButton('Use template')
         self.apply_template_button.clicked.connect(self.apply_checklist_template)
         template_bar.addWidget(self.apply_template_button)
         box.addLayout(template_bar)
@@ -416,6 +571,7 @@ class NotepadWindow(QDialog):
         self.task_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
         self.task_table.setColumnWidth(0, 52)
         self.task_table.setColumnWidth(2, 62)
+        self.task_table.setColumnHidden(2, True)
         self.task_table.setMinimumHeight(210)
         box.addWidget(self.task_table, 1)
         row = QHBoxLayout()
@@ -424,6 +580,7 @@ class NotepadWindow(QDialog):
         self.item_text.setPlaceholderText('Add a task')
         self.item_quantity = QSpinBox()
         self.item_quantity.setRange(1, 9999)
+        self.item_quantity.hide()
         add = QPushButton('Add task')
         add.clicked.connect(self.add_checklist_item)
         self.item_text.returnPressed.connect(self.add_checklist_item)
@@ -431,9 +588,16 @@ class NotepadWindow(QDialog):
         row.addWidget(self.item_quantity)
         row.addWidget(add)
         box.addLayout(row)
-        remove = QPushButton('Remove selected task')
+        remove = QPushButton('Remove task')
         remove.clicked.connect(lambda: self.remove_checklist_item(self.task_table))
-        box.addWidget(remove)
+        task_actions = QHBoxLayout()
+        quantities = QCheckBox('Track quantities')
+        quantities.toggled.connect(self.item_quantity.setVisible)
+        quantities.toggled.connect(lambda value: self.task_table.setColumnHidden(2, not value))
+        task_actions.addWidget(quantities)
+        task_actions.addStretch(1)
+        task_actions.addWidget(remove)
+        box.addLayout(task_actions)
         self.checklist_notes = QPlainTextEdit()
         self.checklist_notes.setPlaceholderText('Checklist notes (optional)')
         self.checklist_notes.setMinimumHeight(80)
@@ -443,13 +607,10 @@ class NotepadWindow(QDialog):
 
     def build_orders(self):
         page, box = self.make_page(scroll=True)
-        intro = QLabel('Track quotes, parts preparation, customer pickup and JMD balances.')
+        intro = QLabel('Customer details, parts, and payment in one place. All amounts are JMD.')
         intro.setWordWrap(True)
         intro.setObjectName('hint')
         box.addWidget(intro)
-        new_order = QPushButton('+ Create customer order / quote')
-        new_order.clicked.connect(lambda: self.new_entry('order'))
-        box.addWidget(new_order)
         info = QGridLayout()
         self.customer = self.business_input('Customer name or Walk-in', 100)
         self.contact = self.business_input('Phone / email', 100)
@@ -469,32 +630,53 @@ class NotepadWindow(QDialog):
         for row, (label, field, label2, field2) in enumerate((
                 ('Customer', self.customer, 'Contact', self.contact),
                 ('Reference', self.order_ref, 'Type', self.order_type),
-                ('Vehicle', self.vehicle, 'Registration', self.registration),
-                ('VIN / chassis', self.vin, 'Priority', self.priority))):
+                ('Status', self.order_status, 'Priority', self.priority))):
             info.addWidget(QLabel(label), row, 0)
             info.addWidget(field, row, 1)
             info.addWidget(QLabel(label2), row, 2)
             info.addWidget(field2, row, 3)
-        info.addWidget(QLabel('Status'), 4, 0)
-        info.addWidget(self.order_status, 4, 1)
         self.order_timed = QCheckBox('Pickup deadline')
         self.order_due = QDateTimeEdit(QDateTime.currentDateTime().addSecs(3600))
         self.order_due.setCalendarPopup(True)
         self.order_due.setDisplayFormat('MMM d, yyyy h:mm AP')
         self.order_due.setEnabled(False)
         self.order_timed.toggled.connect(self.order_due.setEnabled)
-        info.addWidget(self.order_timed, 5, 0)
-        info.addWidget(self.order_due, 5, 1, 1, 3)
         box.addLayout(info)
+        self.vehicle_toggle = QToolButton()
+        self.vehicle_toggle.setText('Vehicle && pickup details')
+        self.vehicle_toggle.setCheckable(True)
+        self.vehicle_toggle.setArrowType(Qt.RightArrow)
+        self.vehicle_toggle.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        box.addWidget(self.vehicle_toggle)
+        self.vehicle_panel = QWidget()
+        vehicle_form = QFormLayout(self.vehicle_panel)
+        vehicle_form.setContentsMargins(0, 0, 0, 0)
+        vehicle_form.addRow('Vehicle', self.vehicle)
+        vehicle_form.addRow('Registration', self.registration)
+        vehicle_form.addRow('VIN / chassis', self.vin)
+        pickup_row = QHBoxLayout()
+        pickup_row.addWidget(self.order_timed)
+        pickup_row.addWidget(self.order_due, 1)
+        vehicle_form.addRow(pickup_row)
+        self.vehicle_panel.hide()
+        self.vehicle_toggle.toggled.connect(self.vehicle_panel.setVisible)
+        self.vehicle_toggle.toggled.connect(lambda value: self.vehicle_toggle.setArrowType(Qt.DownArrow if value else Qt.RightArrow))
+        box.addWidget(self.vehicle_panel)
+        parts_heading = QLabel('Parts')
+        parts_heading.setObjectName('sectionTitle')
+        box.addWidget(parts_heading)
         self.order_fields = [self.customer, self.contact, self.order_ref, self.order_status, self.order_timed, self.order_due]
         self.order_table = QTableWidget(0, 9)
         self.order_table.setHorizontalHeaderLabels(['Done', 'Part / description', 'Qty', 'Part no.', 'Supplier', 'Bin', 'Unit JMD', 'Stock', 'Line JMD'])
         self.order_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.order_table.verticalHeader().hide()
-        self.order_table.setMinimumHeight(200)
-        widths = (48, 190, 55, 100, 105, 65, 95, 110, 100)
+        self.order_table.setMinimumHeight(170)
+        widths = (44, 170, 44, 100, 105, 65, 82, 100, 95)
         for column, width in enumerate(widths):
             self.order_table.setColumnWidth(column, width)
+        self.order_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        for column in (3, 4, 5):
+            self.order_table.setColumnHidden(column, True)
         box.addWidget(self.order_table)
         inputs = QGridLayout()
         self.part_text = self.business_input('Part description', 200)
@@ -508,22 +690,34 @@ class NotepadWindow(QDialog):
         self.part_stock = QComboBox()
         for status in STOCK_STATUSES:
             self.part_stock.addItem(status.replace('_', ' ').title(), status)
-        inputs.addWidget(self.part_text, 0, 0, 1, 2)
-        inputs.addWidget(self.part_number, 0, 2)
-        inputs.addWidget(self.part_supplier, 1, 0)
-        inputs.addWidget(self.part_bin, 1, 1)
-        inputs.addWidget(self.part_quantity, 1, 2)
-        inputs.addWidget(self.part_price, 2, 0)
-        inputs.addWidget(self.part_stock, 2, 1)
+        inputs.addWidget(self.part_text, 0, 0, 1, 4)
+        inputs.addWidget(QLabel('Quantity'), 1, 0)
+        inputs.addWidget(self.part_quantity, 1, 1)
+        inputs.addWidget(QLabel('Unit JMD'), 1, 2)
+        inputs.addWidget(self.part_price, 1, 3)
+        inputs.addWidget(self.part_stock, 2, 0, 1, 3)
         add = QPushButton('Add part')
         add.clicked.connect(self.add_order_item)
         self.part_text.returnPressed.connect(self.add_order_item)
-        inputs.addWidget(add, 2, 2)
+        add.setObjectName('primary')
+        inputs.addWidget(add, 2, 3)
         box.addLayout(inputs)
+        self.part_details_toggle = QCheckBox('Part numbers, supplier, and bin')
+        self.part_details_panel = QWidget()
+        detail_form = QFormLayout(self.part_details_panel)
+        detail_form.setContentsMargins(0, 0, 0, 0)
+        detail_form.addRow('Part number', self.part_number)
+        detail_form.addRow('Supplier', self.part_supplier)
+        detail_form.addRow('Shelf / bin', self.part_bin)
+        self.part_details_panel.hide()
+        self.part_details_toggle.toggled.connect(self.part_details_panel.setVisible)
+        self.part_details_toggle.toggled.connect(lambda value: [self.order_table.setColumnHidden(column, not value) for column in (3, 4, 5)])
+        box.addWidget(self.part_details_toggle)
+        box.addWidget(self.part_details_panel)
         row = QHBoxLayout()
-        remove = QPushButton('Remove selected part')
+        remove = QPushButton('Remove part')
         remove.clicked.connect(lambda: self.remove_checklist_item(self.order_table))
-        remind = QPushButton('Use pickup deadline as reminder')
+        remind = QPushButton('Remind at pickup')
         remind.clicked.connect(self.remind_at_order_deadline)
         row.addWidget(remove)
         row.addWidget(remind)
@@ -541,7 +735,7 @@ class NotepadWindow(QDialog):
         self.copy_pickup_button = QPushButton('Copy pickup summary')
         self.copy_pickup_button.clicked.connect(self.copy_pickup_summary)
         box.addWidget(self.copy_pickup_button)
-        follow = QPushButton('Schedule customer follow-up')
+        follow = QPushButton('Schedule follow-up')
         follow.clicked.connect(self.schedule_follow_up)
         box.addWidget(follow)
         self.order_notes = QPlainTextEdit()
@@ -549,7 +743,7 @@ class NotepadWindow(QDialog):
         self.order_notes.setMinimumHeight(90)
         self.order_notes.setMaximumHeight(140)
         box.addWidget(self.order_notes)
-        hint = QLabel('Confirm vehicle fitment before handover. Ready means awaiting pickup; Delivered or Cancelled stops reminders. Quotes do not count as open orders.')
+        hint = QLabel('Confirm fitment before handover. Delivered and Cancelled orders stop reminders.')
         hint.setWordWrap(True)
         hint.setObjectName('hint')
         box.addWidget(hint)
@@ -641,7 +835,7 @@ class NotepadWindow(QDialog):
         privacy.setWordWrap(True)
         advice.addWidget(privacy)
         advice.addStretch(1)
-        self.add_section('advice', "Jeffery's advice", page)
+        self.add_section('advice', 'Advice', page)
 
     def build_import_tab(self):
         page = QWidget()
@@ -740,7 +934,7 @@ class NotepadWindow(QDialog):
         area = QScrollArea()
         area.setWidgetResizable(True)
         area.setWidget(page)
-        self.add_section('import', 'Sources / Import', area)
+        self.add_section('import', 'Files', area)
 
     def set_import_busy(self, busy, status=''):
         self.import_loading = busy
@@ -920,7 +1114,10 @@ class NotepadWindow(QDialog):
         self.service.store.close()
 
     def configure(self):
-        self.setStyleSheet(notes_style(self.settings))
+        apply_window_style(self, self.settings)
+        for key, index in self.section_indices.items():
+            self.sections.item(index).setIcon(ui_icon({'overview': 'home', 'writing': 'write', 'checklists': 'list',
+                'orders': 'orders', 'schedule': 'calendar', 'advice': 'spark', 'import': 'write'}.get(key, 'home'), self.settings, 18))
         name = self.settings['business_name'] or 'Famous Twins'
         self.brand_title.setText(name)
         self.setWindowTitle(name + ' · Auto Parts Workspace')
@@ -1334,6 +1531,8 @@ class NotepadWindow(QDialog):
         if not self.loading:
             self.dirty = True
             self.refresh_advice()
+            self.edit_state.setText('Unsaved changes')
+            self.return_to_entry.setVisible(self.entry_mismatch.isVisible())
         self.save_button.setEnabled(bool(self.title.text().strip() or self.body.toPlainText().strip()))
 
     def choose_repeat(self):
@@ -1408,6 +1607,8 @@ class NotepadWindow(QDialog):
                 self.status.setText('Search could not finish: ' + str(exc))
             mode = self.filter.currentIndex()
             for note in sorted(self.service.store.notes, key=lambda n: (n["done"], -n["created"])):
+                if self._record_scope is not None and note['kind'] != self._record_scope:
+                    continue
                 if (matched is not None and note['id'] not in matched) or (mode == 1 and note["done"]) or (mode == 2 and not note["done"]) or (mode == 3 and note['kind'] != 'order') or (mode == 4 and note['kind'] != 'list') or (mode == 5 and note['kind'] != 'note'):
                     continue
                 prefix = "✓ " if note["done"] else "• "
@@ -1420,6 +1621,9 @@ class NotepadWindow(QDialog):
                 self.list.addItem(item)
                 if note["id"] == self.editing_id:
                     self.list.setCurrentItem(item)
+        self.record_count.setText(str(self.list.count()))
+        self.browser_empty.setVisible(self.list.count() == 0)
+        self.browser_empty.setText('No matching entries. Try another search.' if search else 'No entries yet. Create one to get started.')
         summary = dashboard_summary(self.service.store.notes)
         self.summary.setText(f"{summary['open_orders']} open orders · {summary['ready_orders']} ready · {summary['late_orders']} past deadline · {self.service.store.character_count():,} characters saved")
         linked = self.service.store.state["linked_file"]
@@ -1459,6 +1663,7 @@ class NotepadWindow(QDialog):
         if not self.maybe_leave():
             return False
         self.editing_id = None
+        self.reload_button.hide()
         self._loaded_note_signature = None
         if self.shared_business is not None:
             self.shared_business.mark_editing(None)
@@ -1497,6 +1702,7 @@ class NotepadWindow(QDialog):
         if not note:
             return
         self.editing_id = identifier
+        self.reload_button.hide()
         if self.shared_business is not None:
             self.shared_business.mark_editing(identifier)
         self.loading = True
@@ -1528,8 +1734,8 @@ class NotepadWindow(QDialog):
         self.dirty = False
         self.update_buttons()
         self.refresh_advice()
-        self.show_section({'order': 'orders', 'list': 'checklists'}.get(note.get('kind'), 'writing'))
         self._loaded_note_signature = json.dumps(note, sort_keys=True, ensure_ascii=False)
+        self.show_section({'order': 'orders', 'list': 'checklists'}.get(note.get('kind'), 'writing'))
         self.reading.emit()
 
     def show_document_page(self, value):
@@ -1550,14 +1756,17 @@ class NotepadWindow(QDialog):
 
     def set_business_pending(self, pending):
         self.business_pending = bool(pending)
-        for widget in (self.editor_tabs, self.entry_heading, self.editor_actions, self.list, self.sections):
+        for widget in (self.editor_tabs, self.entry_heading, self.editor_actions, self.list, self.sections,
+                       self.create_button, self.empty_create, self.return_to_entry):
             widget.setEnabled(not pending)
+        self.update_buttons()
 
     def finish_saved_note(self, note, was_document=False):
         self.loading = True
         self.title.setText(note['title'])
         self.loading = False
         self.editing_id = note['id']
+        self.reload_button.hide()
         self.dirty = False
         if self.shared_business is not None and note['kind'] in ('list', 'order'):
             self.shared_business.mark_editing(note['id'])
@@ -1597,6 +1806,7 @@ class NotepadWindow(QDialog):
                     self.set_business_pending(False)
                     if error or not note:
                         self.status.setText('Not saved: ' + str(error or 'The server did not return the saved entry.') + ' Your draft is preserved.')
+                        self.reload_button.setVisible(self.editing_id is not None)
                         return
                     self.finish_saved_note(note, was_document)
                 begun = self.shared_business.save(self.editing_id, title, body, self.repeat.value(), due, details, completed)
@@ -1629,9 +1839,14 @@ class NotepadWindow(QDialog):
         self.pin.setEnabled(note is not None and not note["done"])
         self.done_button.setEnabled(note is not None)
         self.remove.setEnabled(note is not None)
+        self.reload_action.setEnabled(self.editing_id is not None)
+        self.delete_action.setEnabled(note is not None)
         self.save_button.setEnabled(bool(self.title.text().strip() or self.body.toPlainText().strip()))
         self.pin.setText("Unpin" if note and note["pinned"] else "Pin")
         self.done_button.setText("Restore" if note and note["done"] else "Done")
+        self.edit_state.setText('Saving to team server...' if self.business_pending else
+                                'Unsaved changes' if self.dirty else 'Saved' if note else 'New entry')
+        self.save_button.setText('Save ' + {'note': 'writing', 'list': 'checklist', 'order': 'order'}.get(self.kind.currentData(), 'changes'))
 
     def business_change(self, operation, *args, after=None):
         if self.business_pending:
@@ -1645,6 +1860,7 @@ class NotepadWindow(QDialog):
             self.set_business_pending(False)
             if error:
                 self.status.setText('Not updated: ' + str(error) + '. Your draft is preserved.')
+                self.reload_button.setVisible(self.editing_id is not None)
                 return
             if after:
                 after()
@@ -1779,7 +1995,7 @@ class ReminderPopup(QWidget):
     def configure(self):
         visible = self.isVisible()
         self.setStyleSheet(notes_style(self.settings))
-        self.guidance.setStyleSheet("color: " + palette(self.settings)["text"] + ";")
+        self.guidance.setStyleSheet("color: " + ui_palette(self.settings)["text"] + ";")
         self.setWindowFlag(Qt.WindowStaysOnTopHint, self.settings["always_on_top"])
         if visible:
             self.show()

@@ -1,10 +1,11 @@
 # PixelSystem Buddy 6.0 — Jeffery
 
-Jeffery is a Windows desktop companion with a small system HUD, an animated
-character, a notebook and reminders, and optional Groq chat. The desktop
-notebook is now the **Famous Twins auto-parts workspace**, with separate
-Writing, Checklists, Orders, Schedule, and Overview pages, exact JMD totals,
-shared office business records, and six new parts-counter animations.
+Jeffery is a Windows desktop companion with a renewed **Home** interface,
+an animated character, a small system monitor, and the **Famous Twins
+auto-parts workspace**. Home brings orders, checklists, writing, schedules,
+coworker chat, and optional AI help into one clear starting point. The
+workspace keeps exact JMD totals, shared office business records, and six
+parts-counter animations.
 The Android/iPhone companion remains in the mobile folder. Sliding replies,
 the tiny HUD, and real Windows desktop play remain available.
 
@@ -15,14 +16,16 @@ details, manual sourcing, pickup summaries, and daily checklist templates.
 
 1. Extract the complete ZIP.
 2. Run **Start_Buddy.bat**. Python 3.11 or newer, 64-bit, is needed.
-3. Right-click Jeffery to open his menu.
+3. Home opens automatically. Choose a task from its sidebar or creation buttons.
+   Click the tray icon or double-click Jeffery to return to Home; right-click
+   Jeffery still opens his menu.
 
 For accounts and coworker messaging on a shared office server, see
 **[Work Chat setup](WORK_CHAT.md)**. The Python server provides username/password
 sign-up, a shared Team Room, private direct messages, shared orders/checklists,
 and a browser chat interface.
-Desktop clients open **Chat → Work Chat · Coworkers**. Jeffery's existing Groq AI
-chat is under **Chat → Talk to Jeffery · Groq**. On the main office PC, run
+Desktop clients open **Home → Coworkers** for office messaging and
+**Home → Ask Jeffery** for Groq AI help. On the main office PC, run
 **Start_Work_Server.bat** using the project's local disk path, then share that
 same clean project folder as a read-only Windows share. Coworkers open
 **Start_Work_Buddy.bat** from that shared folder or a shortcut to it.
@@ -70,6 +73,50 @@ py -3 -m venv .venv
 .\.venv\Scripts\python.exe main.py
 ```
 
+## Interface renewal
+
+![Renewed Jeffery Home with example work](preview/interface-renewal-home.png)
+
+The screenshot uses demonstration accounts and example business records.
+
+Home shows quick actions for **New order**, **New checklist**, and **Write a
+note**, along with open orders, ready pickups, urgent work, outstanding JMD,
+recent entries, and work needing attention. Search by customer, part, order
+reference, or saved text and open a result directly. **Connect to office**
+opens the coworker sign-in. The sidebar separates **Coworkers** from
+**Ask Jeffery**, and **More tools** includes the monitor, top apps, shortcuts,
+saved memory, and the office setup guide.
+
+Home opens at normal startup when **Settings → Getting started → Open Home
+when Jeffery starts** is enabled. **Launch with monitor hidden** also keeps
+Home closed at startup. Closing Home leaves the buddy running; use the tray
+menu to exit. Home buttons in the workspace, chat, settings, memory, PC activity,
+and quick launch bring you back to the starting point.
+
+Choose **Settings → Appearance → Workspace appearance** for **Light**, **Dark**,
+or **Follow Windows**, then click **Apply**. The default is a light workspace
+with teal accents. This appearance is separate from the desktop monitor's
+Midnight/Forest/Plum theme and the buddy's character colors. Settings now use a
+section sidebar; changes remain a draft until Apply, and Cancel leaves saved
+preferences intact.
+
+The workspace's entry browser follows the current task: Writing lists writing,
+Checklists lists checklists, and Orders lists orders and quotes. **Hide entries**
+gives the editor more space; **Show entries** brings the list back. Start with
+customer and part essentials, then expand **Vehicle & pickup details** or
+**Part numbers, supplier, and bin** when needed. **Save changes** stays visible;
+less frequent **Delete entry** and **Reload saved entry** actions are under
+**More**. A failed shared edit exposes **Reload saved** beside the save controls
+so you can review the latest version while your draft remains available.
+
+The **Files** page replaces the old Sources / Import label. The AI connection
+page is now **Ask Jeffery → AI setup**; optional behavior and privacy controls
+are under **Show preferences and privacy**. The **Coworkers** window has a
+clearer sign-in/create-account form and **Find a coworker** search. Your existing
+accounts, office server, JMD calculations, and shared-record behavior continue
+to work with this interface. See [Famous Twins workflow](FAMOUS_TWINS.md) and
+[office setup](WORK_CHAT.md) for the everyday and installation steps.
+
 ## A more lifelike virtual buddy
 
 The built-in robot, cat, and knight use rounded forms, material shading, soft
@@ -95,38 +142,40 @@ the Windows desktop app. The mobile companion keeps its existing workflow.
 
 | Upgrade | How to use it |
 | --- | --- |
-| Preferences and daily-task memory | Talk to Jeffery → Memory; tell him "I like mint tea" or "Remember that my birthday is June 6" |
-| Notebook recall in chat | Talk to Jeffery → Connection → Use my saved notes; completed notes and document excerpts can also be recalled |
-| PDF and website references | Notepad → Sources / Import → Choose PDF or enter a public webpage → review → Save to notebook |
+| Renewed starting point | Home → create work, inspect queues, search saved entries, or connect to the office |
+| Workspace appearance | Settings → Appearance → Light / Dark / Follow Windows → Apply |
+| Preferences and daily-task memory | Ask Jeffery → Memory; tell him "I like mint tea" or "Remember that my birthday is June 6" |
+| Notebook recall in chat | Ask Jeffery → AI setup → Show preferences and privacy → Use my saved notes; completed notes and document excerpts can also be recalled |
+| PDF and website references | Workspace → Files → Choose PDF or enter a public webpage → review → Save to notebook |
 | One-billion-character notebook | Large imports use Save full document; saved documents open in text pages and remain searchable beyond the preview |
-| Web search and source-grounded replies | Talk to Jeffery → Web sources → Read / search; enable Use web sources for my next reply |
-| Animated medieval system monitor | Settings → Overlay → Monitor style → Medieval; choose Classic for the previous look |
-| Varied Groq greetings and interaction remarks | Talk to Jeffery → Connection → Use Groq for varied greetings and interactions |
-| Business-minded personality | Connection → Business name and Business-minded greetings and advice |
-| Famous Twins workspace | Right-click → Famous Twins → Business Overview or Workspace; separate Writing, Checklists, Orders, and Schedule pages |
+| Web search and source-grounded replies | Ask Jeffery → Web sources → Read / search; enable Use web sources for my next reply |
+| Animated medieval system monitor | Settings → PC monitor → Monitor style → Medieval; choose Classic for the previous look |
+| Varied Groq greetings and interaction remarks | Ask Jeffery → AI setup → Show preferences and privacy → Use Groq for varied greetings and interactions |
+| Business-minded personality | AI setup → Show preferences and privacy → Business name and Business-minded greetings and advice |
+| Famous Twins workspace | Home → Orders & quotes / Checklists / Writing / Schedule; open a summary count for Overview |
 | Shared orders and checklists | Sign in through Work Chat with the office server IP; each coworker uses their own account |
-| Customer orders and quotes | Orders → + Create customer order / quote; customer, vehicle, VIN/chassis, priority, parts, supplier, bin, and manual stock status |
+| Customer orders and quotes | Home → New order; expand optional vehicle/part details as needed |
 | Exact JMD amounts | Orders → Unit JMD and Payment received JMD; totals, remaining balance, and credit use integer cents |
-| Operational checklist templates | Checklists → Opening / Closing / Parts handover → Add template tasks → Save entry |
+| Operational checklist templates | Checklists → Opening / Closing / Parts handover → Use template → Save changes |
 | Pickup deadlines and status | Orders → Pickup deadline; New / Preparing / Ready / Delivered / Cancelled |
 | Sourcing and customer history | Overview → Parts to source and Customer history; double-click a history row to open it |
 | Pickup details to share | Orders → Copy pickup summary; review the clipboard text before sending it yourself |
 | Fresh reminders of remaining work | Due reminders request new Groq wording and filter repeated phrases |
 | Android and iPhone app | mobile/README.md; Today, Orders, Notes, Chat, Settings |
 | Desktop-to-phone notebook transfer | Desktop Backup → Mobile small-note JSON / Import backup; phone Settings → Move your notebook |
-| Groq reads saved notes and linked Notepad lines | Notepad → Use Groq for smarter reminders → Set up Groq |
-| Helpful reminder and one concrete next step | Reminder card and Notepad → Jeffery's advice |
-| Suggested times from note details | Jeffery's advice → Use this time → Save note |
+| Groq reads saved notes and linked Notepad lines | Workspace → Use Groq for smarter reminders → Set up Groq |
+| Helpful reminder and one concrete next step | Reminder card and Workspace → Jeffery's advice |
+| Suggested times from note details | Jeffery's advice → Use this time → Save changes |
 | Easier note management | Search, To do / Done filters, repeat presets and quick time buttons |
 | Flexible snooze | Reminder card → 5, 15, 30 or 60 min → Later |
 | Plain replies slide down one line at a time | Chat and Jeffery's speech bubbles |
-| Tiny HUD, 224 pixels wide | On by default; Settings → Overlay → Tiny HUD |
+| Tiny HUD, 224 pixels wide | On by default; Settings → PC monitor → Use the small 224-pixel monitor |
 | 49 animation states, including 24 new moves | Random play; Play with Jeffery → More Moves |
 | Six desktop business animations | Play with Jeffery → At the Parts Counter; stock check, part scan, packing, wrench, high five, coffee |
 | Actual visible folder icons | Desktop Play → Real Folders, Tabs and Windows |
 | Actual browser or Explorer tab controls | Choose a tab → Jump / ride, or Select tab |
 | Selected letters from an editor | Select text → Ctrl+Alt+J → drag letters → Apply to editor |
-| Groq chooses occasional actions and remarks | Talk to Jeffery → Connection → Let Groq choose occasional moves |
+| Groq chooses occasional actions and remarks | Ask Jeffery → AI setup → Show preferences and privacy → Let Groq choose occasional moves |
 | Window following | Riding or hiding follows the detected target as the window moves |
 
 All existing monitor, notes, sticky notes, launcher, focus timer, themes, mouse
@@ -142,7 +191,7 @@ daily routines can be learned locally without a key. Saved daily tasks are
 connected to memory and are removed from current routines when completed or
 deleted. Updated preferences replace conflicting older ones.
 
-Open **Talk to Jeffery → Memory** to inspect, add, edit, search, forget, or clear
+Open **Ask Jeffery → Memory** to inspect, add, edit, search, forget, or clear
 memories. Its three controls separately govern automatic learning, optional
 Groq enrichment, and whether preferences are included in Groq replies. Turning
 learning off stops collecting new memories; turn sharing off to keep saved
@@ -150,13 +199,13 @@ preferences out of Groq. Imported documents are references, not statements of
 your likes/dislikes. API keys and credential-like input are excluded from
 preference memory. Conversation history itself stays in the current session.
 
-The Chat **Notepad** shortcut and notebook **Talk to Jeffery** button connect
+The assistant's **Workspace** shortcut and notebook's AI shortcut connect
 the two windows. With saved-note sharing enabled, chat searches the full saved
 notebook for relevant excerpts, including completed notes and facts near the
 end of imported documents. It reads only saved notes, not an unsaved editor
 draft or arbitrary open files on your computer.
 
-In **Notepad → Sources / Import**, select a text-based PDF or enter a public
+In **Workspace → Files**, select a text-based PDF or enter a public
 HTTP/HTTPS webpage. Reading runs in the background with progress and Cancel.
 Review extracted text before saving. Small imports remain editable and can be
 kept as sections. Large imports show a bounded preview and **Save full document**
@@ -205,7 +254,7 @@ you want a reminder. Groq can suggest dates and useful next steps, but does not
 silently schedule them. Background advice and notebook chat require the
 existing saved-note sharing control.
 
-**Talk to Jeffery → Web sources** accepts a website address or search topic.
+**Ask Jeffery → Web sources** accepts a website address or search topic.
 Enable **Use web sources for my next reply** to fetch information before an
 answer; with an empty address box, Jeffery searches for your current question.
 Search uses DuckDuckGo snippets and source links. Choose **Read selected page**
@@ -220,7 +269,7 @@ and any website you choose; this is separate from ordinary Windows networking.
 The compact monitor defaults to parchment readings, a brass/wood frame, and a
 small torch animated using real CPU activity. It retains CPU/RAM/disk/network
 labels and graphs. Quiet mode, low power, and hiding the monitor stop the flame
-animation. **Settings → Overlay → Monitor style → Classic** restores the
+animation. **Settings → PC monitor → Monitor style → Classic** restores the
 previous appearance. Chat now scrolls new lines smoothly and resumes unfinished
 reply animations when reopened.
 
@@ -232,7 +281,7 @@ extracts article text from already-fetched web pages; existing public-URL checks
 download limits, cancellation, and fallback HTML reading remain in place.
 RapidFuzz adds typo-tolerant notebook and memory matching. SQLite remains the
 local full-document store and exact-word index.
-Choose **Settings → Documents & memory → PDF reader** to use the compatibility
+Choose **Settings → Files & memory → PDF reader** to use the compatibility
 reader for a difficult PDF. Automatic mode also retries compatibility extraction
 when PDFium detects an oversized text object, preserving the full text. OCR
 requires the native reader.
@@ -260,7 +309,7 @@ The last command explicitly downloads `sentence-transformers/all-MiniLM-L6-v2`
 from Hugging Face into `data/models/all-MiniLM-L6-v2` (or the per-user data fallback).
 It keeps safe tensor files and validates the model locally. Use `--output-dir`
 for another folder and `--revision` to choose an immutable model commit. Enable
-**Settings → Documents & memory → Find related notebook memories by meaning**
+**Settings → Files & memory → Find related writing by meaning**
 and select the local model directory.
 Jeffery loads models locally on the CPU and never downloads one during startup
 or chat. Notebook text stays local during embedding; the existing Groq sharing
@@ -302,31 +351,33 @@ while preserving your local notebook and memory files.
 
 ## Business orders and varied greetings
 
-Open **Connection**, save and test a working Groq key, set your business name,
-and enable **Business-minded greetings and advice** and **Use Groq for varied
+Open **Ask Jeffery → AI setup**, save and test a working Groq key, then expand
+**Show preferences and privacy**. Set your business name and enable
+**Business-minded greetings and advice** and **Use Groq for varied
 greetings and interactions**. Enable saved-note sharing so greetings and chat
 can refer to current orders. Jeffery passes recent phrases to Groq and replaces
 exact repeats with varied local wording. Greeting requests have a one-minute
 cooldown. Startup, mouse greetings, and everyday interactions use this voice;
 random Groq moves retain their separate interval.
 
-Open **Famous Twins → Workspace** for separate Writing, Checklists, Orders,
-and Schedule pages. **+ Order** captures customer/vehicle details, manual
+Use Home's sidebar for separate Writing, Checklists, Orders, and Schedule
+pages. **New order** captures customer/vehicle details, manual
 part sourcing, prices, payments, pickup deadlines, and order/quote status.
 Amounts are JMD; quotes are excluded from receivables and open-order counts.
-**+ List** provides a dedicated task table with Opening, Closing, and Parts
+**New checklist** provides a dedicated task table with Opening, Closing, and Parts
 handover templates. Overview shows order queues, sourcing requests, balances,
 and customer history. [The workflow guide](FAMOUS_TWINS.md) describes each page.
 
-Sign in through **Work Chat · Coworkers** to load shared orders/checklists from
+Sign in through **Home → Coworkers** to load shared orders/checklists from
 the office server. Every authenticated coworker can edit these records;
 Writing and documents stay local. Old local business entries require an
-explicit **Save entry** to publish. A stale save is rejected and its editor
-draft stays intact; use **Reload saved** to review the coworker's saved version
+explicit **Save changes** to publish. A stale save is rejected and its editor
+draft stays intact; use the exposed **Reload saved** control or **More → Reload
+saved entry** to review the coworker's saved version
 before reapplying changes. The main server must be available for business saves.
 
-Pickup deadlines and reminder schedules remain separate. **Use pickup deadline
-as reminder** copies the deadline into Schedule; save to apply it. Ready keeps
+Pickup deadlines and reminder schedules remain separate. **Remind at pickup**
+copies the deadline into Schedule; save to apply it. Ready keeps
 the order open for pickup; Delivered, Cancelled, or Done stops reminders.
 Jeffery's optional Groq advice is grounded in saved work and is prompted not to
 invent stock, payments, fitment, promises, or completed work. Manual stock
@@ -348,9 +399,10 @@ to Groq, so asking about a car part does not also trigger a wave.
 The default HUD shows CPU, RAM, disk, and network in narrow rows with small
 60-second graphs. GPU and battery appear when supported. Uptime and process
 count fit in the footer; a focus countdown takes priority there. Drag it to move.
-Double-click opens Overlay Settings. Right-click opens the menu.
+Double-click the monitor to open PC monitor settings. Right-click opens the menu.
 
-Turn off **Tiny HUD** to return to the larger detailed layout. The old Compact
+Turn off **Use the small 224-pixel monitor** in PC monitor settings to return
+to the larger detailed layout. The old Compact
 layout option controls that larger view. Graphs, opacity, metrics, refresh rate,
 click-through, and visibility are still configurable.
 
@@ -426,10 +478,11 @@ to another control.
 
 ## Groq: chat, actions, and remarks
 
-1. Right-click → **Talk to Jeffery · Groq** → **Connection**.
+1. Open **Home → Ask Jeffery → AI setup**.
 2. Paste a working key in the masked field and click **Save key**.
 3. Click **Test connection**.
-4. Enable **Let Groq choose occasional moves and remarks**.
+4. Expand **Show preferences and privacy** and enable
+   **Let Groq choose occasional moves and remarks**.
 5. Set **Between AI moves**; the default is 120 seconds, with a 60-second minimum.
 
 Use **Let Groq pick a move now** for an immediate try when Jeffery is free.
@@ -453,7 +506,7 @@ protected. Only validated companion actions are accepted. There is no shell
 command tool. One chat turn can run up to four requested actions with one
 follow-up response.
 
-The default model is openai/gpt-oss-20b; Connection also offers
+The default model is openai/gpt-oss-20b; AI setup also offers
 openai/gpt-oss-120b and an editable model field. Model availability and limits
 depend on your Groq account. **Send**, **Test**, enabled background behavior, and
 smart note generation make network requests. Requests time out after 25 seconds; Cancel or closing
@@ -463,7 +516,8 @@ or test a replacement. Local animations continue without a key.
 
 CPU/RAM readings and saved-note sharing are enabled by default in new installs.
 The notebook checkbox and **Use my saved notes for chat and smart reminders** in
-Connection control the same preference. Switch it off to stop pending and future
+AI setup's preferences and privacy controls govern the same preference.
+Switch it off to stop pending and future
 note requests. Chat includes the next scheduled time and up to 20 incomplete notes,
 with the soonest reminders first. **Include visible folder and tab names** is off by default. With it
 off, Groq receives target IDs and types, without their titles or paths.
@@ -518,7 +572,7 @@ a working key. Each new or edited saved note is read asynchronously. Groq writes
 a short reminder based on the note and a useful next step. These slide into the
 reminder card and appear in **Jeffery's advice**. A date stated in a note can
 produce a suggested time; missing or ambiguous times remain unscheduled
-suggestions. Click **Use this time**, then **Save note**, to adopt a suggestion.
+suggestions. Click **Use this time**, then **Save changes**, to adopt a suggestion.
 AI advice does not silently change your chosen times, repeats, or note contents.
 Relative dates use when the note was written; snoozing does not move an old
 "tomorrow" forward. Groq is prompted to use absolute dates in saved advice.
@@ -547,7 +601,7 @@ it does not send the source file path or unsaved editor draft. Linked lines
 are imported into the notebook; the assistant does not rewrite the .txt file.
 Reminders require the app to remain running; this is not an OS scheduled service.
 
-Quick Launch provides Browser, VS Code when found, Jeffery's Notepad, Documents,
+Quick Launch provides Browser, VS Code when found, Notebook, Documents,
 and up to 30 saved app, folder, or HTTP/HTTPS website shortcuts.
 Apps require an executable path; batch files and shell scripts are not accepted.
 Shortcuts launch when you click them.
@@ -556,7 +610,7 @@ Shortcuts launch when you click them.
 
 - Top Apps shows live CPU/memory processes only while its window is open.
 - Focus Timer supports start, pause, resume, reset, and a break reminder.
-- General Settings has quiet mode, low power, settings import/export, and Windows
+- Settings → Getting started has quiet mode, low power, settings import/export, and Windows
   startup for your account.
 - Imported settings remain a draft until Apply. Startup and saved positions stay local.
 - Click-through unlocks through the buddy or tray menu.
@@ -635,7 +689,7 @@ Native icon/tab detection, mixed-DPI behavior, foreground restoration, selected
 text edits, DPAPI, registry startup, optional Windows GPU sampling, and the EXE
 build still need checking on your PC. Provider support varies across apps.
 Live Groq requests could not be verified here; a working key must be tested in
-Connection. Preview examples do not demonstrate a live API connection.
+AI setup. Preview examples do not demonstrate a live API connection.
 
 Screenshots and an animation GIF are in preview. The folder/tab examples there
 use scripted target data and the notebook examples use temporary test notes.
@@ -645,6 +699,7 @@ use scripted target data and the notebook examples use temporary test notes.
 | File | Purpose |
 | --- | --- |
 | main.py | Coordinates windows, notes, native play, and AI |
+| home_window.py, ui_style.py | Central Home and shared light/dark workspace styling |
 | pet.py, characters.py, motion.py | Character drawing, movement, parachute and hops |
 | sliding_text.py | Plain replies and per-line slide/fade |
 | overlay.py, system_stats.py | Small HUD and asynchronous system readings |

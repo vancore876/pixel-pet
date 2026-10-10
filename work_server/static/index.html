@@ -3,21 +3,21 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <meta name="color-scheme" content="dark">
-  <title>Jeffery · Work Chat</title>
+  <meta name="color-scheme" content="light">
+  <title>Coworkers · Jeffery</title>
   <link rel="stylesheet" href="/static/style.css">
   <script src="/static/app.js" defer></script>
 </head>
 <body>
   <main id="auth-view" class="auth-shell">
     <aside class="welcome">
-      <div class="brand"><span class="buddy-mark" aria-hidden="true">J</span><span>JEFFERY <small>WORK CHAT</small></span></div>
-      <div class="welcome-copy"><span class="eyebrow">A LITTLE BUDDY. A CONNECTED TEAM.</span><h1>Your team,<br>one conversation away.</h1><p>Catch up in the team room or message a coworker directly. Everyone has their own account.</p></div>
+      <div class="brand"><span class="buddy-mark" aria-hidden="true">J</span><span>JEFFERY <small>COWORKERS</small></span></div>
+      <div class="welcome-copy"><span class="eyebrow">A MORE CONNECTED WORKDAY</span><h1>A little hello.<br>A stronger team.</h1><p>Keep the parts counter moving. Catch up with everyone or send a coworker a quick message.</p><div class="welcome-points"><span>A team room for the whole workplace</span><span>Direct messages between coworkers</span><span>A separate login for every person</span></div></div>
       <div class="network-note"><span class="status-dot"></span><span>Hosted on your work server<br><small id="server-name"></small></span></div>
     </aside>
     <section class="auth-panel" aria-labelledby="auth-title">
       <div class="auth-card">
-        <span class="eyebrow">WELCOME TO WORK CHAT</span><h2 id="auth-title">Good to see you.</h2><p class="muted" id="auth-subtitle">Sign in to join your coworkers.</p>
+        <span class="eyebrow">WELCOME TO YOUR TEAM</span><h2 id="auth-title">Good to see you.</h2><p class="muted" id="auth-subtitle">Sign in to join your coworkers.</p>
         <div class="auth-tabs" aria-label="Account action"><button id="signin-tab" type="button" class="selected" aria-pressed="true">Sign in</button><button id="signup-tab" type="button" aria-pressed="false">Create account</button></div>
         <form id="auth-form">
           <label for="username">Username</label><input id="username" name="username" autocomplete="username" minlength="3" maxlength="32" pattern="[A-Za-z0-9_.\-]{3,32}" required spellcheck="false" placeholder="Your username">
@@ -32,7 +32,7 @@
   </main>
   <main id="chat-view" class="chat-shell" hidden>
     <aside class="sidebar">
-      <div class="brand"><span class="buddy-mark" aria-hidden="true">J</span><span>JEFFERY <small>WORK CHAT</small></span></div>
+      <div class="brand"><span class="buddy-mark" aria-hidden="true">J</span><span>JEFFERY <small>COWORKERS</small></span></div>
       <div class="sidebar-section"><span class="eyebrow">YOUR WORKSPACE</span><button id="team-room" class="conversation selected" type="button"><span class="room-icon" aria-hidden="true">#</span><span>Team Room<small>Everyone in your workplace</small></span></button></div>
       <div class="people-heading"><span class="eyebrow">DIRECT MESSAGES</span><button id="refresh-users" class="icon-button" type="button" aria-label="Refresh coworkers">↻</button></div>
       <label class="sr-only" for="people-search">Find a coworker</label><input id="people-search" class="people-search" type="search" placeholder="Find a coworker…" autocomplete="off">

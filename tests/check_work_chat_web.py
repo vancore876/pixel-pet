@@ -4,6 +4,7 @@ Install requirements-server-dev.txt and Playwright Chromium before running.
 """
 from contextlib import contextmanager
 import json
+import os
 from pathlib import Path
 import socket
 import sys
@@ -143,6 +144,21 @@ def main():
             expect(alice.locator("#message-body")).to_have_value("A shared-room draft")
             alice.unroute("**/api/messages", fail_send)
 
+            # Review the renewed desktop and phone layout without real user data.
+            screenshot_folder = os.environ.get("JEFFERY_UI_SCREENSHOT_DIR")
+            if screenshot_folder:
+                target = Path(screenshot_folder).resolve()
+                target.mkdir(parents=True, exist_ok=True)
+                alice.get_by_role("button", name="Refresh", exact=True).click()
+                expect(alice.locator("#connection-status")).to_contain_text("Connected")
+                alice.screenshot(path=str(target / "browser-coworkers.png"), full_page=True)
+            bob.set_viewport_size({"width": 390, "height": 844})
+            expect(bob.locator("#message-body")).to_be_visible()
+            expect(bob.locator("#team-room")).to_be_visible()
+            assert bob.evaluate("document.documentElement.scrollWidth <= innerWidth"), "Phone chat overflows horizontally"
+            if screenshot_folder:
+                bob.screenshot(path=str(target / "browser-coworkers-phone.png"), full_page=True)
+
             alice.get_by_role("button", name="Sign out", exact=True).click()
             expect(alice.locator("#auth-view")).to_be_visible()
             expect(alice.locator("#password")).to_have_value("")
@@ -150,6 +166,8 @@ def main():
             assert alice.evaluate("localStorage.length === 0 && sessionStorage.length === 0"), "Credentials stored in browser storage"
             bob.reload()
             expect(bob.locator("#auth-view")).to_be_visible()
+            if screenshot_folder:
+                bob.screenshot(path=str(target / "browser-signin-phone.png"), full_page=True)
             assert not errors, errors
             print("PASS: browser sign-up, team delivery, private DMs, third-user isolation, literal HTML, stale replies, drafts, failed send, logout, and RAM-only sessions")
         finally:

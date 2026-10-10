@@ -1,9 +1,35 @@
 # Famous Twins auto-parts workspace
 
-Right-click Jeffery and open **Famous Twins → Business Overview**, or choose a
-page under **Famous Twins → Workspace**. The notebook has separate **Writing**,
-**Checklists**, **Orders**, **Schedule**, and **Overview** pages. Sources / Import
-and Jeffery's advice remain available alongside them.
+Start at **Jeffery Home**. Choose **New order**, **New checklist**, or **Write a
+note**, or use the sidebar for **Orders & quotes**, **Checklists**, **Writing**,
+and **Schedule**. Open a business summary count for **Overview**. The **Files**
+page holds PDF/web imports, and Jeffery's advice remains available alongside
+the task pages.
+
+Home opens at normal startup unless its setting is disabled or **Launch with
+monitor hidden** is enabled. Click the tray icon or double-click the buddy to
+return to it. Each main window also has a **Home** button. Closing Home leaves
+Jeffery running; use the tray menu to exit.
+
+Choose **Settings → Appearance → Workspace appearance** for Light, Dark, or
+Follow Windows, then Apply. Workspace appearance is separate from desktop
+monitor themes and buddy colors. Settings use a sidebar and keep edits as a
+draft until Apply; Cancel keeps the saved preferences.
+
+## Find and edit work
+
+Home search finds saved work by customer, part, reference, or text. Within the
+workspace, the saved-entry browser follows the selected page: orders/quotes,
+checklists, or writing. Choose an entry to edit it, or use the page's creation
+button. **Hide entries** gives the editor more room; **Show entries** brings
+the browser back. Smaller windows keep the task page usable by collapsing the
+entry browser.
+
+Use **Save changes** or **Ctrl+S** to keep your edits. **More → Delete entry**
+and **More → Reload saved entry** hold the less frequent actions. When a shared
+edit fails, **Reload saved** also appears beside the save controls. Your
+unsaved draft stays available for review; copy any needed edits before
+discarding it to reload another coworker's version.
 
 ## Connect the office team
 
@@ -12,11 +38,13 @@ The main Windows PC runs **Start_Work_Server.bat**. Coworkers open
 profile keeps its own settings, writing, memory, and Python environment.
 See [Work Chat setup](WORK_CHAT.md) for the share, firewall, and server steps.
 
-On each workstation, open **Chat → Work Chat · Coworkers**, enter the confirmed
+On each workstation, open **Home → Coworkers**, enter the confirmed
 server IP (proposed **192.168.50.194**), and create or sign in to that coworker's
-own username and password. Wait for the workspace to show **Shared with
-coworkers**. The same login enables team chat, direct messages, and shared
-orders/checklists; there is no second business login.
+own username and password. Wait for the workspace to show **Connected to your
+team**. The same login enables team chat, direct messages, and shared
+orders/checklists; there is no second business login. The separate **Ask
+Jeffery** page is the optional AI assistant, whose key is configured in
+**AI setup**.
 
 Every authenticated coworker can read, edit, complete, or delete every shared
 order and checklist. These business records are not private direct messages.
@@ -27,7 +55,7 @@ Jeffery for the business workspace.
 
 Writing and imported full documents remain local. Old local orders/checklists
 are not uploaded just by signing in: open one and explicitly choose **Save
-entry** to publish it. Once published, it is visible to all signed-in coworkers.
+changes** to publish it. Once published, it is visible to all signed-in coworkers.
 New orders and checklists need the server connection and login to save. Explicit
 status updates, such as Done, also save and publish an existing local entry.
 
@@ -45,40 +73,45 @@ available later through the setup guide.
 
 ## Writing
 
-Use **+ Write** for notes, ideas, reference text, and documents. This page keeps
-the text editor separate from customer fields and checklist controls. **Save
-entry** or **Ctrl+S** saves locally. **Ctrl+N** starts a new writing entry.
+Use **Home → Write a note** or **Writing → + New writing** for notes, ideas,
+reference text, and documents. This page keeps the text editor separate from
+customer fields and checklist controls. **Save changes** or **Ctrl+S** saves
+locally. **Ctrl+N** starts a new writing entry.
 
 Search finds saved text and business details such as customers, references,
 vehicle registrations, VINs, part numbers, suppliers, and bins. The entry filter
 can show writing, checklists, orders/quotes, open entries, or completed entries.
-Use **Sources / Import** to review PDF or webpage text before saving it. Full
+Use **Files** to review PDF or webpage text before saving it. Full
 documents retain their existing paged reader and complete ZIP backup support.
 
 ## Checklists
 
-Use **+ List** for operational tasks. This page has its own task table,
+Use **Home → New checklist** or **Checklists → + New checklist** for operational
+tasks. This page has its own task table,
 quantities, completion checkboxes, progress bar, and checklist notes; it does
 not show the order-pricing table.
 
-Choose **Opening**, **Closing**, or **Parts handover**, then **Add template
-tasks**. Review and adapt the suggested tasks to the shop's procedures. Existing
+Choose **Opening**, **Closing**, or **Parts handover**, then **Use template**.
+Review and adapt the suggested tasks to the shop's procedures. Existing
 matching task descriptions are not added twice. Check tasks as they are done
-and choose **Save entry** to share the change with coworkers.
+and choose **Save changes** to share the change with coworkers.
 
 Each entry supports up to 100 rows. Completing a task does not adjust inventory
 or record a payment. Use **Done** for the whole checklist when it is finished.
 
 ## Orders
 
-Use **+ Order** or **+ Create customer order / quote**. Enter the customer,
-contact, reference, vehicle/engine details, registration, and optional manually
-entered VIN/chassis number. Choose **Order** or **Quote** and **Normal** or
-**Urgent** priority.
+Use **Home → New order** or **Orders → + New order**. Start with the customer,
+contact, and reference, then choose **Order** or **Quote** and **Normal** or
+**Urgent** priority. Expand **Vehicle & pickup details** when you need vehicle/
+engine details, registration, a manually entered VIN/chassis number, or a
+pickup deadline.
 
 The parts table records description, quantity, part number, supplier, shelf/bin,
 unit price, and manual stock status. Add a part with the fields below the table;
-edit saved rows directly and save the entry. Quantities range from 1 to 9,999.
+enable **Part numbers, supplier, and bin** to show the optional sourcing fields
+and table columns. Edit saved rows directly and save the entry. Collapsing
+these details keeps their values. Quantities range from 1 to 9,999.
 The stock choices are **Check Stock**, **In Stock**, **To Order**, **Ordered**,
 and **Picked**. These are staff-entered labels, not a connection to a supplier
 or live inventory system. A VIN is stored for reference; Jeffery does not decode
@@ -117,8 +150,8 @@ or quick time such as **In 15 min**, **In 1 hour**, or **Tomorrow 9 AM**. Save t
 entry to apply it. The agenda lists upcoming and overdue work. Jeffery must be
 running, with note reminders enabled, to show reminders.
 
-Pickup deadlines and reminder times are separate. **Use pickup deadline as
-reminder** copies the order deadline to Schedule. **Schedule customer follow-up**
+Pickup deadlines and reminder times are separate. **Remind at pickup** copies
+the order deadline to Schedule. **Schedule follow-up**
 sets a reminder for one hour from now; adjust it as needed and save. These
 reminders prompt staff to follow up; they do not call or message customers.
 Schedules saved on shared orders/checklists are shared business fields and can

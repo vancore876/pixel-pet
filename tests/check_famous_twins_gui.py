@@ -43,6 +43,14 @@ try:
     assert window.save_note()
     writing_id = window.editing_id
     window.body.setPlainText('Keep this unsaved counter note.')
+    window.show_section('orders')
+    app.processEvents()
+    assert window.entry_mismatch.isVisible() and not window.editor_tabs.isVisible()
+    assert window.list.count() == 0 and window.dirty
+    assert window.body.toPlainText() == 'Keep this unsaved counter note.'
+    window.return_to_entry.click()
+    assert window.current_section() == 'writing' and window.editor_tabs.isVisible()
+    assert window.edit_state.text() == 'Unsaved changes'
     with patch('notepad_window.QMessageBox.question', return_value=QMessageBox.Cancel):
         assert not window.new_entry('order')
     assert window.body.toPlainText() == 'Keep this unsaved counter note.'
@@ -61,6 +69,8 @@ try:
     assert window.save_note()
     checklist_id = window.editing_id
     assert store.find(checklist_id)['kind'] == 'list'
+    assert window.list.count() == 1 and window.list.item(0).data(Qt.UserRole) == checklist_id
+    assert window.create_button.text() == '+ New checklist'
     assert events[-1] == 'checklist_saved'
     app.processEvents()
     assert window.grab().save(str(preview / 'famous-twins-checklists.png'))
@@ -99,6 +109,7 @@ try:
     assert window.save_note()
     order_id = window.editing_id
     order = store.find(order_id)
+    assert window.list.count() == 3, 'Schedule should browse all record types'
     assert order_totals(order) == {'subtotal_cents': 1030050, 'paid_cents': 500000, 'balance_cents': 530050, 'credit_cents': 0}
     assert events[-1] == 'order_saved'
     assert order['vehicle'] == '2014 Toyota Corolla 1.8'
@@ -134,8 +145,21 @@ try:
     window.show_section('orders')
     app.processEvents()
     assert window.width() == 800 and window.height() == 600
+    assert window.sections.visualItemRect(window.sections.item(window.sections.count() - 1)).bottom() <= window.sections.viewport().height(), 'Navigation is clipped on a small display'
+    assert not window.browser_panel.isVisible() and window.browser_toggle.isVisible()
+    window.browser_toggle.click()
+    assert window.browser_panel.isVisible()
+    window.browser_toggle.click()
+    assert not window.browser_panel.isVisible()
     assert window.save_button.isVisible() and window.save_button.geometry().height() > 0
+    assert window.more_actions.isVisible() and not window.remove.isVisible()
     assert window.grab().save(str(preview / 'famous-twins-orders-800.png'))
+    settings.values['interface_appearance'] = 'dark'
+    window.configure()
+    app.processEvents()
+    assert window.grab().save(str(preview / 'famous-twins-orders-dark-800.png'))
+    settings.values['interface_appearance'] = 'light'
+    window.configure()
 
     # A failed shared save must preserve the complete draft and never become a local save.
     class Shared:
@@ -152,6 +176,7 @@ try:
     assert not window.editor_tabs.isEnabled()
     shared.callback(None, 'Another coworker changed this entry. Reload saved before retrying.')
     assert not window.business_pending and window.dirty and window.editor_tabs.isEnabled()
+    assert window.reload_button.isVisible(), 'Conflict recovery must be visible without opening a menu'
     assert window.body.toPlainText().startswith('Unsaved coworker draft')
     window.open_workspace_note(order_id, 'schedule')
     assert window.dirty and window.body.toPlainText().startswith('Unsaved coworker draft'), 'Opening the current entry discarded its draft'
@@ -159,6 +184,7 @@ try:
     with patch('notepad_window.QMessageBox.question', return_value=QMessageBox.Discard):
         window.reload_saved()
     assert not window.dirty and window.body.toPlainText().startswith('Confirm fitment')
+    assert not window.reload_button.isVisible()
     # Clean remote changes refresh every editor field and capture the new revision.
     window.show_section('schedule')
     marked = len(shared.marked)

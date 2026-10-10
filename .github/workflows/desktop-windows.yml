@@ -95,6 +95,9 @@ jobs:
             "check_notes_gui.py",
             "check_business_gui.py",
             "check_famous_twins_gui.py",
+            "check_home_redesign_gui.py",
+            "check_chat_redesign_gui.py",
+            "check_utility_interface_gui.py",
             "check_imports_gui.py"
           )
           foreach ($check in $checks) {

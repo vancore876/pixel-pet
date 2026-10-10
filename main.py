@@ -12,7 +12,8 @@ import sys
 import time
 from datetime import datetime
 from pathlib import Path
-from PySide6.QtCore import (QObject, QThread, Signal, Qt, QMetaObject, QTimer, QLockFile, QSignalBlocker)
+from PySide6.QtCore import (QObject, QThread, Signal, Qt, QMetaObject, QTimer, QLockFile, QSignalBlocker, QUrl)
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import QApplication, QMenu, QMessageBox, QSystemTrayIcon
 from config import APP_NAME, APP_VERSION, clamp_position, data_directory
 from settings import AppSettings, set_windows_startup
@@ -30,6 +31,8 @@ from credentials import CredentialStore
 from ai_chat import ChatWindow
 from work_chat import WorkChatWindow
 from shared_business import SharedBusinessController
+from home_window import HomeWindow
+from ui_style import apply_window_style
 from folder_play import FolderHabitat
 from letter_play import LetterPlayground
 from real_desktop import RealDesktopPlay
@@ -84,9 +87,19 @@ class BuddyApp(QObject):
         self.chat = ChatWindow(self.settings, self.credentials, self.ai_context, self.run_buddy_action,
             memory_store=self.memory_store, notebook_store=self.notes_store, semantic_service=self.semantic)
         self.work_chat = WorkChatWindow(self.settings)
+        self.home = HomeWindow(self.note_service, self.settings, self.focus)
+        self.home.navigate_requested.connect(self.home_navigate)
+        self.home.create_requested.connect(self.new_business_entry)
+        self.home.record_requested.connect(self.open_note)
+        self.home.preference_requested.connect(lambda key, value: self.apply_settings({key: value}))
+        for window in (self.notepad, self.chat, self.work_chat, self.dialog,
+                       self.memory_window, self.process_window, self.launcher_window):
+            if hasattr(window, 'home_requested'):
+                window.home_requested.connect(self.show_home)
         self.business_sync = SharedBusinessController(self.note_service, self)
         self.notepad.shared_business = self.business_sync
         self.business_sync.status_changed.connect(self.notepad.set_shared_status)
+        self.business_sync.status_changed.connect(self.home.set_connection)
         self.work_chat.session_changed.connect(self.business_sync.set_session)
         self.business_sync.session_expired.connect(self.work_chat._clear_session)
         self.notepad.connection_work_chat_requested.connect(self.show_work_chat)
@@ -147,10 +160,10 @@ class BuddyApp(QObject):
         self.note_popup.done_requested.connect(lambda identifier: self.note_action(identifier, "done"))
         self.note_popup.snooze_requested.connect(lambda identifier: self.note_action(identifier, "snooze"))
         self.note_popup.snooze_for_requested.connect(self.snooze_note)
-        self.tray.open_requested.connect(self.show_overlay)
+        self.tray.open_requested.connect(self.show_home)
         self.overlay.position_changed.connect(lambda pos: self.persist({"overlay_position": pos}))
         self.pet.position_changed.connect(lambda pos: self.persist({"pet_position": pos}))
-        self.pet.overlay_requested.connect(self.show_overlay)
+        self.pet.overlay_requested.connect(self.show_home)
         self.overlay.settings_requested.connect(lambda: self.show_settings(1))
         self.pet.menu_requested.connect(self.popup_menu)
         self.overlay.menu_requested.connect(self.popup_menu)
@@ -191,8 +204,14 @@ class BuddyApp(QObject):
         self.sync_stickies()
         self.sync_task_memory()
         self.note_service.start()
+        self.app.styleHints().colorSchemeChanged.connect(self.interface_scheme_changed)
+        if show_tray and self.settings['home_on_start'] and not self.settings['launch_minimized']:
+            QTimer.singleShot(0, self.show_home)
 
     def build_menu(self, menu):
+        apply_window_style(menu, self.settings)
+        menu.addAction('Open Jeffery Home', self.show_home)
+        menu.addSeparator()
         chat = menu.addMenu("Chat")
         chat.addAction("Work Chat · Coworkers", self.show_work_chat)
         chat.addAction("Talk to Jeffery · Groq", self.show_chat)
@@ -348,6 +367,8 @@ class BuddyApp(QObject):
         self.launcher_window.configure()
         self.chat.configure()
         self.work_chat.configure()
+        self.home.configure()
+        apply_window_style(self.menu, self.settings)
         self.configure_semantic_memory(changes)
         self.memory_window.configure()
         if not self.settings["memory_enabled"] or not self.settings["memory_ai"] or not self.settings["ai_share_memory"]:
@@ -639,6 +660,38 @@ class BuddyApp(QObject):
         self.notepad.activateWindow()
         self.pet.perform("READ", 3)
 
+    def show_home(self):
+        if self.shutting_down:
+            return
+        self.home.refresh()
+        self.home.show()
+        self.home.raise_()
+        self.home.activateWindow()
+
+    def home_navigate(self, destination):
+        if destination in ('overview', 'writing', 'checklists', 'orders', 'schedule'):
+            self.show_business_workspace(destination)
+            return
+        actions = {'home': self.show_home, 'coworkers': self.show_work_chat,
+                   'assistant': self.show_chat, 'settings': self.show_settings,
+                   'monitor': self.show_overlay, 'processes': self.show_processes,
+                   'quick_launch': self.show_launcher, 'memory': self.show_memory}
+        if destination in actions:
+            actions[destination]()
+        elif destination == 'setup':
+            QDesktopServices.openUrl(QUrl('https://github.com/vancore876/pixel-pet/blob/main/WORK_CHAT.md'))
+
+    def interface_scheme_changed(self, *_):
+        if self.settings['interface_appearance'] != 'system' or self.shutting_down:
+            return
+        for window in (self.home, self.dialog, self.notepad, self.work_chat, self.chat,
+                       self.memory_window, self.process_window, self.launcher_window,
+                       self.note_popup, self.desktop.panel, self.desktop.text_window):
+            window.configure()
+        for sticky in self.stickies.values():
+            sticky.configure()
+        apply_window_style(self.menu, self.settings)
+
     def show_business_workspace(self, section="overview"):
         self.show_notepad()
         self.notepad.show_section(section)
@@ -877,6 +930,7 @@ class BuddyApp(QObject):
         self.shutting_down = True
         self.semantic_timer.stop()
         self.semantic.shutdown()
+        self.home.shutdown()
         self.overlay.stop_animation()
         self.notepad.shutdown()
         self.chat.shutdown()
