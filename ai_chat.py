@@ -12,6 +12,8 @@ from notepad_window import notes_style
 from themes import palette
 from sliding_text import SlideTranscript, plain_reply
 from content_intake import IntakeService, cleanup_result
+from ai_privacy import (filtered_ai_context, note_allowed_for_ai, notes_allowed_for_ai,
+                        permissions_withdrawn, sharing_permissions)
 
 ENDPOINT = "https://api.groq.com/openai/v1/chat/completions"
 ACTIONS = ("pet", "feed", "wave", "dance", "jump", "nap", "hide", "peek", "come_out",
@@ -205,6 +207,8 @@ class ChatWindow(QDialog):
             if canceled is not None:
                 canceled.connect(self.semantic_cancelled)
         self.turn_query = ""
+        self._sharing_permissions = sharing_permissions(settings)
+        self._turn_permissions = None
         self.web_data = None
         self.web_pending = None
         self.web_loading = False
@@ -388,6 +392,13 @@ class ChatWindow(QDialog):
         self.configure()
 
     def configure(self):
+        current_permissions = sharing_permissions(self.settings, self.notes.isChecked())
+        if permissions_withdrawn(self._sharing_permissions, current_permissions):
+            self.cancel_request()
+            # An earlier assistant reply may contain shared-note content.
+            # Keep its local display, but do not include it in later prompts.
+            self.history.clear()
+        self._sharing_permissions = current_permissions
         c = palette(self.settings)
         self.transcript.page.setObjectName('transcriptPage')
         self.transcript.viewport().setObjectName('transcriptViewport')
@@ -436,7 +447,8 @@ class ChatWindow(QDialog):
             self.behavior_requested.emit()
 
     def system_message(self):
-        context = self.context(self.metrics.isChecked(), self.notes.isChecked())
+        context = filtered_ai_context(self.context(self.metrics.isChecked(), self.notes.isChecked()),
+                                      self.settings, self.notes.isChecked())
         if self.memory_store is not None:
             notebook_notes = ()
             if self.notes.isChecked() and self.notebook_store is not None:
@@ -448,6 +460,7 @@ class ChatWindow(QDialog):
                 except (ValueError, OSError):
                     notebook_notes = self.notebook_store.notes[:12]
                     context["notebook_recall_status"] = "Full notebook search is unavailable; these references use saved previews. Details beyond those previews have not been checked."
+            notebook_notes = notes_allowed_for_ai(notebook_notes, self.settings, self.notes.isChecked())
             recalled = self.memory_store.context(self.turn_query,
                 notes=notebook_notes, include_memories=False)
             if self.settings["ai_share_memory"]:
@@ -458,18 +471,20 @@ class ChatWindow(QDialog):
             # Local semantic matches supplement keyword recall. Only bounded
             # relevant passages reach Groq; embeddings and the full notebook
             # remain on this computer.
+            semantic_notes = notes_allowed_for_ai(self.semantic_notes, self.settings, self.notes.isChecked())
             if self.memory_store is not None:
                 context["semantic_notebook_references"] = self.memory_store.context(
-                    self.turn_query, notes=self.semantic_notes, include_memories=False)["tasks"]
+                    self.turn_query, notes=semantic_notes, include_memories=False)["tasks"]
             else:
                 context["semantic_notebook_references"] = [
                     {"id": note.get("id", ""), "title": note.get("title", ""),
                      "body": note.get("body", "")[:1200], "done": note.get("done", False),
                      "document_source": note.get("document_source", "")}
-                    for note in self.semantic_notes[:6]]
+                    for note in semantic_notes[:6]]
         if self.web_enabled.isChecked() and self.web_data:
             context["web_references"] = {"title": self.web_data["title"], "text": self.web_data["text"][:14000],
                 "sources": self.web_data.get("sources", [])[:8], "url": self.web_data.get("url", "")}
+        context = filtered_ai_context(context, self.settings, self.notes.isChecked())
         text = (f"You are {self.settings['pet_name']}, a friendly business-minded desktop companion. Be concise, useful, and candid. "
                 "Reply in plain, natural sentences, usually 2–6 sentences. Never use Markdown tables, headings, bold, HTML, or a long lecture unless asked for detail. "
                 "Answer the actual question directly. Never perform an animation as a side effect of an unrelated question. "
@@ -526,12 +541,13 @@ class ChatWindow(QDialog):
                 and self.notes.isChecked() and self.settings["semantic_memory_enabled"]):
             self.semantic_pending = text
             from semantic_memory import note_fingerprint
+            semantic_notes = notes_allowed_for_ai(self.notebook_store.notes, self.settings, self.notes.isChecked())
             self.semantic_fingerprints = {note["id"]: note_fingerprint(note)
-                                          for note in self.notebook_store.notes}
+                                          for note in semantic_notes}
             self.semantic_loading = True
             self.set_busy(True)
             self.status.setText("Checking local notebook memory…")
-            if self.semantic_service.recall(text, self.notebook_store.notes):
+            if self.semantic_service.recall(text, semantic_notes):
                 return
             self.semantic_pending = None
             self.semantic_loading = False
@@ -539,6 +555,10 @@ class ChatWindow(QDialog):
         self._send_turn(text)
 
     def _send_turn(self, text):
+        current_permissions = sharing_permissions(self.settings, self.notes.isChecked())
+        if permissions_withdrawn(self._sharing_permissions, current_permissions):
+            self.history.clear()
+        self._sharing_permissions = self._turn_permissions = current_permissions
         self.pending = [self.system_message(), *self.history[-16:], {"role": "user", "content": text}]
         self.status.setText("Jeffery is thinking…")
         model = self.turn_model
@@ -558,7 +578,8 @@ class ChatWindow(QDialog):
             self.semantic_notes = []
             for note in result.get("notes", [])[:6]:
                 actual = current.get(note.get("id"))
-                if actual is None or actual.get("title") != note.get("title"):
+                if (not note_allowed_for_ai(actual, self.settings, self.notes.isChecked())
+                        or actual.get("title") != note.get("title")):
                     continue
                 original = note.get("semantic_fingerprint", self.semantic_fingerprints.get(note.get("id")))
                 if original != note_fingerprint(actual):
@@ -671,6 +692,14 @@ class ChatWindow(QDialog):
             self.status.setText("Connected to Groq. Jeffery is ready to chat.")
             self.connection_changed.emit()
             return
+        if not self.pending:
+            return
+        if permissions_withdrawn(self._turn_permissions, sharing_permissions(self.settings, self.notes.isChecked())):
+            self.pending = []
+            self.history.clear()
+            self._turn_permissions = None
+            self.status.setText("Sharing settings changed. Resend your message with the current settings.")
+            return
         calls = message.get("tool_calls", [])
         if calls and self.turn_tools and not self.followup:
             self.pending.append(message)
@@ -693,6 +722,7 @@ class ChatWindow(QDialog):
             self.history.extend([user, {"role": "assistant", "content": text}])
             self.history = self.history[-40:]
         self.pending = []
+        self._turn_permissions = None
         self.status.setText("Ready. Ask a question or try a play command.")
 
     def failed(self, message):
@@ -724,6 +754,7 @@ class ChatWindow(QDialog):
         self.client.cancel()
         self.testing = False
         self.pending = []
+        self._turn_permissions = None
         self.set_busy(False)
         self.status.setText("Request cancelled.")
 

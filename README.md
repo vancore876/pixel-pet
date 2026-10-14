@@ -43,6 +43,87 @@ py -3 -m venv .venv
 .\.venv\Scripts\python.exe main.py
 ```
 
+## Work team messages and shared notes on Windows
+
+Work team features use the Windows Python app described above. Run Jeffery in
+each employee's logged-in Windows desktop. The PCs exchange updates through an
+existing shared folder; no separate web server or Groq account is needed for
+messages, synchronization, or scheduled reminders.
+
+1. Create a work folder on your server, such as `\\WORK-SERVER\JefferyTeam`,
+   and give the participating Windows accounts read/write access.
+2. On each PC, open **Work Team · Messages and Sync** from Jeffery's menu,
+   or **Notepad → Work team**, then open **Team setup**.
+3. Select that same shared folder, enter the employee's display name, and
+   click **Save and connect**. The folder gets a `JefferyWorkspace` subfolder.
+   Connecting shares every existing note in this notebook as well as future
+   saved notes; use a notebook containing your work notes.
+4. If the same employee uses a second PC, explicitly select their existing
+   employee from **Employee on this PC** before connecting that PC. Each new
+   Windows profile otherwise gets its own identity. Matching display names
+   alone do not merge accounts, and copying settings does not select somebody
+   else's employee identity.
+
+Keep each PC's notebook and `documents.sqlite` local. The shared folder stores
+updates and verified document text, rather than a shared writable SQLite
+database. Employee identities and delivery journals stay in the Windows
+account's local app data. Personal likes/dislikes, preference memory, Groq API
+keys, and desktop positions are not shared. Each PC still needs its own complete
+local backup; backing up the shared workspace alone is not a personal backup.
+
+In **Send a message**, write a subject and body, choose employees or **Everyone
+in this team**, then click **Send message**. Sending is explicit; opening the
+window or composing a draft does not send anything. The draft clears only after
+its message is saved to the local outbox, and a newer draft survives that save.
+Recipients see a **New team message** popup, followed by **Team message reminder**
+popups at their chosen schedule. The default repeat is 30 minutes; set it to 0
+for the immediate popup without repeats, or select **First reminder at** for a
+particular time. Messages support up to 10,000 characters.
+
+**My inbox** shows messages addressed to the active employee, their sender,
+customer, and reminder status. Reading or opening a message does not stop its
+reminders. **Acknowledge** stops only that employee's reminders;
+**Later / Remind me later** snoozes them for 5, 15, 30, or 60 minutes. Closing a
+popup keeps its reminders scheduled. Acknowledging a message does not complete
+its source note or customer order. Popups appear without taking keyboard focus;
+quiet mode queues them until it is turned off.
+
+All employees can see the shared notebook. In a saved note or customer order,
+use the team reminder controls to choose **Everyone** or the employees
+responsible, then **Save**. This controls who receives its popups, not who can
+read the note. Customer names, contact details, order references, checklists,
+deadlines, and status travel with the note. Set its time and repeat interval
+in the notebook. **Delivered**, **Cancelled**, or completing the source note
+stops its reminders across the team after that change syncs. Employee read and
+acknowledgment state remains separate from shared order completion.
+
+Saved full documents synchronize their extracted text through verified text
+blobs. The original PDF or image is not copied to the work folder. Large text
+transfers can take time and disk space; each receiving notebook still has the
+one-billion-character capacity and 2,000-entry limits described below. Plain
+text imports with timed reminders off do not generate a new-message popup.
+
+After a successful connection, edits and messages can be saved locally while
+the share is unavailable. They publish when it becomes available again.
+Work popups wait for the share so the same employee's PCs can coordinate
+delivery; keep Jeffery running to receive them. If initial connection fails,
+use **Save and connect** again when the folder is accessible. Simultaneous edits
+preserve conflicting versions for review rather than silently merging their
+text. Open the version you want to keep, review and save any draft, then click
+**Resolve conflict** and confirm **Use this saved version?**. Other conflict
+copies leave the notebook after synchronization; their event history remains
+preserved. Deleting a note and editing it elsewhere can preserve the edited
+copy as a separate note. Disconnecting a PC does not erase its saved local data
+or remove already-shared work from the team.
+
+Shared-work content is excluded from Groq replies by default. To allow it,
+enable **Team setup → Allow shared notebook passages in Groq replies** and the
+existing saved-note sharing control. This is separate from local preference
+memory. Folder access uses Windows permissions: this is a trusted-team shared
+folder workflow, without separate employee passwords or private-message
+access enforcement on the files. Local multi-client tests cover the sync and
+popup workflow; a live Windows SMB server has not been tested in this workspace.
+
 ## A more lifelike virtual buddy
 
 The built-in robot, cat, and knight use rounded forms, material shading, soft
@@ -66,6 +147,8 @@ the Windows desktop app. The mobile companion keeps its existing workflow.
 
 | Upgrade | How to use it |
 | --- | --- |
+| Employee message popups and reminders | Work Team · Messages and Sync → Team setup, then Send a message |
+| Shared notebook and assigned customer reminders | Notepad → Work team; save notes with Everyone or selected reminder recipients |
 | Preferences and daily-task memory | Talk to Jeffery → Memory; tell him "I like mint tea" or "Remember that my birthday is June 6" |
 | Notebook recall in chat | Talk to Jeffery → Connection → Use my saved notes; completed notes and document excerpts can also be recalled |
 | PDF and website references | Notepad → Sources / Import → Choose PDF or enter a public webpage → review → Save to notebook |
@@ -548,8 +631,8 @@ errors. No automatic installation at login occurs unless Start with Windows is e
 
 ## Validation and practical limits
 
-The current desktop update passed 317 unit tests and all seven GUI workflows
-with Python 3.12 and Linux offscreen Qt. Real PDFium extraction, scanned-page
+The desktop unit suite passed 426 tests with Python 3.12 and Linux offscreen Qt.
+Seven existing GUI workflows cover the desktop interface. Real PDFium extraction, scanned-page
 Tesseract OCR, web extraction, fuzzy matching, and packaged worker cleanup were
 checked, including a frozen application startup and native PDF/OCR probe.
 Groq replies and Windows desktop automation in GUI checks were scripted.
@@ -582,6 +665,13 @@ separate deadlines, terminal status, varied greetings, fresh reminders, and
 atomic backup merging. Mobile checks and native-build limits are documented
 in mobile/README.md.
 
+Work-team checks cover multiple local profiles, message routing, independent
+employee acknowledgments and snoozes, restart/replay, conflict preservation,
+queued changes, shared document integrity, and quiet-mode popup handling.
+Focused Qt checks cover explicit Send, stable recipient choices, copied-setting
+identity isolation, durable outbox confirmation, preserved drafts, literal
+popup text, and acknowledgment without completing the source customer order.
+
 The Windows helper is implemented against Microsoft's Shell, UI Automation,
 window, and input APIs, but could not be executed on Windows in this workspace.
 Native icon/tab detection, mixed-DPI behavior, foreground restoration, selected
@@ -608,11 +698,14 @@ use scripted target data and the notebook examples use temporary test notes.
 | smart_notes.py | Grounded Groq reminders, next steps, time suggestions and caching |
 | business_voice.py | Varied business greetings and interaction remarks |
 | notes.py, notepad_window.py | Notebook, linked-file watcher, reminders, sticky notes |
+| team_store.py, shared_workspace.py | Work-team events, conflicts, per-employee receipts, verified shared text |
+| team_service.py | Background shared-folder synchronization and local notebook reconciliation |
+| team_window.py, team_popup.py | Employee inbox, explicit message composition, setup, and popup actions |
 | mobile | Expo Android/iPhone companion, phone notifications and notebook transfer |
 | launcher.py | Saved quick-launch buttons |
 | settings.py, settings_window.py | Validated preferences and UI |
 | folder_play.py, letter_play.py | Optional separate toys |
-| tests | Unit checks and six offscreen Qt workflows |
+| tests | Unit checks and offscreen Qt workflows, including work-team integration |
 
 ## API references
 

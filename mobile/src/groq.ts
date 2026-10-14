@@ -22,6 +22,7 @@ export async function requestGroq(key: string, model: string, messages: Message[
       throw new Error(`Groq could not complete this request (HTTP ${result.status}).`);
     }
     const data = await result.json();
+    if (controller.signal.aborted) throw new Error('Request cancelled.');
     const text = data?.choices?.[0]?.message?.content;
     if (typeof text !== 'string' || !text.trim()) throw new Error('Groq returned an incomplete reply.');
     return plain(text.slice(0, 16000));
@@ -35,7 +36,8 @@ export async function requestGroq(key: string, model: string, messages: Message[
 }
 export function context(book: Book) {
   return { local_now: new Date().toISOString(), business_name: book.preferences.businessName,
-    business_summary: book.preferences.ai ? summary(book.notes) : undefined, recent_phrases: book.phrases.slice(-8),
+    business_summary: book.preferences.ai ? summary(book.notes) : undefined,
+    recent_phrases: book.preferences.ai ? book.phrases.slice(-8) : [],
     incomplete_notes: book.preferences.ai ? book.notes.filter(n => !n.done)
       .sort((a, b) => (a.order_due || a.next_due || Infinity) - (b.order_due || b.next_due || Infinity)).slice(0, 20)
       .map(n => ({ title: n.title, body: n.body.slice(0, 1000), customer: n.customer, contact: n.contact, order_ref: n.order_ref,

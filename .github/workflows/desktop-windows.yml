@@ -69,7 +69,8 @@ jobs:
             "check_desktop_gui.py",
             "check_notes_gui.py",
             "check_business_gui.py",
-            "check_imports_gui.py"
+            "check_imports_gui.py",
+            "check_team_gui.py"
           )
           foreach ($check in $checks) {
             $env:BUDDY_QA_DIR = Join-Path $env:RUNNER_TEMP ("pixel-pet-qa-" + [IO.Path]::GetFileNameWithoutExtension($check))

@@ -15,7 +15,7 @@ from PySide6.QtWidgets import (QApplication, QDialog, QWidget, QVBoxLayout, QHBo
     QMessageBox, QComboBox, QTabWidget, QTableWidget, QTableWidgetItem, QAbstractItemView, QHeaderView, QScrollArea, QProgressBar)
 from config import clamp_position
 from themes import palette
-from notes import current_guidance, ORDER_STATUSES, business_summary, note_search_text
+from notes import current_guidance, ORDER_STATUSES, business_summary, note_search_text, portable_notebook_state
 from sliding_text import SlidingText
 from content_intake import IntakeService, cleanup_result, own_text_file
 from notebook_backup import notebook_snapshot
@@ -23,7 +23,9 @@ from notebook_ui_jobs import prepare_document, prepare_notebook_backup, export_n
 
 
 def reminder_time(note):
-    due = note.get("next_due")
+    due = note.get('team_due_at') if note.get('team_id') else note.get('next_due')
+    if due is None and note.get('team_id') and note.get('kind') == 'order':
+        due = note.get('order_due')
     if note.get("done"):
         return "Done"
     if due is None:
@@ -72,10 +74,13 @@ class NotepadWindow(QDialog):
     ai_requested = Signal(str)
     connection_requested = Signal()
     chat_requested = Signal()
+    team_requested = Signal()
 
     def __init__(self, service, settings):
         super().__init__()
         self.service, self.settings = service, settings
+        self.team_service = None
+        self._loaded_content_signature = None
         self.editing_id = None
         self.loading = False
         self.dirty = False
@@ -103,6 +108,9 @@ class NotepadWindow(QDialog):
         self.talk_button = QPushButton("Talk to Jeffery")
         self.talk_button.clicked.connect(self.chat_requested.emit)
         header.addWidget(self.talk_button)
+        self.team_button = QPushButton("Work team")
+        self.team_button.clicked.connect(self.team_requested.emit)
+        header.addWidget(self.team_button)
         new = QPushButton("+ New note")
         new.clicked.connect(self.new_note)
         header.addWidget(new)
@@ -189,6 +197,37 @@ class NotepadWindow(QDialog):
         page_row.addWidget(self.document_size, 1)
         self.document_pages.hide()
         form.addWidget(self.document_pages)
+        self.team_controls = QWidget()
+        team_layout = QVBoxLayout(self.team_controls)
+        team_layout.setContentsMargins(0, 0, 0, 0)
+        recipient_row = QHBoxLayout()
+        recipient_row.addWidget(QLabel('Reminder recipients'), 1)
+        self.team_everyone = QCheckBox('Everyone')
+        self.team_everyone.setChecked(True)
+        self.team_everyone.toggled.connect(self.team_assignment_changed)
+        recipient_row.addWidget(self.team_everyone)
+        team_layout.addLayout(recipient_row)
+        self.team_members = QListWidget()
+        self.team_members.setMaximumHeight(110)
+        self.team_members.setToolTip('Select employees responsible for this note or customer order. All employees can still read the shared notebook.')
+        self.team_members.itemChanged.connect(self.team_assignment_changed)
+        team_layout.addWidget(self.team_members)
+        self.team_hint = QLabel('All notes sync with the work team. Choose who receives this reminder.')
+        self.team_hint.setObjectName('hint')
+        self.team_hint.setWordWrap(True)
+        self.team_hint.setTextFormat(Qt.PlainText)
+        team_layout.addWidget(self.team_hint)
+        self.team_note_status = QLabel('')
+        self.team_note_status.setObjectName('hint')
+        self.team_note_status.setWordWrap(True)
+        self.team_note_status.setTextFormat(Qt.PlainText)
+        team_layout.addWidget(self.team_note_status)
+        self.team_conflict_button = QPushButton('Resolve conflict')
+        self.team_conflict_button.clicked.connect(self.resolve_team_note_conflict)
+        self.team_conflict_button.hide()
+        team_layout.addWidget(self.team_conflict_button)
+        self.team_controls.hide()
+        form.addWidget(self.team_controls)
         schedule = QFormLayout()
         self.repeat = QSpinBox()
         self.repeat.setRange(0, 1440)
@@ -654,6 +693,105 @@ class NotepadWindow(QDialog):
             self.smart_enabled.setChecked(self.settings["ai_share_notes"])
         self.refresh_advice()
 
+    def set_team_service(self, service):
+        """Attach the optional work-team service without changing old callers."""
+        if self.team_service is service:
+            self.refresh_team()
+            return
+        if self.team_service is not None:
+            self.team_service.changed.disconnect(self.refresh_team)
+        self.team_service = service
+        if service is not None:
+            service.changed.connect(self.refresh_team)
+        self.refresh_team()
+        self.refresh()
+
+    def selected_team_recipients(self):
+        if self.team_everyone.isChecked():
+            return []
+        return [self.team_members.item(index).data(Qt.UserRole)
+                for index in range(self.team_members.count())
+                if self.team_members.item(index).checkState() == Qt.Checked]
+
+    def refresh_team(self, *args):
+        enabled = bool(self.team_service is not None and self.team_service.enabled)
+        self.team_controls.setVisible(enabled)
+        if not enabled:
+            return
+        note = self.service.store.find(self.editing_id)
+        recipients = self.selected_team_recipients() if self.dirty else list((note or {}).get('team_recipients', []))
+        everyone = self.team_everyone.isChecked() if self.dirty else not recipients
+        self.load_team_recipients(recipients, everyone)
+        self.refresh_team_status()
+
+    def refresh_team_status(self):
+        self.team_conflict_button.hide()
+        if self.team_service is None or not self.team_service.enabled:
+            self.team_note_status.clear()
+            return
+        if not self.editing_id:
+            self.team_note_status.setText('Save this note to sync it with the work team.')
+            return
+        status = self.team_service.note_sync_status(self.editing_id)
+        receipts = self.team_service.note_receipt_status(self.editing_id)
+        self.team_note_status.setText(status + (' · ' + receipts if receipts else ''))
+        note = self.service.store.find(self.editing_id)
+        conflict = bool(note and (note.get('team_conflict_revision') or status.startswith('Conflict:')))
+        self.team_conflict_button.setVisible(conflict)
+        self.team_conflict_button.setEnabled(conflict and not self.dirty)
+        self.team_conflict_button.setToolTip('Review this saved version, then choose it to resolve the shared conflict. Save or discard draft changes first.')
+
+    def resolve_team_note_conflict(self):
+        if self.team_service is None or not self.team_service.enabled or not self.editing_id:
+            return False
+        if self.dirty:
+            self.status.setText('Save or discard your draft changes before resolving the conflict.')
+            return False
+        note = self.service.store.find(self.editing_id)
+        if not note or not (note.get('team_conflict_revision') or self.team_service.note_sync_status(self.editing_id).startswith('Conflict:')):
+            return False
+        answer = QMessageBox.question(self, 'Use this saved version?',
+            'Use this note’s saved version to resolve the shared conflict? Other versions will be retired from the notebook after sync. Their saved event history is kept.',
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        if answer != QMessageBox.Yes:
+            return False
+        try:
+            started = self.team_service.resolve_note_conflict(self.editing_id)
+        except (OSError, ValueError) as exc:
+            QMessageBox.warning(self, 'Resolve conflict', str(exc))
+            return False
+        if started:
+            self.status.setText('Conflict resolution queued. Keep Jeffery running to sync your chosen saved version.')
+        return bool(started)
+
+    def load_team_recipients(self, recipients=None, everyone=None):
+        recipients = list(recipients or [])
+        if everyone is None:
+            everyone = not recipients
+        roster = self.team_service.roster() if self.team_service is not None and self.team_service.enabled else []
+        members = {member['id']: member.get('name') or member['id'] for member in roster}
+        # Keep existing assignments when a colleague has not registered on this PC yet.
+        for identifier in recipients:
+            members.setdefault(identifier, identifier)
+        with QSignalBlocker(self.team_members), QSignalBlocker(self.team_everyone):
+            self.team_everyone.setChecked(everyone)
+            self.team_members.clear()
+            for identifier, name in sorted(members.items(), key=lambda item: (item[1].casefold(), item[0])):
+                item = QListWidgetItem(name if name == identifier else f'{name} ({identifier})')
+                item.setData(Qt.UserRole, identifier)
+                item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsUserCheckable)
+                item.setCheckState(Qt.Checked if identifier in recipients else Qt.Unchecked)
+                self.team_members.addItem(item)
+        self.team_members.setVisible(not everyone)
+        self.team_hint.setText('All notes and customer orders sync with the work team. Everyone receives reminders.'
+                               if everyone else 'All notes and customer orders sync with the work team. Only selected employees receive reminders.')
+
+    def team_assignment_changed(self, *args):
+        self.team_members.setVisible(not self.team_everyone.isChecked())
+        self.team_hint.setText('All notes and customer orders sync with the work team. Everyone receives reminders.'
+                               if self.team_everyone.isChecked() else 'All notes and customer orders sync with the work team. Only selected employees receive reminders.')
+        self.mark_dirty()
+
     def kind_changed(self, *args):
         is_order = self.kind.currentData() == 'order'
         for field in self.order_fields:
@@ -698,10 +836,16 @@ class NotepadWindow(QDialog):
                 raise ValueError('Each checklist item needs text and a quantity from 1 to 9,999.')
             items.append({'id': done.data(Qt.UserRole), 'text': text.text().strip(), 'quantity': qty,
                           'done': done.checkState() == Qt.Checked})
-        return {'kind': self.kind.currentData(), 'customer': self.customer.text(), 'contact': self.contact.text(),
+        details = {'kind': self.kind.currentData(), 'customer': self.customer.text(), 'contact': self.contact.text(),
                 'order_ref': self.order_ref.text(), 'order_status': self.order_status.currentData(),
                 'order_due': self.order_due.dateTime().toSecsSinceEpoch() if self.order_timed.isChecked() else None,
                 'checklist': items}
+        if self.team_service is not None and self.team_service.enabled:
+            recipients = self.selected_team_recipients()
+            if not self.team_everyone.isChecked() and not recipients:
+                raise ValueError('Choose at least one employee for this reminder, or select Everyone.')
+            details['team_recipients'] = recipients
+        return details
 
     def load_business(self, note=None):
         note = note or {}
@@ -714,6 +858,7 @@ class NotepadWindow(QDialog):
         self.checklist.setRowCount(0)
         for item in note.get('checklist', []):
             self.insert_checklist_row(item)
+        self.load_team_recipients(note.get('team_recipients', []))
 
     def new_entry(self, kind):
         if self.new_note():
@@ -760,6 +905,8 @@ class NotepadWindow(QDialog):
         if format == 'json' and any(note.get('document_id') for note in snapshot['notes']):
             self.status.setText('Choose a desktop ZIP backup to include full documents. Mobile JSON supports small notes only.')
             return False
+        if format == 'json':
+            snapshot = portable_notebook_state(snapshot)
         self.status.setText('Exporting notebook… Use Cancel notebook transfer to stop.')
         return self.transfer.run(export_notebook, {'store': self.service.store, 'path': file,
             'snapshot': snapshot, 'format': format})
@@ -787,6 +934,7 @@ class NotepadWindow(QDialog):
         if not self.loading:
             self.dirty = True
             self.refresh_advice()
+            self.refresh_team_status()
         self.save_button.setEnabled(bool(self.title.text().strip() or self.body.toPlainText().strip()))
 
     def choose_repeat(self):
@@ -851,6 +999,9 @@ class NotepadWindow(QDialog):
             self.status.setText("Suggested time selected. Save note to keep it.")
 
     def refresh(self, *args):
+        team_enabled = bool(self.team_service is not None and self.team_service.enabled)
+        roster = self.team_service.roster() if team_enabled else []
+        names = {member['id']: member.get('name') or member['id'] for member in roster}
         with QSignalBlocker(self.list):
             self.list.clear()
             search = self.search.text().strip().casefold()
@@ -867,6 +1018,12 @@ class NotepadWindow(QDialog):
                 label = note['order_status'].title() + ' · ' + (note['customer'] or 'Walk-in') if note['kind'] == 'order' else reminder_time(note)
                 checks = note['checklist']
                 progress = f" · {sum(i['done'] for i in checks)}/{len(checks)} checked" if checks else ''
+                if team_enabled and note.get('team_id'):
+                    recipients = note.get('team_recipients', [])
+                    assigned = ', '.join(names.get(identifier, identifier) for identifier in recipients[:3])
+                    if len(recipients) > 3:
+                        assigned += f' +{len(recipients) - 3}'
+                    progress += ' · Shared: ' + (assigned or 'Everyone')
                 item = QListWidgetItem(prefix + note["title"] + "\n" + label + progress)
                 item.setData(Qt.UserRole, note["id"])
                 item.setToolTip(note["body"][:500])
@@ -879,16 +1036,38 @@ class NotepadWindow(QDialog):
         linked = self.service.store.state["linked_file"]
         self.link_status.setText("Linked file: " + linked if linked else "No text file linked. You can use this notebook on its own.")
         note = self.service.store.find(self.editing_id)
+        if self.editing_id and note is None and not self.dirty:
+            self.new_note()
+            self.status.setText('This note was removed from the notebook. You can start a new note.')
         if note and not self.dirty:
             self.loading = True
+            signature = self.content_signature(note)
+            if signature != self._loaded_content_signature:
+                self.title.setText(note['title'])
+                previous_document = self._loaded_content_signature[2] if self._loaded_content_signature else None
+                if note.get('document_id') and note.get('document_id') != previous_document:
+                    self.load_note(note['id'])
+                    self.loading = True
+                elif not note.get('document_id'):
+                    self.body.setReadOnly(False)
+                    self.document_pages.hide()
+                    self.body.setPlainText(note['body'])
+                self._loaded_content_signature = signature
             self.repeat.setValue(note['repeat_minutes'])
-            self.scheduled.setChecked(note['next_due'] is not None)
-            if note['next_due'] is not None:
-                self.due.setDateTime(QDateTime.fromSecsSinceEpoch(int(note['next_due'])))
+            due = note.get('team_due_at') if note.get('team_id') else note['next_due']
+            self.scheduled.setChecked(due is not None)
+            if due is not None:
+                self.due.setDateTime(QDateTime.fromSecsSinceEpoch(int(due)))
             self.load_business(note)
             self.loading = False
+        self.team_controls.setVisible(team_enabled)
+        self.refresh_team_status()
         self.update_buttons()
         self.refresh_advice()
+
+    @staticmethod
+    def content_signature(note):
+        return (note.get('title'), note.get('body'), note.get('document_id'), note.get('body_sha256'))
 
     def maybe_leave(self):
         if not self.dirty:
@@ -902,6 +1081,7 @@ class NotepadWindow(QDialog):
         if not self.maybe_leave():
             return False
         self.editing_id = None
+        self._loaded_content_signature = None
         self.document_pages.hide()
         self.body.setReadOnly(False)
         self.loading = True
@@ -920,6 +1100,7 @@ class NotepadWindow(QDialog):
         self.editor_tabs.setCurrentIndex(0)
         self.update_buttons()
         self.refresh_advice()
+        self.refresh_team_status()
         return True
 
     def selection_changed(self, current, previous):
@@ -959,14 +1140,22 @@ class NotepadWindow(QDialog):
                 self.document_next.setEnabled(False)
         self.load_business(note)
         self.repeat.setValue(note["repeat_minutes"])
-        self.scheduled.setChecked(note["next_due"] is not None)
-        if note["next_due"] is not None:
-            self.due.setDateTime(QDateTime.fromSecsSinceEpoch(int(note["next_due"])))
+        due = note.get('team_due_at') if note.get('team_id') else note['next_due']
+        self.scheduled.setChecked(due is not None)
+        if due is not None:
+            self.due.setDateTime(QDateTime.fromSecsSinceEpoch(int(due)))
         self.loading = False
         self.dirty = False
+        self._loaded_content_signature = self.content_signature(note)
         self.update_buttons()
         self.refresh_advice()
         self.reading.emit()
+        if self.team_service is not None and self.team_service.enabled:
+            try:
+                self.team_service.mark_note_read(identifier)
+            except (OSError, ValueError) as exc:
+                self.status.setText('The note is open. Its read receipt will need another sync: ' + str(exc))
+        self.refresh_team_status()
 
     def show_document_page(self, value):
         note = self.service.store.find(self.editing_id)
@@ -1003,6 +1192,7 @@ class NotepadWindow(QDialog):
             self.loading = False
             self.editing_id = note["id"]
             self.dirty = False
+            self._loaded_content_signature = self.content_signature(note)
             if note.get('document_id') and not was_document:
                 self.load_note(note['id'])
             self.refresh()

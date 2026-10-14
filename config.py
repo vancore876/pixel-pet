@@ -33,12 +33,40 @@ DEFAULTS = {
     "memory_enabled": True, "memory_ai": True, "ai_share_memory": True,
     "pdf_engine": "auto", "pdf_ocr": False, "ocr_language": "eng", "tesseract_path": "",
     "semantic_memory_enabled": False, "semantic_model_path": "",
+    "team_sync_enabled": False, "team_shared_folder": "", "team_employee_id": "",
+    "team_employee_name": "", "team_reminder_minutes": 30, "team_share_notes_with_ai": False,
 }
+
+
+def team_data_directory() -> Path:
+    """Work sync journals and employee identities always stay on this PC."""
+    base = Path(os.environ.get("LOCALAPPDATA", Path.home() / ".local" / "share"))
+    return base / "PixelSystemBuddy" / "team"
+
+
+def _network_location(path):
+    if os.name != "nt":
+        return False
+    value = str(path)
+    if value.startswith(("\\\\", "//")):
+        return True
+    try:
+        import ctypes
+        drive = Path(value).anchor
+        return bool(drive and ctypes.windll.kernel32.GetDriveTypeW(drive) == 4)
+    except (AttributeError, OSError):
+        return False
 
 
 def data_directory() -> Path:
     """Prefer portable data beside the app; use per-user storage if read-only."""
     preferred = ROOT / "data"
+    # A shared application folder must not turn SQLite and personal identity
+    # into shared writable files. The work workspace has its own sync format.
+    if _network_location(preferred):
+        fallback = Path(os.environ.get("LOCALAPPDATA", Path.home() / ".local" / "share")) / "PixelSystemBuddy"
+        fallback.mkdir(parents=True, exist_ok=True)
+        return fallback
     try:
         preferred.mkdir(parents=True, exist_ok=True)
         probe = preferred / ".write-check"

@@ -8,7 +8,7 @@ import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
 import DateTimePicker from '@react-native-community/datetimepicker';
-import { Advice, Book, Kind, Note, changeNote, complete, identifier, localReminder, matchNote, mergeBackup, newNote, orderStatuses, saveNote, signature, summary, timeLabel } from './src/model';
+import { Advice, Book, Kind, Note, changeNote, complete, identifier, isSharedNote, localReminder, matchNote, mergeBackup, newNote, orderStatuses, saveNote, signature, summary, timeLabel } from './src/model';
 import { localGreeting, Message, parseAdvice, plain, reminderMessages, requestGroq, systemMessage } from './src/groq';
 import { useBook } from './src/store';
 import { enableNotifications, syncNotifications } from './src/notifications';
@@ -225,7 +225,16 @@ function Main() {
         const note = newNote('list'); note.title = file.name.replace(/\.txt$/i, '').slice(0, 100);
         note.checklist = lines.map(line => ({ id: identifier(), text: line.slice(0, 200), quantity: 1, done: false }));
         commit(b => saveNote(b, note));
-      } else { const payload = JSON.parse(text); commit(b => mergeBackup(b, payload)); }
+      } else {
+        const payload = JSON.parse(text);
+        const imported = commit(b => mergeBackup(b, payload));
+        if (imported && Array.isArray(payload.notes) && payload.notes.some(isSharedNote)) {
+          activeRequest.current?.abort();
+          setChat([]);
+          setStatus('Imported work notes. AI note sharing is off; enable it in Settings only if you want these notes sent to Groq.');
+          return;
+        }
+      }
       setStatus('Imported. Newer versions are kept; existing entries are preserved.');
     } catch (e) { setStatus(errorText(e)); }
   }
@@ -272,7 +281,7 @@ function Main() {
         <Text style={s.section}>Make Jeffery yours</Text>
         <Field label="Business name" value={prefs.businessName} onChange={value => commit(b => ({ ...b, preferences: { ...b.preferences, businessName: value.slice(0, 80) } }))} placeholder="Your business (optional)" />
         <Text style={s.label}>Character</Text><View style={s.row}>{(['robot', 'cat', 'knight'] as const).map(character => <Pressable key={character} style={[s.chip, prefs.character === character && s.selected]} onPress={() => commit(b => ({ ...b, preferences: { ...b.preferences, character } }))}><Text style={s.buttonText}>{character}</Text></Pressable>)}</View>
-        <View style={s.row}><Text style={[s.body, { flex: 1 }]}>Use Groq with saved notes & orders</Text><Switch value={prefs.ai} onValueChange={ai => { if (!ai) activeRequest.current?.abort(); commit(b => ({ ...b, preferences: { ...b.preferences, ai } })); }} trackColor={{ true: '#72cbb0' }} /></View>
+        <View style={s.row}><Text style={[s.body, { flex: 1 }]}>Use Groq with saved notes & orders</Text><Switch value={prefs.ai} onValueChange={ai => { if (!ai) { activeRequest.current?.abort(); setChat([]); } commit(b => ({ ...b, preferences: { ...b.preferences, ai }, ...(!ai ? { phrases: [] } : {}) })); }} trackColor={{ true: '#72cbb0' }} /></View>
         <Field label="Groq key" value={keyDraft} onChange={setKeyDraft} secret placeholder={key ? 'Key saved · paste to replace' : 'Paste a working Groq key'} />
         <Field label="Groq model" value={prefs.model} onChange={model => commit(b => ({ ...b, preferences: { ...b.preferences, model } }))} />
         <View style={s.row}><Button title="Save key" primary onPress={() => { void saveKey(); }} /><Button title="Test connection" disabled={busy} onPress={() => { void testKey(); }} /><Button title="Forget key" onPress={() => { void forgetKey(); }} /></View>

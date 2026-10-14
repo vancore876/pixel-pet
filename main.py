@@ -38,6 +38,10 @@ from memory import MemoryStore
 from memory_window import MemoryWindow
 from memory_learning import MemoryLearner
 from semantic_memory import SemanticMemory, SemanticService
+from ai_privacy import is_shared_note, notes_allowed_for_ai
+from team_service import TeamService
+from team_window import TeamWindow
+from team_popup import TeamPopup
 
 
 class BuddyApp(QObject):
@@ -57,9 +61,25 @@ class BuddyApp(QObject):
         self.stickies = {}
         self.notes_store = NoteStore(self.settings.path.parent / "notes.json")
         self.memory_store = MemoryStore(self.settings.path.parent / "memory.json")
-        self.note_service = NoteService(self.notes_store, self.settings, lambda: not self.note_popup.isVisible(), self)
+        self.note_service = NoteService(self.notes_store, self.settings,
+            lambda: not self.note_popup.isVisible() and not self.team_popup.isVisible(), self)
         self.note_popup = ReminderPopup(self.settings)
+        self.team_popup = TeamPopup(self.settings)
         self.notepad = NotepadWindow(self.note_service, self.settings)
+        self.team = TeamService(self.note_service, self.settings, parent=self,
+            can_notify=self.team_can_notify)
+        self.team_window = TeamWindow(self.team, self.settings)
+        self.notepad.set_team_service(self.team)
+        self.notepad.team_requested.connect(self.show_team)
+        self.team_window.preferences_requested.connect(self.apply_team_preferences)
+        self.team_window.notebook_requested.connect(self.show_notepad)
+        self.team_window.source_requested.connect(self.open_team_source)
+        self.team_window.assignment_requested.connect(self.team.assign_note)
+        self.team.notification.connect(self.deliver_team_notification)
+        self.team.changed.connect(self.refresh_team_state)
+        self.team_popup.open_requested.connect(self.open_team_notification)
+        self.team_popup.acknowledge_requested.connect(self.acknowledge_team_notification)
+        self.team_popup.snooze_requested.connect(self.snooze_team_notification)
         self.launcher = QuickLauncher(self.settings.path.parent / "shortcuts.json", self)
         self.launcher_window = LauncherWindow(self.launcher, self.settings)
         self.folders = FolderHabitat(self.pet, self.settings, self.settings.path.parent / "folders.json", self)
@@ -176,6 +196,7 @@ class BuddyApp(QObject):
         if self.notes_store.warning:
             self.note_error(self.notes_store.warning)
         self.sync_stickies()
+        self.configure_team()
         self.sync_task_memory()
         self.note_service.start()
 
@@ -201,6 +222,7 @@ class BuddyApp(QObject):
             self.mouse_actions[mode] = action
         menu.addSeparator()
         menu.addAction("Jeffery's Notepad", self.show_notepad)
+        menu.addAction("Work Team · Messages and Sync", self.show_team)
         menu.addAction("Open Linked Text File", self.open_linked_notepad)
         self.quick_menu = menu.addMenu("Quick Launch")
         self.refresh_quick_menu()
@@ -302,6 +324,8 @@ class BuddyApp(QObject):
         self.process_window.configure()
         self.notepad.configure()
         self.note_popup.configure()
+        self.team_popup.configure()
+        self.team_window.configure()
         self.launcher_window.configure()
         self.chat.configure()
         self.configure_semantic_memory(changes)
@@ -318,6 +342,10 @@ class BuddyApp(QObject):
             sticky.configure()
         if self.settings["quiet_mode"] or not self.settings["note_reminders"]:
             self.note_popup.hide()
+            self.team_popup.dismiss()
+        if any(key in changes for key in ("team_sync_enabled", "team_shared_folder", "team_employee_name")):
+            self.configure_team()
+        self.team.pump()
         self.update_identity()
         self.interval_changed.emit(self.effective_interval())
         self.click_action.setChecked(self.settings["click_through"])
@@ -370,6 +398,7 @@ class BuddyApp(QObject):
             self.brain.configure()
             self.smart_notes.configure()
             self.voice.configure()
+            self.chat.configure()
             self.notepad.configure()
             self.memory_window.configure()
             if any(key in changes for key in ("memory_enabled", "memory_ai", "ai_share_memory")):
@@ -402,7 +431,10 @@ class BuddyApp(QObject):
         if notes:
             # Document notes contain short previews and metadata, while full
             # document text is retrieved separately for each chat question.
-            saved_notes = self.notes_store.notes
+            # All notebook content joins the team on connection, including
+            # notes not yet annotated by the background sync worker.
+            saved_notes = ([] if getattr(getattr(self, 'team', None), 'enabled', False) and not self.settings['team_share_notes_with_ai']
+                else notes_allowed_for_ai(self.notes_store.notes, self.settings))
             result['local_now'] = datetime.now().astimezone().isoformat(timespec='seconds')
             result['business_summary'] = business_summary(saved_notes)
             ordered = sorted((n for n in saved_notes if not n['done']), key=lambda n: n['next_due'] or float('inf'))
@@ -429,7 +461,9 @@ class BuddyApp(QObject):
 
     def sync_task_memory(self):
         daily = {"task:" + note["id"]: note for note in self.notes_store.notes
-                 if not note["done"] and note["repeat_minutes"] == 1440 and not note.get("document_source") and not note.get("source")}
+                 if not note["done"] and note["repeat_minutes"] == 1440 and not note.get("document_source")
+                 and not note.get("source") and not is_shared_note(note)
+                 and not getattr(getattr(self, 'team', None), 'enabled', False)}
         try:
             for entry in self.memory_store.entries():
                 source = entry["source"]
@@ -594,6 +628,79 @@ class BuddyApp(QObject):
         self.notepad.raise_()
         self.notepad.activateWindow()
         self.pet.perform("READ", 3)
+
+    def team_can_notify(self):
+        return (not self.shutting_down and not self.settings['quiet_mode']
+                and self.settings['note_reminders'] and not self.note_popup.isVisible()
+                and not self.team_popup.isVisible())
+
+    def configure_team(self, employee_id=None):
+        self.team_popup.dismiss()
+        if self.settings['team_sync_enabled']:
+            # Portable settings can be copied to another PC. Only an explicit
+            # employee choice may override this PC's locally saved identity.
+            self.team.configure(self.settings['team_shared_folder'],
+                self.settings['team_employee_name'], employee_id)
+        else:
+            self.team.disconnect()
+
+    def apply_team_preferences(self, changes):
+        if not self.persist(changes):
+            return
+        self.configure_team(changes.get('team_employee_id') or None)
+        self.team_window.configure()
+        self.dialog.configure()
+        self.chat.configure()
+        self.brain.configure()
+        self.smart_notes.configure()
+        self.voice.configure()
+
+    def show_team(self):
+        self.team_window.refresh()
+        self.team_window.show()
+        self.team_window.raise_()
+        self.team_window.activateWindow()
+
+    def open_team_source(self, identifier):
+        note = next((note for note in self.notes_store.notes
+            if note.get('team_workspace_id') == self.team.identity().get('workspace_id')
+            and (note.get('team_id') == identifier or note['id'] == identifier)), None)
+        if note:
+            self.open_note(note['id'])
+        else:
+            self.team_window.status.setText('The source note is no longer available on this PC.')
+
+    def open_team_notification(self, identifier):
+        kind = self.team_popup.notification.get('entity_kind', 'message')
+        self.show_team()
+        if kind == 'note':
+            self.team.mark_read(identifier, entity_kind='note')
+            self.open_team_source(identifier)
+        else:
+            self.team_window.open_message(identifier, entity_kind=kind)
+
+    def acknowledge_team_notification(self, identifier):
+        self.team.acknowledge(identifier,
+            entity_kind=self.team_popup.notification.get('entity_kind', 'message'))
+
+    def snooze_team_notification(self, identifier, minutes):
+        self.team.snooze(identifier, minutes,
+            entity_kind=self.team_popup.notification.get('entity_kind', 'message'))
+
+    def deliver_team_notification(self, notification):
+        if self.team_can_notify() and self.team_popup.present(notification, self.pet.geometry().center()):
+            self.team.mark_notification_presented(notification)
+            if self.pet.isVisible():
+                self.pet.perform('REMINDER', 3)
+        else:
+            self.team.release_notification(notification)
+
+    def refresh_team_state(self):
+        notification = self.team_popup.notification
+        if not notification or not self.team_popup.isVisible():
+            return
+        if not self.team.notification_active(notification):
+            self.team_popup.dismiss()
 
     def open_note(self, identifier):
         if self.notepad.maybe_leave():
@@ -785,6 +892,9 @@ class BuddyApp(QObject):
         if self.shutting_down:
             return
         self.shutting_down = True
+        self.team.stop()
+        self.team_popup.shutdown()
+        self.team_window.hide()
         self.semantic_timer.stop()
         self.semantic.shutdown()
         self.overlay.stop_animation()

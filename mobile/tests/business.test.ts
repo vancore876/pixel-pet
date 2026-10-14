@@ -89,6 +89,74 @@ test('AI sharing off excludes saved note details', () => {
   const book = freshBook(); book.notes = [order()]; book.preferences.ai = false;
   assert.deepEqual(context(book).incomplete_notes, []);
 });
+test('importing work notes disables automatic AI without copying employee metadata', () => {
+  const note = order(), book = freshBook(); book.phrases = ['An earlier private workplace phrase'];
+  const imported = mergeBackup(book, { notes: [{ ...note, team_id: 'work-note-secret', team_workspace_id: 'office-secret',
+    team_revisions: ['revision-secret'], team_recipients: ['employee-secret'], source: '\\\\office-server\\private.txt' }] });
+  assert.equal(imported.preferences.ai, false);
+  assert.deepEqual(imported.phrases, []);
+  assert.equal(imported.notes[0].team_shared, true);
+  assert.equal(imported.notes[0].body, note.body);
+  const stored = JSON.stringify(imported);
+  for (const secret of ['work-note-secret', 'office-secret', 'revision-secret', 'employee-secret', 'office-server']) {
+    assert.ok(!stored.includes(secret));
+  }
+  assert.deepEqual(context(imported).incomplete_notes, []);
+  assert.equal(book.preferences.ai, true);
+  assert.deepEqual(book.phrases, ['An earlier private workplace phrase']);
+  imported.preferences.ai = true; // The user explicitly enables sharing after import.
+  assert.equal(context(imported).incomplete_notes[0].body, note.body);
+  assert.ok(!JSON.stringify(reminderMessages(imported.notes[0])).includes('employee-secret'));
+});
+test('portable and partial work markers also prevent automatic note sharing', () => {
+  for (const metadata of [{ team_shared: true }, { team_recipients: ['employee-secret'] },
+    { team_revisions: ['revision-secret'] }, { team_due_at: 12345 }]) {
+    const imported = mergeBackup(freshBook(), { notes: [{ ...order(), ...metadata }] });
+    assert.equal(imported.preferences.ai, false);
+    assert.equal(imported.notes[0].team_shared, true);
+    assert.deepEqual(Object.keys(imported.notes[0]).filter(key => key.startsWith('team_')), ['team_shared']);
+  }
+});
+test('personal backup imports preserve existing AI choices and phrase history', () => {
+  for (const ai of [true, false]) {
+    const book = freshBook(); book.preferences.ai = ai; book.phrases = ['A personal greeting'];
+    const imported = mergeBackup(book, { notes: [order()] });
+    assert.equal(imported.preferences.ai, ai);
+    assert.deepEqual(imported.phrases, book.phrases);
+    assert.equal(imported.notes[0].team_shared, undefined);
+  }
+});
+test('work privacy marker survives edits, newer backups and returning desktop exports', () => {
+  const original = { ...order(), team_shared: true as const, updated: 500 };
+  let book = mergeBackup(freshBook(), { notes: [original] });
+  book = saveNote(book, { ...book.notes[0], team_shared: undefined, body: 'Changed work details' }, 600);
+  book = changeNote(book, original.id, { team_shared: undefined, next_due: 12345 }, 700);
+  assert.equal(book.notes[0].team_shared, true);
+  book = mergeBackup(book, { notes: [{ ...original, team_shared: undefined, updated: 800 }] });
+  assert.equal(book.notes[0].team_shared, true);
+  const returning = JSON.parse(JSON.stringify({ version: 2, notes: book.notes }));
+  assert.equal(returning.notes[0].team_shared, true);
+});
+test('an older work import marks a newer personal copy private without replacing its content', () => {
+  const original = { ...order(), body: 'Newer local details', updated: 500 };
+  const book = mergeBackup(freshBook(), { notes: [original] });
+  const imported = mergeBackup(book, { notes: [{ ...original, body: 'Older work details', updated: 400, team_shared: true }] });
+  assert.equal(imported.notes[0].body, 'Newer local details');
+  assert.equal(imported.notes[0].team_shared, true);
+  assert.equal(imported.preferences.ai, false);
+  assert.equal(book.notes[0].team_shared, undefined);
+});
+test('bad work imports cannot partially change AI preferences or existing records', () => {
+  const book = freshBook(); book.phrases = ['Original greeting'];
+  assert.throws(() => mergeBackup(book, { notes: [{ ...order(), team_shared: true }, { id: 'invalid' }] }));
+  assert.equal(book.preferences.ai, true);
+  assert.deepEqual(book.notes, []);
+  assert.deepEqual(book.phrases, ['Original greeting']);
+});
+test('note sharing off also excludes local greeting history from chat context', () => {
+  const book = freshBook(); book.preferences.ai = false; book.phrases = ['A private workplace order count'];
+  assert.deepEqual(context(book).recent_phrases, []);
+});
 test('Groq transport sends JSON-mode requests and handles rejected keys', async () => {
   const original = globalThis.fetch;
   try {
@@ -99,5 +167,20 @@ test('Groq transport sends JSON-mode requests and handles rejected keys', async 
     assert.deepEqual(sent.response_format, { type: 'json_object' }); assert.equal(sent.tools, undefined);
     globalThis.fetch = async () => new Response('{}', { status: 401 });
     await assert.rejects(requestGroq(key, 'openai/gpt-oss-20b', [{ role: 'user', content: 'hello' }]), /rejected the key/);
+  } finally { globalThis.fetch = original; }
+});
+test('a canceled late response cannot reintroduce shared details into chat history', async () => {
+  const original = globalThis.fetch, controller = new AbortController();
+  let beginRead: () => void = () => {}, release: (value: object) => void = () => {};
+  const reading = new Promise<void>(resolve => { beginRead = resolve; });
+  const body = new Promise<object>(resolve => { release = resolve; });
+  try {
+    globalThis.fetch = async () => ({ ok: true, json: async () => { beginRead(); return body; } }) as Response;
+    const response = requestGroq('gsk_' + 'testplaceholder'.repeat(3), 'openai/gpt-oss-20b',
+      [{ role: 'user', content: 'Hello' }], false, controller.signal);
+    await reading;
+    controller.abort();
+    release({ choices: [{ message: { content: 'A late private work response' } }] });
+    await assert.rejects(response, /cancelled/);
   } finally { globalThis.fetch = original; }
 });

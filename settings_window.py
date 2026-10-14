@@ -159,6 +159,8 @@ class SettingsWindow(QDialog):
         self.semantic_status.setWordWrap(True)
         documents.addRow(self.semantic_status)
         self.hint(documents, "Optional local model: install the semantic dependencies and download the model using the README commands. No model downloads happen during chat. Indexing runs in the background; keyword search stays available while it catches up. Sharing notes with Groq also shares relevant recalled passages.")
+        self.checkbox(documents, "team_share_notes_with_ai", "Allow Groq to read synced work notes")
+        self.hint(documents, "Work notes stay out of Groq by default. Employee messages stay in Work team. Set up the shared folder and your employee name through Work team in Jeffery's menu.")
         footer = QHBoxLayout()
         self.status = QLabel("")
         self.status.setObjectName("subtitle")

@@ -23,6 +23,58 @@ MAX_DOCUMENT_CHARACTERS = 1_000_000_000
 MAX_INLINE_CHARACTERS = 10_000
 ORDER_STATUSES = ('new', 'preparing', 'ready', 'delivered', 'cancelled')
 BUSINESS_FIELDS = ('kind', 'customer', 'contact', 'order_ref', 'order_status', 'order_due', 'checklist')
+TEAM_FIELDS = ('team_id', 'team_workspace_id', 'team_revisions', 'team_recipients', 'team_due_at', 'team_conflict_revision', 'team_notify')
+
+
+def validate_team_metadata(data):
+    """Retain portable shared-note references without copying an employee profile.
+
+    Device identities, delivery receipts and snoozes live in the per-user team
+    cache. A notebook backup may carry these references but never impersonates
+    the employee who originally created it.
+    """
+    if not any(key in data for key in TEAM_FIELDS):
+        return {'team_shared': True} if data.get('team_shared') is True else {}
+    def identifier(value):
+        return (value if isinstance(value, str) and 0 < len(value) <= 128
+                and all(c.isascii() and (c.isalnum() or c in '-_.') for c in value) else '')
+    revisions = data.get('team_revisions', [])
+    recipients = data.get('team_recipients', [])
+    if not isinstance(revisions, list) or len(revisions) > 2000 or any(not identifier(v) for v in revisions):
+        raise ValueError('The shared note contains invalid revision metadata.')
+    if isinstance(recipients, list) and '*' in recipients:
+        recipients = []
+    if not isinstance(recipients, list) or len(recipients) > 2000 or any(not identifier(v) for v in recipients):
+        raise ValueError('Choose valid employees for this shared note.')
+    due = data.get('team_due_at')
+    if due is not None and (type(due) not in (int, float) or not math.isfinite(due) or due < 0):
+        raise ValueError('The shared note contains an invalid reminder date.')
+    for key in ('team_id', 'team_workspace_id'):
+        if data.get(key) and not identifier(data[key]):
+            raise ValueError('The shared note contains an invalid workspace reference.')
+    return {'team_id': identifier(data.get('team_id')), 'team_workspace_id': identifier(data.get('team_workspace_id')),
+            'team_revisions': list(dict.fromkeys(revisions)), 'team_recipients': list(dict.fromkeys(recipients)),
+            'team_due_at': float(due) if due is not None else None,
+            'team_conflict_revision': identifier(data.get('team_conflict_revision')),
+            'team_notify': data.get('team_notify') is not False,
+            **({'team_shared': True} if data.get('team_shared') is True or data.get('team_id') else {})}
+
+
+def portable_notebook_state(state):
+    """Small-note mobile exports retain privacy without employee references."""
+    portable = copy.deepcopy(state)
+    portable['linked_file'] = ''
+    portable['linked_lines'] = []
+    for note in portable.get('notes', []):
+        shared = note.get('team_shared') is True or bool(note.get('team_id') or note.get('team_workspace_id')
+            or note.get('team_revisions') or note.get('team_recipients') or note.get('team_due_at') is not None)
+        for key in list(note):
+            if key.startswith('team_'):
+                note.pop(key)
+        note['source'] = ''
+        if shared:
+            note['team_shared'] = True
+    return portable
 
 
 def clean_text(value, limit):
@@ -223,7 +275,8 @@ class NoteStore:
                 "ai_guidance": validate_guidance(data.get("ai_guidance")),
                 "kind": kind, "customer": clean_text(data.get('customer'), 100), 'contact': clean_text(data.get('contact'), 100),
                 'order_ref': clean_text(data.get('order_ref'), 80), 'order_status': status, 'order_due': timestamp('order_due'),
-                'checklist': checklist, 'reminder_history': [clean_text(t, 280) for t in data.get('reminder_history', [])[-5:] if isinstance(t, str)] if isinstance(data.get('reminder_history'), list) else [], **document}
+                'checklist': checklist, 'reminder_history': [clean_text(t, 280) for t in data.get('reminder_history', [])[-5:] if isinstance(t, str)] if isinstance(data.get('reminder_history'), list) else [], **document,
+                **validate_team_metadata(data)}
 
     @property
     def documents(self):
@@ -515,7 +568,9 @@ class NoteStore:
         return self.transaction(change)
 
     def next_notification(self, now):
-        active = [n for n in self.notes if not n["done"]]
+        # Shared reminders have employee-specific receipts and schedules. The
+        # ordinary notebook scheduler must never broadcast them to every PC.
+        active = [n for n in self.notes if not n["done"] and not n.get('team_id')]
         pending = [n for n in active if n["unannounced"]]
         if pending:
             return pending[0], "added"
@@ -551,7 +606,7 @@ class NoteStore:
     def export_json(self):
         if any(note.get('document_id') for note in self.notes):
             raise ValueError('This notebook includes full documents. Use a ZIP backup to include all of their text.')
-        return copy.deepcopy(self.state)
+        return portable_notebook_state(self.state)
 
     def import_json(self, payload):
         return self.import_backup(payload)
@@ -706,6 +761,7 @@ class NoteService(QObject):
         self.last_delivery = -float("inf")
         self.signature = None
         self.last_file_error = ""
+        self.team_notifications_active = False
         self.watcher = QFileSystemWatcher(self)
         self.watcher.fileChanged.connect(lambda _: self.scan_linked(force=True))
         self.watcher.directoryChanged.connect(lambda _: self.scan_linked())
@@ -781,6 +837,13 @@ class NoteService(QObject):
         self.changed.emit("")
 
     def save_note(self, identifier, title, body, repeat, due=None, details=None):
+        existing = self.store.find(identifier) if identifier else None
+        if self.team_notifications_active:
+            details = {**(details or {}), 'team_shared': True}
+        if existing and existing.get('team_id'):
+            # Explicit editor saves can change a shared schedule. Automatic
+            # receipt updates and personal snoozes never pass through here.
+            details = {**(details or {}), 'team_due_at': due}
         note = self.store.edit(identifier, title, body, repeat, due, details=details) if identifier else self.store.add(title, body, repeat, due, details=details)
         self.changed.emit(note["id"])
         return note
@@ -796,6 +859,11 @@ class NoteService(QObject):
         return note
 
     def modify(self, identifier, **changes):
+        existing = self.store.find(identifier)
+        if self.team_notifications_active:
+            changes['team_shared'] = True
+        if existing and existing.get('team_id') and 'next_due' in changes and 'team_due_at' not in changes:
+            changes['team_due_at'] = changes['next_due']
         note = self.store.modify(identifier, **changes)
         self.changed.emit(identifier)
         return note
@@ -813,7 +881,7 @@ class NoteService(QObject):
         self.changed.emit(identifier)
 
     def tick(self):
-        if not self.settings["note_reminders"] or self.settings["quiet_mode"] or not self.can_notify() or time.monotonic() - self.last_delivery < 9:
+        if self.team_notifications_active or not self.settings["note_reminders"] or self.settings["quiet_mode"] or not self.can_notify() or time.monotonic() - self.last_delivery < 9:
             return
         note, kind = self.store.next_notification(time.time())
         if note:

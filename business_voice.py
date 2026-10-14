@@ -8,6 +8,7 @@ from ai_chat import GroqClient
 from credentials import redact
 from sliding_text import plain_reply
 from notes import business_summary
+from ai_privacy import filtered_ai_context, permissions_withdrawn, sharing_permissions
 
 
 class BusinessVoice(QObject):
@@ -19,8 +20,11 @@ class BusinessVoice(QObject):
         self.client.completed.connect(self.received)
         self.client.failed.connect(self.failed)
         self.recent, self.queued_occasion = [], None
+        self.cloud_recent = []
         self.inflight = self.blocked = self.closed = False
         self.next_due = 0
+        self._sharing_permissions = sharing_permissions(settings)
+        self._pending_permissions = None
         self.timer = QTimer(self)
         self.timer.setInterval(1000)
         self.timer.timeout.connect(self.pump)
@@ -41,11 +45,14 @@ class BusinessVoice(QObject):
         recent = {s.casefold() for s in self.recent[-6:]}
         return random.choice([s for s in choices if s.casefold() not in recent] or choices)
 
-    def say_unique(self, text, event):
+    def say_unique(self, text, event, include_in_ai=True):
         text = plain_reply(redact(text))[:280]
         if not text or text.casefold() in {s.casefold() for s in self.recent[-6:]}:
             text = self.local(event)
+            include_in_ai = False
         self.recent = [*self.recent[-7:], text]
+        if include_in_ai:
+            self.cloud_recent = [*self.cloud_recent[-7:], text]
         self.speak(text)
 
     def request(self, event='greeting', detail=''):
@@ -53,11 +60,11 @@ class BusinessVoice(QObject):
             return
         self.queued_occasion = (event, detail[:80])
         if self.inflight or time.monotonic() < self.next_due or not self.settings['ai_greetings']:
-            self.say_unique(self.local(event), event)
+            self.say_unique(self.local(event), event, include_in_ai=False)
             self.queued_occasion = None
             return
         if not self.pump():
-            self.say_unique(self.local(event), event)
+            self.say_unique(self.local(event), event, include_in_ai=False)
 
     def pump(self):
         if self.closed or self.inflight or self.blocked or not self.queued_occasion or time.monotonic() < self.next_due:
@@ -76,9 +83,16 @@ class BusinessVoice(QObject):
         self.inflight = True
         self.next_due = time.monotonic() + 60
         self.pending_event = event
-        context = self.context(False, self.settings['ai_share_notes'])
+        current_permissions = sharing_permissions(self.settings)
+        if permissions_withdrawn(self._sharing_permissions, current_permissions):
+            self.cloud_recent.clear()
+        self._sharing_permissions = current_permissions
+        context = filtered_ai_context(self.context(False, self.settings['ai_share_notes']), self.settings)
         context['occasion'], context['interaction'] = event, detail
-        context['recent_phrases'] = self.recent[-6:]
+        # Local greetings can include workplace counts even when cloud note
+        # sharing is off. Only previous cloud replies become prompt history.
+        context['recent_phrases'] = self.cloud_recent[-6:]
+        self._pending_permissions = current_permissions
         prompt = ("You are Jeffery, a warm business-minded companion. Write ONE or TWO short natural sentences for this occasion. "
                   "Vary your greeting and do not repeat recent_phrases. Use the actual open orders, statuses and unchecked tasks when helpful. "
                   "Do not invent customers, deadlines, revenue, payments or completed work. No constant slogans or lectures. "
@@ -88,32 +102,48 @@ class BusinessVoice(QObject):
                                      {'role': 'user', 'content': 'Say something fresh and useful for this occasion.'}], tools=False)
         if not accepted:
             self.inflight = False
+            self._pending_permissions = None
         return accepted
 
     def received(self, message):
+        pending_permissions = self._pending_permissions
+        was_inflight = self.inflight
         self.inflight = False
-        if not self.closed and self.settings['ai_greetings'] and not self.settings['quiet_mode']:
+        self._pending_permissions = None
+        if (was_inflight and not self.closed and self.settings['ai_greetings'] and not self.settings['quiet_mode']
+                and not permissions_withdrawn(pending_permissions, sharing_permissions(self.settings))):
             self.say_unique(message.get('content', ''), self.pending_event)
 
     def failed(self, message):
         self.inflight = False
+        self._pending_permissions = None
         self.blocked = 'rejected the key' in message.casefold()
         self.next_due = time.monotonic() + 120
         if not self.closed:
-            self.say_unique(self.local('greeting'), 'greeting')
+            self.say_unique(self.local('greeting'), 'greeting', include_in_ai=False)
 
     def reset(self):
         self.client.cancel()
         self.inflight = self.blocked = False
+        self._pending_permissions = None
         self.next_due = 0
 
     def configure(self):
-        if not self.settings['ai_greetings'] or self.settings['quiet_mode']:
+        current_permissions = sharing_permissions(self.settings)
+        withdrawn = permissions_withdrawn(self._sharing_permissions, current_permissions)
+        if withdrawn:
+            self.recent.clear()
+            self.cloud_recent.clear()
+        self._sharing_permissions = current_permissions
+        if withdrawn or not self.settings['ai_greetings'] or self.settings['quiet_mode']:
             self.client.cancel()
             self.inflight = False
+            self._pending_permissions = None
             self.queued_occasion = None
 
     def stop(self):
         self.closed = True
         self.timer.stop()
         self.client.cancel()
+        self.inflight = False
+        self._pending_permissions = None

@@ -39,7 +39,7 @@ class AppSettings:
                   "cpu_alert": (40, 100), "ram_alert": (40, 100),
                   "alert_duration": (1, 60), "alert_cooldown": (30, 900), "focus_minutes": (1, 120),
                   "note_repeat_minutes": (0, 1440), "hide_seconds": (3, 120),
-                  "ai_interval_seconds": (60, 1800)}
+                  "ai_interval_seconds": (60, 1800), "team_reminder_minutes": (0, 1440)}
         options = {"theme": ("midnight", "forest", "plum"), "pet_palette": ("mint", "sky", "amber", "rose"),
                    "roaming_mode": ("bottom", "free"), "character": ("robot", "cat", "knight"),
                    "monitor_style": ("medieval", "classic"),
@@ -69,6 +69,12 @@ class AppSettings:
                 result[key] = cleaned if len(cleaned) <= 64 and re.fullmatch(r"[A-Za-z0-9_]+(?:\+[A-Za-z0-9_]+)*", cleaned) else default
             elif key in ("tesseract_path", "semantic_model_path"):
                 result[key] = value.strip() if isinstance(value, str) and len(value) <= 1024 and all(c.isprintable() for c in value) else default
+            elif key == "team_shared_folder":
+                result[key] = value.strip() if isinstance(value, str) and len(value) <= 4096 and all(c.isprintable() for c in value) else default
+            elif key == "team_employee_name":
+                result[key] = "".join(c for c in value if c.isprintable()).strip()[:80] if isinstance(value, str) else ""
+            elif key == "team_employee_id":
+                result[key] = value if isinstance(value, str) and re.fullmatch(r"[0-9a-f]{32}", value) else ""
         return result
 
     def __getitem__(self, key):

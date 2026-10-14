@@ -6,6 +6,7 @@ import tempfile
 
 from content_intake import _check_cancel
 from notebook_backup import export_backup, export_text, prepare_backup, _output_path
+from notes import portable_notebook_state
 
 
 def prepare_document(argument, cancel=None):
@@ -36,7 +37,7 @@ def export_notebook(argument, cancel=None):
     if argument['format'] == 'zip':
         return export_backup(argument['store'], argument['path'], cancel,
                              snapshot=argument['snapshot'])
-    snapshot = argument['snapshot']
+    snapshot = portable_notebook_state(argument['snapshot'])
     if any(note.get('document_id') for note in snapshot['notes']):
         raise ValueError('Choose a desktop ZIP backup to include full documents.')
     path = _output_path(argument['store'], argument['path'])

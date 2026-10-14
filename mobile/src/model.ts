@@ -8,6 +8,7 @@ export type Note = {
   next_due: number | null; repeat_minutes: number; done: boolean; pinned: boolean; pin_position: null;
   unannounced: boolean; source: string; customer: string; contact: string; order_ref: string;
   order_status: OrderStatus; order_due: number | null; checklist: Item[]; reminder_history: string[]; advice?: Advice;
+  team_shared?: true;
 };
 export type Preferences = { businessName: string; model: string; ai: boolean; notifications: boolean; character: 'robot' | 'cat' | 'knight'; quiet: boolean };
 export type Book = { version: 2; notes: Note[]; preferences: Preferences; phrases: string[] };
@@ -17,6 +18,13 @@ export const identifier = () => `${Date.now().toString(36)}-${Math.random().toSt
 const clean = (v: unknown, n: number) => typeof v === 'string' ? v.trim().slice(0, n) : '';
 const stamp = (v: unknown): number | null => typeof v === 'number' && Number.isFinite(v) && v > 0 && v < 253402300000 ? v : null;
 const integer = (v: unknown, low: number, high: number, fallback: number) => typeof v === 'number' && Number.isInteger(v) ? Math.max(low, Math.min(high, v)) : fallback;
+export function isSharedNote(raw: unknown): boolean {
+  if (!raw || typeof raw !== 'object') return false;
+  const n = raw as Record<string, unknown>;
+  return Boolean(n.team_shared === true || n.team_id || n.team_workspace_id ||
+    Array.isArray(n.team_revisions) && n.team_revisions.length ||
+    Array.isArray(n.team_recipients) && n.team_recipients.length || n.team_due_at != null);
+}
 export function normalizeNote(raw: unknown): Note | null {
   if (!raw || typeof raw !== 'object') return null;
   const n = raw as Record<string, unknown>;
@@ -40,6 +48,11 @@ export function normalizeNote(raw: unknown): Note | null {
     done, pinned: false, pin_position: null, unannounced: false, source: '', customer: clean(n.customer, 100),
     contact: clean(n.contact, 100), order_ref: clean(n.order_ref, 80), order_status: status, order_due: stamp(n.order_due), checklist,
     reminder_history: (Array.isArray(n.reminder_history) ? n.reminder_history : []).slice(-5).map(v => clean(v, 280)).filter(Boolean) };
+  // Desktop work backups must retain their privacy classification without
+  // copying employee identities, workspace references or delivery metadata.
+  if (isSharedNote(n)) {
+    note.team_shared = true;
+  }
   const advice = n.advice as Advice | undefined;
   if (advice && typeof advice.reminder === 'string' && advice.signature === signature(note)) {
     note.advice = { reminder: clean(advice.reminder, 280), next_step: clean(advice.next_step, 180),
@@ -59,13 +72,14 @@ export function saveNote(book: Book, draft: Note, now = Date.now() / 1000): Book
   if (!draft.title.trim() && !draft.body.trim()) throw new Error('Give your note or order a title.');
   if (draft.kind !== 'note' && !draft.checklist.length && !draft.body.trim()) throw new Error('Add an item or write the order details.');
   const old = book.notes.find(n => n.id === draft.id);
-  const next = normalizeNote({ ...draft, updated: now,
+  const next = normalizeNote({ ...draft, ...(old?.team_shared ? { team_shared: true } : {}), updated: now,
     written: old && old.title === draft.title.trim() && old.body === draft.body.trim() ? old.written : now })!;
   if (!old && book.notes.length >= 2000) throw new Error('The notebook is full. Export and remove older entries first.');
   return { ...book, notes: old ? book.notes.map(n => n.id === next.id ? next : n) : [next, ...book.notes] };
 }
 export function changeNote(book: Book, id: string, changes: Partial<Note>, now = Date.now() / 1000): Book {
-  return { ...book, notes: book.notes.map(n => n.id === id ? normalizeNote({ ...n, ...changes, updated: now })! : n) };
+  return { ...book, notes: book.notes.map(n => n.id === id ? normalizeNote({ ...n, ...changes,
+    ...(n.team_shared ? { team_shared: true } : {}), updated: now })! : n) };
 }
 export function complete(book: Book, id: string, done = true): Book {
   const note = book.notes.find(n => n.id === id);
@@ -97,13 +111,17 @@ export function mergeBackup(book: Book, payload: unknown): Book {
   const rows = (payload as { notes: unknown[] }).notes;
   if (rows.length > 2000) throw new Error('A backup can contain at most 2,000 entries.');
   const result = new Map(book.notes.map(n => [n.id, n]));
+  let importedShared = false;
   for (const row of rows) {
     const n = normalizeNote(row);
     if (!n) throw new Error('The backup has an invalid entry. Nothing was imported.');
+    importedShared ||= n.team_shared === true;
     const old = result.get(n.id);
-    if (!old || n.updated > old.updated) result.set(n.id, n);
+    if (!old || n.updated > old.updated) result.set(n.id, old?.team_shared ? { ...n, team_shared: true } : n);
+    else if (n.team_shared && !old.team_shared) result.set(n.id, { ...old, team_shared: true });
   }
   if (result.size > 2000) throw new Error('The merged notebook exceeds 2,000 entries.');
-  return { ...book, notes: [...result.values()] };
+  return { ...book, notes: [...result.values()],
+    ...(importedShared ? { preferences: { ...book.preferences, ai: false }, phrases: [] } : {}) };
 }
 export const timeLabel = (stamp: number | null) => stamp ? new Date(stamp * 1000).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : 'No reminder time';

@@ -10,6 +10,8 @@ from ai_chat import GroqClient
 from credentials import redact
 from notes import current_guidance, note_fingerprint, business_details, fallback_reminder
 from sliding_text import plain_reply
+from ai_privacy import (filtered_ai_context, note_allowed_for_ai, permissions_withdrawn,
+                        sharing_permissions)
 
 
 def parse_guidance(text, note, now=None):
@@ -112,6 +114,7 @@ class SmartNoteAssistant(QObject):
             self.client.cancel()
             self.pending = None
             self.queue.clear()
+            self.occasions.clear()
             self.set_status("Smart reminders are off. Your scheduled reminders still work.")
         else:
             self.refresh()
@@ -130,12 +133,15 @@ class SmartNoteAssistant(QObject):
         if not self.settings["ai_share_notes"]:
             self.configure()
             return
-        active = {n["id"]: n for n in self.service.store.notes if not n["done"]}
+        active = {n["id"]: n for n in self.service.store.notes
+                  if not n["done"] and note_allowed_for_ai(n, self.settings)}
         if self.pending and (self.pending["id"] not in active or
-                             note_fingerprint(active[self.pending["id"]]) != self.pending["fingerprint"]):
+                             note_fingerprint(active[self.pending["id"]]) != self.pending["fingerprint"] or
+                             permissions_withdrawn(self.pending.get("permissions"), sharing_permissions(self.settings))):
             self.client.cancel()
             self.pending = None
         self.queue = OrderedDict((key, force) for key, force in self.queue.items() if key in active)
+        self.occasions = {key: occasion for key, occasion in self.occasions.items() if key in active}
         # Bound a linked-file burst; subsequent completed requests refill the queue.
         for note in sorted(active.values(), key=lambda n: (not n["unannounced"], n["next_due"] or float("inf"), -n["created"])):
             if len(self.queue) >= 20:
@@ -148,7 +154,7 @@ class SmartNoteAssistant(QObject):
 
     def request_note(self, identifier, force=True, occasion='refresh'):
         note = self.service.store.find(identifier)
-        if note and not note["done"] and self.settings["ai_share_notes"]:
+        if note and not note["done"] and note_allowed_for_ai(note, self.settings):
             if self.pending and self.pending['id'] == identifier:
                 return
             self.queue[identifier] = force
@@ -176,12 +182,15 @@ class SmartNoteAssistant(QObject):
         while self.queue:
             identifier, force = self.queue.popitem(last=False)
             note = self.service.store.find(identifier)
-            if note and not note["done"] and (force or not current_guidance(note)):
-                self.pending = {"id": identifier, "fingerprint": note_fingerprint(note)}
+            if (note and not note["done"] and note_allowed_for_ai(note, self.settings)
+                    and (force or not current_guidance(note))):
+                self.pending = {"id": identifier, "fingerprint": note_fingerprint(note),
+                                "permissions": sharing_permissions(self.settings)}
                 self.set_status("Groq is reading your saved note…")
                 messages = note_prompt(note, occasion=self.occasions.pop(identifier, 'saved'))
-                if self.memory_context:
-                    memories = self.memory_context(note["title"])
+                if self.memory_context and self.settings["ai_share_memory"]:
+                    memories = filtered_ai_context({"user_memory": self.memory_context(note["title"])},
+                                                   self.settings).get("user_memory", [])
                     if memories:
                         messages[0]["content"] += " Use supplied user_memory preferences for helpful phrasing and next steps. Never change the user's dates or assume missing facts."
                         payload = json.loads(messages[1]["content"])
@@ -199,7 +208,9 @@ class SmartNoteAssistant(QObject):
         if not pending or self.closed or not self.settings["ai_share_notes"]:
             return
         note = self.service.store.find(pending["id"])
-        if not note or note["done"] or note_fingerprint(note) != pending["fingerprint"]:
+        if (not note_allowed_for_ai(note, self.settings) or note["done"]
+                or note_fingerprint(note) != pending["fingerprint"]
+                or permissions_withdrawn(pending.get("permissions"), sharing_permissions(self.settings))):
             self.refresh()
             return
         try:
@@ -223,7 +234,8 @@ class SmartNoteAssistant(QObject):
 
     def failed(self, message):
         pending, self.pending = self.pending, None
-        if pending:
+        note = self.service.store.find(pending["id"]) if pending else None
+        if pending and note_allowed_for_ai(note, self.settings) and not note["done"]:
             self.queue[pending["id"]] = True
         self.failures += 1
         self.blocked = "rejected the key" in message.casefold()
@@ -237,3 +249,4 @@ class SmartNoteAssistant(QObject):
         self.client.cancel()
         self.pending = None
         self.queue.clear()
+        self.occasions.clear()
