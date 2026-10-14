@@ -9,9 +9,11 @@ if __name__ == "__main__":
 import argparse
 import logging
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
-from PySide6.QtCore import (QObject, QThread, Signal, Qt, QMetaObject, QTimer, QLockFile, QSignalBlocker)
+from PySide6.QtCore import (QObject, QThread, Signal, Qt, QMetaObject, QTimer, QLockFile, QSignalBlocker, QUrl)
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import QApplication, QMenu, QMessageBox, QSystemTrayIcon
 from config import APP_NAME, APP_VERSION, clamp_position, data_directory
 from settings import AppSettings, set_windows_startup
@@ -27,13 +29,18 @@ from notepad_window import NotepadWindow, ReminderPopup, StickyNote
 from launcher import QuickLauncher, LauncherWindow, start_app
 from credentials import CredentialStore
 from ai_chat import ChatWindow
+from work_chat import WorkChatWindow
+from shared_business import SharedBusinessController
+from home_window import HomeWindow
+from ui_style import apply_window_style
 from folder_play import FolderHabitat
 from letter_play import LetterPlayground
 from real_desktop import RealDesktopPlay
 from ai_brain import AutonomousBrain
 from smart_notes import SmartNoteAssistant
 from business_voice import BusinessVoice
-from characters import ANIMATION_STATES
+from characters import ANIMATION_STATES, BUSINESS_ANIMATIONS
+from auto_parts import dashboard_summary
 from memory import MemoryStore
 from memory_window import MemoryWindow
 from memory_learning import MemoryLearner
@@ -53,6 +60,7 @@ class BuddyApp(QObject):
         self.app = app
         self.settings = settings or AppSettings()
         self.shutting_down = False
+        self._ai_shared_ids = set()
         self.overlay = StatsOverlay(self.settings)
         self.pet = PixelPet(self.settings)
         self.dialog = SettingsWindow(self.settings)
@@ -99,6 +107,26 @@ class BuddyApp(QObject):
         self.latest_snapshot = None
         self.chat = ChatWindow(self.settings, self.credentials, self.ai_context, self.run_buddy_action,
             memory_store=self.memory_store, notebook_store=self.notes_store, semantic_service=self.semantic)
+        self.work_chat = WorkChatWindow(self.settings)
+        self.home = HomeWindow(self.note_service, self.settings, self.focus)
+        self.home.navigate_requested.connect(self.home_navigate)
+        self.home.create_requested.connect(self.new_business_entry)
+        self.home.record_requested.connect(self.open_note)
+        self.home.preference_requested.connect(lambda key, value: self.apply_settings({key: value}))
+        for window in (self.notepad, self.chat, self.work_chat, self.dialog,
+                       self.memory_window, self.process_window, self.launcher_window, self.team_window):
+            if hasattr(window, 'home_requested'):
+                window.home_requested.connect(self.show_home)
+        self.business_sync = SharedBusinessController(self.note_service, self)
+        self.team.exclude_note_ids = lambda: self.business_sync._reserved_cache_ids
+        self.note_service.team_excluded_note_ids = lambda: self.business_sync._cache_ids
+        self.notepad.shared_business = self.business_sync
+        self.business_sync.status_changed.connect(self.notepad.set_shared_status)
+        self.business_sync.status_changed.connect(self.home.set_connection)
+        self.work_chat.session_changed.connect(self.business_sync.set_session)
+        self.business_sync.session_expired.connect(self.work_chat._clear_session)
+        self.notepad.connection_work_chat_requested.connect(self.show_work_chat)
+        self.notepad.set_shared_status('Sign in to Work Chat to use shared orders and checklists.', False)
         self.chat.user_message.connect(self.memory_learner.observe)
         self.chat.notepad_requested.connect(self.show_notepad)
         self.chat.memory_requested.connect(self.show_memory)
@@ -108,6 +136,7 @@ class BuddyApp(QObject):
         self.memory_window.preferences_changed.connect(self.apply_ai_preferences)
         self.memory_window.changed.connect(self.memory_learner.reset)
         self.notepad.chat_requested.connect(self.show_chat)
+        self.notepad.business_event.connect(self.business_interaction)
         self.chat.connection_changed.connect(self.memory_learner.reset)
         self.chat.preferences_changed.connect(self.apply_ai_preferences)
         self.chat.reply_ready.connect(self.pet.say)
@@ -147,6 +176,7 @@ class BuddyApp(QObject):
         self.notepad.open_text_requested.connect(self.open_linked_notepad)
         self.notepad.reading.connect(lambda: self.pet.perform("READ", 3))
         self.note_service.changed.connect(self.sync_stickies)
+        self.note_service.changed.connect(self.refresh_team_privacy)
         self.note_service.changed.connect(self.sync_task_memory)
         self.note_service.notification.connect(self.deliver_note)
         self.note_service.error.connect(self.note_error)
@@ -154,10 +184,10 @@ class BuddyApp(QObject):
         self.note_popup.done_requested.connect(lambda identifier: self.note_action(identifier, "done"))
         self.note_popup.snooze_requested.connect(lambda identifier: self.note_action(identifier, "snooze"))
         self.note_popup.snooze_for_requested.connect(self.snooze_note)
-        self.tray.open_requested.connect(self.show_overlay)
+        self.tray.open_requested.connect(self.show_home)
         self.overlay.position_changed.connect(lambda pos: self.persist({"overlay_position": pos}))
         self.pet.position_changed.connect(lambda pos: self.persist({"pet_position": pos}))
-        self.pet.overlay_requested.connect(self.show_overlay)
+        self.pet.overlay_requested.connect(self.show_home)
         self.overlay.settings_requested.connect(lambda: self.show_settings(1))
         self.pet.menu_requested.connect(self.popup_menu)
         self.overlay.menu_requested.connect(self.popup_menu)
@@ -199,9 +229,47 @@ class BuddyApp(QObject):
         self.configure_team()
         self.sync_task_memory()
         self.note_service.start()
+        self.app.styleHints().colorSchemeChanged.connect(self.interface_scheme_changed)
+        if show_tray and self.settings['home_on_start'] and not self.settings['launch_minimized']:
+            QTimer.singleShot(0, self.show_home)
 
     def build_menu(self, menu):
-        menu.addAction("Talk to Jeffery · Groq", self.show_chat)
+        apply_window_style(menu, self.settings)
+        menu.addAction('Open Jeffery Home', self.show_home)
+        menu.addSeparator()
+        chat = menu.addMenu("Chat")
+        chat.addAction("Work Chat · Coworkers", self.show_work_chat)
+        chat.addAction("Shared-folder messages", self.show_team)
+        chat.addAction("Talk to Jeffery · Groq", self.show_chat)
+        notes = menu.addMenu("Famous Twins")
+        notes.addAction("Business Overview", lambda: self.show_business_workspace("overview"))
+        sections = notes.addMenu("Workspace")
+        for label, section in (("Writing", "writing"), ("Checklists", "checklists"),
+                               ("Orders and Quotes", "orders"), ("Schedule", "schedule")):
+            sections.addAction(label, lambda checked=False, value=section: self.show_business_workspace(value))
+        sections.addAction("Shared-folder setup", self.show_team)
+        create = notes.addMenu("Create")
+        create.addAction("New Writing", lambda: self.new_business_entry("note"))
+        create.addAction("New Checklist", lambda: self.new_business_entry("list"))
+        create.addAction("New Customer Order", lambda: self.new_business_entry("order"))
+        notes.addAction("Today's Business Brief", self.business_briefing)
+        files = notes.addMenu("Files and Sources")
+        files.addAction("Read PDF or Webpage", lambda: self.show_business_workspace("import"))
+        files.addAction("Open Linked Text File", self.open_linked_notepad)
+        notes.addSeparator()
+        self.reminder_action = notes.addAction("Note Reminders")
+        self.reminder_action.setCheckable(True)
+        self.reminder_action.setChecked(self.settings["note_reminders"])
+        self.reminder_action.triggered.connect(lambda checked: self.apply_settings({"note_reminders": checked}))
+        focus_menu = notes.addMenu("Focus Timer")
+        self.focus_start_action = focus_menu.addAction(f"Start {self.settings['focus_minutes']}-minute session", lambda: self.focus.start(self.settings["focus_minutes"]))
+        self.focus_pause_action = focus_menu.addAction("Pause", self.focus.toggle_pause)
+        self.focus_pause_action.setEnabled(False)
+        self.focus_reset_action = focus_menu.addAction("Reset", self.focus.reset)
+        self.focus_reset_action.setEnabled(False)
+        self.quick_menu = menu.addMenu("Quick Launch")
+        self.refresh_quick_menu()
+        menu.addSeparator()
         play = menu.addMenu("Desktop Play")
         play.addAction("Real Folders, Tabs and Windows", self.desktop.show_panel)
         play.addAction("Jump into a Real Folder", lambda: self.run_buddy_action({"action": "hide"}))
@@ -220,20 +288,31 @@ class BuddyApp(QObject):
             action.setChecked(self.settings["mouse_mode"] == mode)
             action.triggered.connect(lambda checked=False, m=mode: self.set_mouse_mode(m))
             self.mouse_actions[mode] = action
-        menu.addSeparator()
-        menu.addAction("Jeffery's Notepad", self.show_notepad)
-        menu.addAction("Work Team · Messages and Sync", self.show_team)
-        menu.addAction("Open Linked Text File", self.open_linked_notepad)
-        self.quick_menu = menu.addMenu("Quick Launch")
-        self.refresh_quick_menu()
         interact_menu = menu.addMenu("Play with Jeffery")
         self.interact_actions = {}
         for label, state in (("Pet", "PET"), ("Feed", "EAT"), ("Wave", "WAVE"), ("Dance", "DANCE"), ("Jump", "JUMP"), ("Take a nap", "SLEEP")):
             self.interact_actions[state] = interact_menu.addAction(label, lambda checked=False, s=state: self.pet.interact(s))
         tricks = interact_menu.addMenu("More Moves")
+        business_moves = interact_menu.addMenu("At the Parts Counter")
+        business_states = {state for _, state in BUSINESS_ANIMATIONS}
+        for label, state in BUSINESS_ANIMATIONS:
+            business_moves.addAction(label, lambda checked=False, value=state: self.pet.interact(value))
+        expressions = tricks.addMenu("Expressions")
+        props = tricks.addMenu("Props and Tricks")
+        movement = tricks.addMenu("Movement")
         for state in ANIMATION_STATES[25:]:
-            tricks.addAction(state.replace('_', ' ').title(), lambda checked=False, s=state: self.run_buddy_action({'action': 'animate', 'animation': s}))
-        characters = menu.addMenu("Choose Character")
+            if state in business_states:
+                continue
+            group = expressions if state in {"SNEEZE", "SCARED", "LAUGH", "GROOM", "SALUTE", "FACEPALM"} else props if state in {"MAGIC", "UMBRELLA", "JUGGLE"} else movement
+            group.addAction(state.replace('_', ' ').title(), lambda checked=False, s=state: self.run_buddy_action({'action': 'animate', 'animation': s}))
+        buddy = menu.addMenu("Buddy Controls")
+        buddy.addAction("Show / Hide Buddy", self.toggle_pet)
+        self.pause_action = buddy.addAction("Pause Buddy", self.toggle_pause)
+        self.free_action = buddy.addAction("Free Buddy: Walk Anywhere")
+        self.free_action.setCheckable(True)
+        self.free_action.setChecked(self.settings["roaming_mode"] == "free")
+        self.free_action.triggered.connect(lambda checked: self.apply_settings({"roaming_mode": "free" if checked else "bottom"}))
+        characters = buddy.addMenu("Choose Character")
         self.character_actions = {}
         for label, character in (("Robot", "robot"), ("Cat", "cat"), ("Knight", "knight")):
             action = characters.addAction(label)
@@ -241,48 +320,36 @@ class BuddyApp(QObject):
             action.setChecked(self.settings["character"] == character)
             action.triggered.connect(lambda checked=False, c=character: self.apply_settings({"character": c}))
             self.character_actions[character] = action
-        menu.addSeparator()
-        menu.addAction("System Monitor", self.show_overlay)
-        menu.addAction("Top Apps: CPU / Memory", self.show_processes)
-        menu.addAction("Show / Hide Overlay", self.toggle_overlay)
-        menu.addAction("Show / Hide Buddy", self.toggle_pet)
-        self.pause_action = menu.addAction("Pause Buddy", self.toggle_pause)
-        self.free_action = menu.addAction("Free Buddy: Walk Anywhere")
-        self.free_action.setCheckable(True)
-        self.free_action.setChecked(self.settings["roaming_mode"] == "free")
-        self.free_action.triggered.connect(lambda checked: self.apply_settings({"roaming_mode": "free" if checked else "bottom"}))
-        self.quiet_action = menu.addAction("Quiet Mode")
+        buddy.addSeparator()
+        self.quiet_action = buddy.addAction("Quiet Mode")
         self.quiet_action.setCheckable(True)
         self.quiet_action.setChecked(self.settings["quiet_mode"])
         self.quiet_action.triggered.connect(lambda checked: self.apply_settings({"quiet_mode": checked}))
-        self.power_action = menu.addAction("Low Power Mode")
+        self.power_action = buddy.addAction("Low Power Mode")
         self.power_action.setCheckable(True)
         self.power_action.setChecked(self.settings["low_power"])
         self.power_action.triggered.connect(lambda checked: self.apply_settings({"low_power": checked}))
-        self.reminder_action = menu.addAction("Note Reminders")
-        self.reminder_action.setCheckable(True)
-        self.reminder_action.setChecked(self.settings["note_reminders"])
-        self.reminder_action.triggered.connect(lambda checked: self.apply_settings({"note_reminders": checked}))
-        focus_menu = menu.addMenu("Focus Timer")
-        self.focus_start_action = focus_menu.addAction(f"Start {self.settings['focus_minutes']}-minute session", lambda: self.focus.start(self.settings["focus_minutes"]))
-        self.focus_pause_action = focus_menu.addAction("Pause", self.focus.toggle_pause)
-        self.focus_pause_action.setEnabled(False)
-        self.focus_reset_action = focus_menu.addAction("Reset", self.focus.reset)
-        self.focus_reset_action.setEnabled(False)
-        menu.addSeparator()
-        menu.addAction("Buddy Settings", lambda: self.show_settings(2))
-        menu.addAction("Overlay Settings", lambda: self.show_settings(1))
-        menu.addAction("General Settings", self.show_settings)
-        self.click_action = menu.addAction("Click-through Overlay")
+        monitor = menu.addMenu("System Monitor")
+        monitor.addAction("System Monitor", self.show_overlay)
+        monitor.addAction("Top Apps: CPU / Memory", self.show_processes)
+        monitor.addSeparator()
+        monitor.addAction("Show / Hide Overlay", self.toggle_overlay)
+        self.click_action = monitor.addAction("Click-through Overlay")
         self.click_action.setCheckable(True)
         self.click_action.setChecked(self.settings["click_through"])
         self.click_action.triggered.connect(lambda value: self.apply_settings({"click_through": value}))
-        self.startup_action = menu.addAction("Start with Windows")
+        menu.addSeparator()
+        settings = menu.addMenu("Settings")
+        settings.addAction("General Settings", self.show_settings)
+        settings.addAction("Buddy Settings", lambda: self.show_settings(2))
+        settings.addAction("Overlay Settings", lambda: self.show_settings(1))
+        settings.addSeparator()
+        self.startup_action = settings.addAction("Start with Windows")
         self.startup_action.setCheckable(True)
         self.startup_action.setChecked(self.settings["start_with_windows"])
         self.startup_action.setEnabled(sys.platform == "win32")
         self.startup_action.triggered.connect(lambda value: self.apply_settings({"start_with_windows": value}))
-        menu.addAction("Reset Positions", self.reset_positions)
+        settings.addAction("Reset Positions", self.reset_positions)
         menu.addSeparator()
         menu.addAction("Exit", self.app.quit)
 
@@ -328,6 +395,9 @@ class BuddyApp(QObject):
         self.team_window.configure()
         self.launcher_window.configure()
         self.chat.configure()
+        self.work_chat.configure()
+        self.home.configure()
+        apply_window_style(self.menu, self.settings)
         self.configure_semantic_memory(changes)
         self.memory_window.configure()
         if not self.settings["memory_enabled"] or not self.settings["memory_ai"] or not self.settings["ai_share_memory"]:
@@ -643,6 +713,21 @@ class BuddyApp(QObject):
                 self.settings['team_employee_name'], employee_id)
         else:
             self.team.disconnect()
+        self.refresh_team_privacy()
+        self.sync_task_memory()
+
+    def refresh_team_privacy(self, *_):
+        shared_ids = {note['id'] for note in self.notes_store.notes if is_shared_note(note)}
+        newly_shared = shared_ids - self._ai_shared_ids
+        self._ai_shared_ids = shared_ids
+        if newly_shared and not self.settings['team_share_notes_with_ai']:
+            self.chat.cancel_request()
+            self.chat.history.clear()
+            self.brain.reset()
+            self.brain.recent.clear()
+            self.smart_notes.reset()
+            self.voice.reset()
+            self.voice.cloud_recent.clear()
 
     def apply_team_preferences(self, changes):
         if not self.persist(changes):
@@ -702,6 +787,64 @@ class BuddyApp(QObject):
         if not self.team.notification_active(notification):
             self.team_popup.dismiss()
 
+    def show_home(self):
+        if self.shutting_down:
+            return
+        self.home.refresh()
+        self.home.show()
+        self.home.raise_()
+        self.home.activateWindow()
+
+    def home_navigate(self, destination):
+        if destination in ('overview', 'writing', 'checklists', 'orders', 'schedule'):
+            self.show_business_workspace(destination)
+            return
+        actions = {'home': self.show_home, 'coworkers': self.show_work_chat,
+                   'assistant': self.show_chat, 'settings': self.show_settings,
+                   'monitor': self.show_overlay, 'processes': self.show_processes,
+                   'quick_launch': self.show_launcher, 'memory': self.show_memory}
+        if destination in actions:
+            actions[destination]()
+        elif destination == 'setup':
+            QDesktopServices.openUrl(QUrl('https://github.com/vancore876/pixel-pet/blob/main/WORK_CHAT.md'))
+
+    def interface_scheme_changed(self, *_):
+        if self.settings['interface_appearance'] != 'system' or self.shutting_down:
+            return
+        for window in (self.home, self.dialog, self.notepad, self.work_chat, self.chat,
+                       self.memory_window, self.process_window, self.launcher_window,
+                       self.note_popup, self.team_popup, self.team_window, self.desktop.panel, self.desktop.text_window):
+            window.configure()
+        for sticky in self.stickies.values():
+            sticky.configure()
+        apply_window_style(self.menu, self.settings)
+
+    def show_business_workspace(self, section="overview"):
+        self.show_notepad()
+        self.notepad.show_section(section)
+
+    def new_business_entry(self, kind):
+        self.show_notepad()
+        if kind == "note":
+            self.notepad.new_note()
+        else:
+            self.notepad.new_entry(kind)
+
+    def business_interaction(self, event):
+        if self.shutting_down or not self.settings["business_mode"]:
+            return
+        animation = {"order_saved": "SCAN_PART", "order_ready": "PACK_ORDER",
+                     "checklist_saved": "CHECK_STOCK"}.get(event, "HIGH_FIVE")
+        self.pet.perform(animation, 2.5)
+
+    def business_briefing(self):
+        self.show_business_workspace("overview")
+        counts = dashboard_summary(self.notes_store.notes)
+        self.pet.perform("CHECK_STOCK", 3)
+        self.pet.say(f"{self.settings['business_name']}: {counts['open_orders']} open orders, "
+                     f"{counts['ready_orders']} ready for pickup, and {counts['late_orders']} past deadline. "
+                     f"{counts['parts_to_source']} part units need a sourcing check.")
+
     def open_note(self, identifier):
         if self.notepad.maybe_leave():
             self.show_notepad()
@@ -713,6 +856,12 @@ class BuddyApp(QObject):
 
     def note_action(self, identifier, action):
         try:
+            if self.server_manages_note(identifier) and action in ('done', 'snooze'):
+                if action == 'done':
+                    self.business_sync.complete(identifier, True, self.shared_note_result)
+                else:
+                    self.business_sync.modify(identifier, {'next_due': time.time() + 5 * 60}, self.shared_note_result)
+                return
             if action == "done":
                 self.note_service.complete(identifier)
                 self.pet.perform("CELEBRATE", 3)
@@ -722,6 +871,16 @@ class BuddyApp(QObject):
                 self.note_service.modify(identifier, pinned=False)
         except (OSError, ValueError) as exc:
             self.note_error(str(exc))
+
+    def shared_note_result(self, note, error):
+        if error:
+            self.note_error(error)
+        elif note:
+            self.pet.perform('CHECK_STOCK', 3)
+
+    def server_manages_note(self, identifier):
+        note = self.notes_store.find(identifier)
+        return bool(note and self.notepad.uses_business_server(note))
 
     def deliver_note(self, note, kind):
         if self.shutting_down:
@@ -760,6 +919,9 @@ class BuddyApp(QObject):
         if minutes not in (5, 15, 30, 60):
             return
         try:
+            if self.server_manages_note(identifier):
+                self.business_sync.modify(identifier, {'next_due': time.time() + minutes * 60}, self.shared_note_result)
+                return
             self.note_service.snooze(identifier, minutes)
             self.pet.say(f"Okay, I’ll remind you in {minutes} minutes.")
         except (OSError, ValueError) as exc:
@@ -831,6 +993,11 @@ class BuddyApp(QObject):
         self.launcher_window.raise_()
         self.launcher_window.activateWindow()
 
+    def show_work_chat(self):
+        self.work_chat.show()
+        self.work_chat.raise_()
+        self.work_chat.activateWindow()
+
     def popup_menu(self, position):
         self.pause_action.setText("Resume Buddy" if self.pet.paused else "Pause Buddy")
         self.menu.popup(position)
@@ -897,9 +1064,12 @@ class BuddyApp(QObject):
         self.team_window.hide()
         self.semantic_timer.stop()
         self.semantic.shutdown()
+        self.home.shutdown()
         self.overlay.stop_animation()
         self.notepad.shutdown()
         self.chat.shutdown()
+        self.business_sync.shutdown()
+        self.work_chat.shutdown()
         self.memory_learner.stop()
         self.memory_window.hide()
         self.pet.timer.stop()

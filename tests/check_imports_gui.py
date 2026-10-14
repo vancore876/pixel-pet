@@ -63,7 +63,7 @@ def begin():
         state['original_id'] = original['id']
         window.load_note(original['id'])
         window.body.setPlainText('Do not replace my unsaved writing draft.')
-        window.editor_tabs.setCurrentIndex(3)
+        window.show_section('import')
         window.show()
         window.import_pdf(str(root / 'clinic.pdf'))
         assert window.intake.busy and window.import_progress.isVisible()

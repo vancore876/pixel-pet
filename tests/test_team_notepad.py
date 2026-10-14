@@ -4,7 +4,7 @@ import json
 import tempfile
 import time
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 import zipfile
 
 from PySide6.QtCore import QObject, Signal, Qt
@@ -20,10 +20,12 @@ app = QApplication.instance() or QApplication([])
 
 class Team(QObject):
     changed = Signal()
+    status_changed = Signal(str)
 
     def __init__(self):
         super().__init__()
         self.enabled = True
+        self.status = 'Connecting to the shared work folder…'
         self.members = [{'id': 'alice', 'name': 'Alice'}, {'id': 'bob', 'name': 'Bob'}]
         self.read = []
         self.conflicts = set()
@@ -84,6 +86,43 @@ class TeamNotepadTests(unittest.TestCase):
         self.team.enabled = False
         self.team.changed.emit()
         self.assertTrue(self.window.team_controls.isHidden())
+
+    def test_sidebar_status_and_settings_follow_active_shared_folder(self):
+        folder_opened, server_opened = [], []
+        self.window.team_requested.connect(lambda: folder_opened.append(True))
+        self.window.connection_work_chat_requested.connect(lambda: server_opened.append(True))
+        self.window.set_team_service(self.team)
+        self.assertEqual(self.window.shared_status.text(), 'Shared folder · Connecting')
+        self.assertEqual(self.window.shared_login_button.text(), 'Folder settings')
+        self.window.shared_login_button.click()
+        self.assertEqual(folder_opened, [True])
+        self.assertEqual(server_opened, [])
+        self.team.status = 'Connected. Notes and employee reminders are synced.'
+        self.team.status_changed.emit(self.team.status)
+        self.assertEqual(self.window.shared_status.text(), 'Shared folder · Synced')
+        self.window.set_shared_status('Sign in to Work Chat to share business records.', False)
+        self.assertEqual(self.window.shared_status.text(), 'Shared folder · Synced')
+        self.team.status = 'Offline. Saved changes will sync when the shared folder returns.'
+        self.team.status_changed.emit(self.team.status)
+        self.assertEqual(self.window.shared_status.text(), 'Shared folder · Offline')
+        self.assertEqual(self.window.shared_status.toolTip(), self.team.status)
+        self.window.set_shared_status('Server connected.', True)
+        self.team.enabled = False
+        self.team.changed.emit()
+        self.assertEqual(self.window.shared_status.text(), 'Connected to your team')
+        self.assertEqual(self.window.shared_login_button.text(), 'Team chat')
+        self.window.shared_login_button.click()
+        self.assertEqual(server_opened, [True])
+        self.assertEqual(folder_opened, [True])
+
+    def test_sidebar_without_folder_keeps_existing_server_sign_in(self):
+        self.window.set_shared_status('Sign in to Work Chat to share business records.', False)
+        self.assertEqual(self.window.shared_status.text(), 'Sign in to share orders and checklists.')
+        self.assertEqual(self.window.shared_login_button.text(), 'Team sign in')
+        self.window.set_shared_status('Loading Famous Twins orders…', False)
+        self.assertEqual(self.window.shared_status.text(), 'Connecting to your team...')
+        self.window.set_shared_status('Office server unavailable.', False)
+        self.assertEqual(self.window.shared_status.text(), 'Team server unavailable')
 
     def test_assignment_saved_and_everyone_resets_it(self):
         self.window.set_team_service(self.team)
@@ -152,6 +191,114 @@ class TeamNotepadTests(unittest.TestCase):
         self.assertNotEqual(reminder_time(note), 'Timed reminders off')
         self.service.changed.emit(note['id'])
         self.assertEqual(self.window.due.dateTime().toSecsSinceEpoch(), due)
+
+    def test_folder_order_stays_local_with_server_controller_attached(self):
+        self.window.shared_business = Mock(_cache_ids=set())
+        self.window.set_team_service(self.team)
+        self.window.new_entry('order')
+        self.window.title.setText('Folder customer order')
+        self.window.order_notes.setPlainText('Confirm the customer before pickup.')
+        self.window.vehicle.setText('Toyota Corolla')
+        self.window.registration.setText('1234 AB')
+        self.window.vin.setText('MANUAL-VIN')
+        self.window.payment_received.setText('1250.50')
+        self.window.part_text.setText('Brake pads')
+        self.window.part_number.setText('BP-42')
+        self.window.part_supplier.setText('Parts Supplier')
+        self.window.part_price.setText('2300.25')
+        self.window.add_order_item()
+        self.window.team_everyone.setChecked(False)
+        self.select('bob')
+        self.assertTrue(self.window.save_note())
+        note = self.store.find(self.window.editing_id)
+        self.assertEqual(note['vehicle'], 'Toyota Corolla')
+        self.assertEqual(note['registration'], '1234 AB')
+        self.assertEqual(note['vin'], 'MANUAL-VIN')
+        self.assertEqual(note['payment_received_cents'], 125050)
+        self.assertEqual(note['checklist'][0]['part_number'], 'BP-42')
+        self.assertEqual(note['checklist'][0]['supplier'], 'Parts Supplier')
+        self.assertEqual(note['checklist'][0]['unit_price_cents'], 230025)
+        self.assertEqual(note['team_recipients'], ['bob'])
+        self.window.shared_business.save.assert_not_called()
+        self.window.toggle_done()
+        self.assertTrue(note['done'])
+        self.window.shared_business.complete.assert_not_called()
+        with patch('notepad_window.QMessageBox.question', return_value=QMessageBox.Yes):
+            self.window.delete_note()
+        self.assertIsNone(self.store.find(note['id']))
+        self.window.shared_business.delete.assert_not_called()
+
+    def test_api_cached_order_keeps_server_ownership_while_folder_sync_enabled(self):
+        note = self.service.save_note(None, 'Server order', 'Pickup at the counter.', 0,
+                                      details={'kind': 'order'})
+        controller = Mock(_cache_ids={note['id']})
+        controller.save.return_value = False
+        self.window.shared_business = controller
+        self.window.set_team_service(self.team)
+        self.window.load_note(note['id'])
+        self.assertTrue(self.window.uses_business_server(note))
+        self.assertTrue(self.window.team_controls.isHidden())
+        self.assertEqual(self.team.read, [], 'An API note received a folder-workspace receipt.')
+        self.window.team_everyone.setChecked(False)
+        for index in range(self.window.team_members.count()):
+            self.window.team_members.item(index).setCheckState(Qt.Unchecked)
+        self.window.order_notes.setPlainText('A server-owned draft.')
+        with patch.object(self.service, 'save_note') as local_save:
+            self.assertFalse(self.window.save_note())
+            local_save.assert_not_called()
+        controller.save.assert_called_once()
+        self.assertTrue(self.window.dirty)
+        self.assertEqual(note['body'], 'Pickup at the counter.')
+
+    def test_folder_scheduler_delivers_only_api_cached_orders_while_team_active(self):
+        pending = self.service.save_note(None, 'Pending folder note', 'Wait for folder sync.', 30)
+        api = self.service.save_note(None, 'API pickup', 'An order owned by the office API.', 30,
+                                     details={'kind': 'order'})
+        shared = self.service.save_note(None, 'Synced folder order', 'Employee receipts own this reminder.', 30,
+            details={'kind': 'order', 'team_id': 'shared-order', 'team_workspace_id': 'office'})
+        self.service.team_notifications_active = True
+        self.service.team_excluded_note_ids = lambda: {api['id']}
+        self.service.can_notify = lambda: True
+        delivered = []
+        self.service.notification.connect(lambda note, kind: delivered.append((note['id'], kind)))
+        self.service.tick()
+        self.assertEqual(delivered, [(api['id'], 'added')])
+        self.assertTrue(pending['unannounced'])
+        self.assertTrue(shared['unannounced'])
+        self.service.last_delivery = -float('inf')
+        self.service.tick()
+        self.assertEqual(len(delivered), 1, 'A pending folder note escaped to the local scheduler.')
+        self.service.team_notifications_active = False
+        self.service.last_delivery = -float('inf')
+        self.service.tick()
+        self.assertEqual(delivered[-1], (pending['id'], 'added'))
+        self.service.last_delivery = -float('inf')
+        self.service.tick()
+        self.assertEqual(len(delivered), 2, 'A synced folder note escaped after disconnect.')
+
+    def test_folder_ownership_survives_disconnect_and_server_default_is_preserved(self):
+        note = self.service.save_note(None, 'Folder order', 'Local cached copy.', 0,
+            details={'kind': 'order', 'team_id': 'folder-order', 'team_workspace_id': 'office'})
+        self.window.shared_business = Mock(_cache_ids=set())
+        self.window.load_note(note['id'])
+        self.assertFalse(self.window.uses_business_server(note))
+        normal = self.service.save_note(None, 'Server order', 'Normal office API workflow.', 0,
+                                       details={'kind': 'order'})
+        self.window.load_note(normal['id'])
+        self.assertTrue(self.window.uses_business_server(normal))
+
+    def test_schedule_agenda_includes_shared_schedule_and_customer_deadline(self):
+        due = time.time() + 3600
+        shared = self.service.save_note(None, 'Shared follow-up', 'Customer callback.', 0,
+            details={'team_id': 'follow-up', 'team_workspace_id': 'office', 'team_due_at': due})
+        order = self.service.save_note(None, 'Customer pickup', 'Prepare for pickup.', 0,
+            details={'kind': 'order', 'team_id': 'customer-order', 'team_workspace_id': 'office', 'order_due': due + 60})
+        self.window.refresh_dashboard()
+        identifiers = [self.window.agenda.item(index).data(Qt.UserRole)
+                       for index in range(self.window.agenda.count())]
+        self.assertEqual(identifiers, [shared['id'], order['id']])
+        self.service.complete(order['id'])
+        self.assertEqual(self.window.agenda.count(), 1)
 
     def test_order_deadline_display_does_not_claim_a_personal_reminder_is_enabled(self):
         note = self.service.save_note(None, 'Pickup deadline', 'Prepare the order.', 0,

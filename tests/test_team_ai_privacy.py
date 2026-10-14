@@ -5,7 +5,8 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from PySide6.QtCore import QObject, Signal
+from PySide6.QtCore import QObject, Signal, Qt
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
 from ai_brain import AutonomousBrain
@@ -107,6 +108,25 @@ class TeamAIPrivacyTests(unittest.TestCase):
     def submit(self, text="What is scheduled?"):
         self.chat.input.setText(text)
         self.chat.submit()
+
+    def test_enter_sends_one_message_without_opening_another_window(self):
+        navigation = []
+        for signal, label in ((self.chat.home_requested, "home"),
+                              (self.chat.notepad_requested, "notepad"),
+                              (self.chat.memory_requested, "memory")):
+            signal.connect(lambda label=label: navigation.append(label))
+        self.chat.tabs.setCurrentIndex(0)
+        self.chat.show()
+        self.chat.input.setText("Help me write a pickup message.")
+        self.chat.input.setFocus()
+        app.processEvents()
+        QTest.keyClick(self.chat.input, Qt.Key_Return)
+        app.processEvents()
+        self.assertEqual(len(self.client.calls), 1)
+        self.assertEqual(self.client.calls[0][-1]["content"], "Help me write a pickup message.")
+        self.assertEqual(navigation, [])
+        self.assertTrue(self.chat.isVisible())
+        self.assertEqual(self.chat.input.text(), "")
 
     def test_notebook_sync_keeps_cloud_opt_in_separate_from_personal_sharing(self):
         team = self.note()

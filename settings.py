@@ -41,6 +41,7 @@ class AppSettings:
                   "note_repeat_minutes": (0, 1440), "hide_seconds": (3, 120),
                   "ai_interval_seconds": (60, 1800), "team_reminder_minutes": (0, 1440)}
         options = {"theme": ("midnight", "forest", "plum"), "pet_palette": ("mint", "sky", "amber", "rose"),
+                   "interface_appearance": ("light", "dark", "system"),
                    "roaming_mode": ("bottom", "free"), "character": ("robot", "cat", "knight"),
                    "monitor_style": ("medieval", "classic"),
                    "pdf_engine": ("auto", "pdfium", "pypdf"),
@@ -60,7 +61,12 @@ class AppSettings:
                 cleaned = "".join(ch for ch in value if ch.isprintable()).strip()[:20] if isinstance(value, str) else ""
                 result[key] = cleaned or default
             elif key == "business_name":
-                result[key] = "".join(c for c in value if c.isprintable()).strip()[:80] if isinstance(value, str) else ""
+                cleaned = "".join(c for c in value if c.isprintable()).strip()[:80] if isinstance(value, str) else ""
+                result[key] = cleaned or default
+            elif key == "work_chat_server":
+                result[key] = value.strip()[:500] if isinstance(value, str) and all(c.isprintable() for c in value) else ""
+            elif key == "work_chat_username":
+                result[key] = value.strip()[:32] if isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9_.-]*", value.strip()) else ""
             elif key == "ai_model":
                 cleaned = value.strip() if isinstance(value, str) else ""
                 result[key] = cleaned if 0 < len(cleaned) <= 100 and all(c.isalnum() or c in '/-._' for c in cleaned) else default
@@ -105,7 +111,8 @@ def set_windows_startup(enabled: bool):
             else:
                 executable = Path(sys.executable)
                 windowed = executable.with_name("pythonw.exe")
-                arguments = [str(windowed if windowed.exists() else executable), str(ROOT / "main.py")]
+                entrypoint = "work_buddy.py" if os.environ.get("JEFFERY_WORK_PROFILE") == "1" else "main.py"
+                arguments = [str(windowed if windowed.exists() else executable), str(ROOT / entrypoint)]
             winreg.SetValueEx(key, "PixelSystemBuddy", 0, winreg.REG_SZ, subprocess.list2cmdline(arguments))
         else:
             try:

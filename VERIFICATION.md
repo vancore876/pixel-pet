@@ -1,5 +1,69 @@
 # Jeffery 6.0 verification
 
+The shared-folder employee update passed all 621 desktop unit tests and 12 Qt
+GUI workflows on Python 3.12/Linux offscreen Qt. Two independent local profiles
+exercised actual message popups and later reminders, Enter-to-send without
+another window, Shift+Enter newlines, recipient acknowledgements and snoozes,
+assigned customer deadlines, Done/Delivered cancellation, full document sync,
+offline restart/outbox recovery, conflicts, and copied-settings identity
+isolation. Work notes stay out of Groq by default, including during their first
+save and when earlier AI conversation history contains newly shared content.
+
+Three real Qt office-server integration checks passed after merging the newer
+Home/Famous Twins interface. API-owned business caches remain separate from
+folder sync, including edits, logout, reminders, and colliding identifiers.
+Mobile TypeScript validation and all 25 mobile tests passed. The Linux frozen
+application built and started successfully; two packaged profiles connected
+to a temporary shared directory, displayed actual employee-message popups,
+and saved independent presentation receipts without auto-acknowledgement.
+Native Windows SMB locking, actual workplace permissions, and Windows EXE
+deployment were not tested in this cloud. Earlier platform results follow.
+
+The interface renewal passed Home navigation and draft-preservation integration,
+light/dark/compact workspace and chat workflows, eight notebook-import tests,
+twelve scaled-document tests, four appearance/settings tests, five Home tests,
+and nine shared-client tests. The 23 Work Chat checks and 14 AI memory checks
+passed. Two real Qt accounts exercised direct/team messages, shared orders and
+checklists, stale-edit conflicts, deletion, and sign-out with personal writing
+preserved. Browser chat passed desktop and 390-pixel phone workflows. Screenshots
+were inspected for Home, orders, checklists, settings, utilities, both desktop
+chats, and browser chat. Desktop play integration and the scripted AI/advanced
+play workflow also passed after the shared style update. No office deployment
+or new packaged installer is claimed by
+these source-level checks. Existing Windows near-epoch and process-monitor
+timing test failures described below remain outside this interface change.
+The existing Windows desktop-helper cleanup warning also occurs after the
+advanced-play check exits successfully.
+
+The shared-office launcher passed six profile/startup checks, 13 core regression
+checks, and 23 Work Chat client checks. Two real app startup/shutdown smoke runs
+used separate local profiles and an unrelated working directory, preserving each
+user's saved chat name without changing the portable settings. Windows startup
+commands retain the work entrypoint, including quoted shared paths. The actual
+server batch started HTTP on port 8765 with a disposable database in its private
+local profile, outside the application folder, and was stopped afterward. The
+office's real Windows share, permissions, and concurrent workstation launches
+still need validation at work.
+
+The office HTTP Work Chat update passed 22 backend authentication/privacy/storage
+checks, 23 desktop client/transport checks, and disposable two-account Qt and
+browser workflows. Two real Qt clients connected through this development PC's
+private IPv4 socket without certificates, using bare-IP entry and receiving
+direct messages in both directions, including normal polling. Checks include
+unauthorized private-message reads, session expiration/revocation, password
+reset, request/rate limits, default HTTPS and opted-in LAN HTTP boundaries,
+literal message rendering, late conversation replies, and preserved drafts.
+The Windows server dependency setup batch completed successfully with both an
+existing environment and a fresh temporary folder, creating its environment
+and installing the pinned packages from scratch.
+Windows and browser layouts were visually inspected. The full desktop unit
+run completed 353 tests with 15 errors and 19 skips on this Windows/Python 3.14
+host. Errors concern existing Windows epoch-time conversion and locked SQLite
+files during test cleanup; representative failures reproduce on the pristine
+pre-chat commit. Office deployment, firewall/service setup, and real workplace
+load remain unverified. Certificate trust needs validation if optional HTTPS is
+enabled. See WORK_CHAT.md for setup.
+
 The one-billion-character notebook update passed 213 desktop unit tests, seven
 Qt GUI workflows, and the desktop startup smoke test. Checks cover streamed
 full text beyond the preview, Unicode character quotas, indexed recall after

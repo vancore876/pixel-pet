@@ -11,7 +11,14 @@ ANIMATION_STATES = ("IDLE", "WALK_LEFT", "WALK_RIGHT", "SLEEP", "EXCITED", "DRAG
                     "STRETCH", "SPIN", "FLIP", "ROLL", "SNEEZE", "SCARED", "LAUGH",
                     "SIT", "BALANCE", "TIPTOE", "RUN", "CLIMB", "SLIDE", "SKATE",
                     "BOUNCE", "MAGIC", "UMBRELLA", "JUGGLE", "GROOM", "SALUTE",
-                    "FACEPALM", "LEAN", "HANG", "SNEAK")
+                    "FACEPALM", "LEAN", "HANG", "SNEAK",
+                    "CHECK_STOCK", "SCAN_PART", "PACK_ORDER", "WRENCH", "HIGH_FIVE", "COFFEE")
+
+# These desktop poses are drawn locally, so every character can use them even
+# when a sprite folder only contains the original animation states.
+BUSINESS_ANIMATIONS = (("Check stock", "CHECK_STOCK"), ("Scan a part", "SCAN_PART"),
+                       ("Pack an order", "PACK_ORDER"), ("Turn a wrench", "WRENCH"),
+                       ("High five", "HIGH_FIVE"), ("Coffee break", "COFFEE"))
 
 
 def draw_character(p: QPainter, size: int, height=None, frame=0, state="IDLE", direction=1,
@@ -164,9 +171,9 @@ def draw_character(p: QPainter, size: int, height=None, frame=0, state="IDLE", d
         p.drawEllipse(QRectF(7.5, 29.9, 17, 1.4))
     p.save()
     jump = -round(abs(math.sin(frame * math.pi / 10)) * 6) if state in ("JUMP", "HOP", "BOUNCE", "FLIP") else 0
-    bob = -(frame % 2) if state in ("EXCITED", "DANCE", "CELEBRATE") else 0
+    bob = -(frame % 2) if state in ("EXCITED", "DANCE", "CELEBRATE") else -abs(math.sin(frame * 0.4)) * 0.8 if state == "HIGH_FIVE" else 0
     p.translate(4 + ((frame // 2) % 3 - 1 if state == "DANCE" else 0), 8 + jump + bob)
-    if state in ("IDLE", "LOOK", "THINK", "TALK", "PET", "READ", "SLEEP"):
+    if state in ("IDLE", "LOOK", "THINK", "TALK", "PET", "READ", "SLEEP", "CHECK_STOCK", "COFFEE"):
         # Fractional motion gives a quiet breathing rhythm without moving the feet.
         breath = math.sin(frame * math.tau / 24) * 0.012
         p.translate(12, 22)
@@ -302,7 +309,7 @@ def draw_character(p: QPainter, size: int, height=None, frame=0, state="IDLE", d
             for x in (10.5, 11.5, 12.5):
                 curve(x, 17.3, x, 17.9, x, 18.4, "#fff5d6", 0.35)
             oval(15, 17.8, 0.7, 0.7, "#a6ffef")
-        raised = state in ("WAVE", "DANCE", "CELEBRATE", "PARACHUTE", "DRAG", "HOP", "PEEK", "PUSH", "STRETCH", "JUGGLE", "MAGIC", "HANG", "SCARED", "SALUTE", "UMBRELLA")
+        raised = state in ("WAVE", "DANCE", "CELEBRATE", "PARACHUTE", "DRAG", "HOP", "PEEK", "PUSH", "STRETCH", "JUGGLE", "MAGIC", "HANG", "SCARED", "SALUTE", "UMBRELLA", "HIGH_FIVE", "WRENCH", "SCAN_PART", "CHECK_STOCK")
         for x, y in ((4, 12 if raised else 16 + (swing if moving else 0)),
                      (18, 9 + frame % 3 if raised else 16 - (swing if moving else 0))):
             panel(x, y, 2.2, 3.8, highlight, limbs, middle, 1)
@@ -339,5 +346,114 @@ def draw_character(p: QPainter, size: int, height=None, frame=0, state="IDLE", d
             block(7, 19, 10, 3, "#8bc8f5")
             block(6, 18, 12, 1, "#c5ebff")
             block(10, 16 - frame % 2, 4, 2, "#e4b478")
+        if state == "CHECK_STOCK":
+            # A stock sheet, with a marker moving between three counted rows.
+            panel(16.4, 8.5, 9, 13.5, "#ffd79a", "#bd8957", "#805837", 1, "#64482e")
+            panel(17.3, 9.8, 7.2, 11.1, "#fff9df", "#f4edce", "#dccca8", 0.4, "#d3be98")
+            panel(19.1, 8, 3.5, 2, "#d8e9ef", "#91adb8", "#526b7c", 0.5)
+            row = (frame // 4) % 3
+            for i in range(3):
+                y = 12.3 + i * 2.5
+                panel(18.2, y, 1.2, 1.2, "#ffffff", "#e9e4d0", "#c2b492", 0.1)
+                curve(20.2, y + 0.5, 21.4, y + 0.5, 23.5, y + 0.5, "#80928c", 0.45)
+                if i <= row:
+                    mark = QPainterPath(QPointF(18.1, y + 0.4))
+                    mark.lineTo(18.7, y + 1)
+                    mark.lineTo(19.7, y - 0.1)
+                    stroke(mark, "#258b75", 0.6)
+            curve(23.8, 12.7 + row * 2.5, 24.9, 12.1 + row * 2.5,
+                  26.1, 11.4 + row * 2.5, "#ffd36c", 1)
+        elif state == "SCAN_PART":
+            # The moving scan line is a visual prop, never an inventory lookup.
+            panel(12.8, 18.2, 12.4, 4.8, "#d8e8ef", "#9aafb9", "#4f6877", 0.9)
+            panel(18.2, 18.6, 6.2, 3.4, "#fffdf0", "#fff6d9", "#e3d4aa", 0.3)
+            for i, width in enumerate((0.4, 0.8, 0.4, 0.4, 0.8)):
+                curve(19 + i, 19.1, 19 + i, 20, 19 + i, 21.2, "#314953", width)
+            panel(20.2, 10.5, 4.4, 3.6, "#8ba9bc", "#47677c", "#203b50", 0.8)
+            panel(21.2, 13.1, 1.5, 3.3, "#b7cbd4", "#5c7c8e", "#2e4859", 0.5)
+            panel(21, 11.1, 2.8, 1.1, "#ffcfba", "#f28c80", "#d45964", 0.3)
+            scan_y = 18.8 + (math.sin(frame * 0.45) + 1) * 1.4
+            beam = QPainterPath(QPointF(22.4, 14))
+            beam.lineTo(18.7, scan_y)
+            beam.lineTo(24.1, scan_y)
+            beam.closeSubpath()
+            p.setPen(Qt.NoPen)
+            p.setBrush(tint("#ff716d", 38))
+            p.drawPath(beam)
+            curve(18.7, scan_y, 21.3, scan_y, 24.1, scan_y, "#ff8c82", 0.55)
+        elif state == "PACK_ORDER":
+            # Fold a flap, tape the parcel and check its label.
+            panel(6, 16.3, 13.5, 6.7, "#ecc18a", "#c8935d", "#8d603d", 0.8, "#765039")
+            flap = math.sin(frame * 0.4) * 1.2
+            fold = QPainterPath(QPointF(6, 16.6))
+            fold.lineTo(8.2, 14.6 + flap)
+            fold.lineTo(12.7, 15.3 + flap)
+            fold.lineTo(12.7, 17)
+            fold.closeSubpath()
+            p.setPen(QPen(QColor("#9a6941"), 0.4))
+            p.setBrush(QColor("#efc995"))
+            p.drawPath(fold)
+            panel(11.9, 16.2, 1.8, 6.6, "#fff2bd", "#e6cc8e", "#bf9f67", 0.1, "#b99661")
+            panel(14.7, 18.2, 3.7, 2.8, "#fffdf2", "#f3eedb", "#d8c8a7", 0.2)
+            mark = QPainterPath(QPointF(15.3, 19.5))
+            mark.lineTo(16.1, 20.2)
+            mark.lineTo(17.7, 18.8)
+            stroke(mark, "#2a8f74", 0.6)
+            panel(8.4 + math.sin(frame * 0.4) * 2.4, 14.9, 3.4, 1.7,
+                  highlight, limbs, middle, 0.7)
+        elif state == "WRENCH":
+            # An open-ended spanner rocks over a small hexagonal bolt.
+            bolt = QPainterPath()
+            for i in range(6):
+                angle = math.tau * i / 6
+                point = QPointF(21.1 + math.cos(angle) * 2.4, 18.5 + math.sin(angle) * 2.4)
+                bolt.moveTo(point) if i == 0 else bolt.lineTo(point)
+            bolt.closeSubpath()
+            p.setPen(QPen(QColor("#49677b"), 0.45))
+            p.setBrush(QColor("#9eb5c4"))
+            p.drawPath(bolt)
+            oval(20.2, 17.6, 1.8, 1.8, "#4a6579")
+            p.save()
+            p.translate(21.1, 18.5)
+            p.rotate(math.sin(frame * 0.35) * 27 - 25)
+            panel(-0.8, -8.4, 1.6, 8, "#f0fbff", "#a6bece", "#59778c", 0.6, "#526f84")
+            oval(-1.3, -8.7, 2.6, 2.6, "#c9dce8")
+            oval(-0.55, -8.05, 1.1, 1.1, "#496579")
+            head = QPainterPath(QPointF(-2.3, -1.3))
+            for point in ((-2.3, 1.3), (-0.8, 2.2), (0.8, 2.2), (2.3, 1.3),
+                          (2.3, -1.3), (0.9, 0.1), (-0.9, 0.1)):
+                head.lineTo(*point)
+            head.closeSubpath()
+            p.setPen(QPen(QColor("#526f84"), 0.4))
+            p.setBrush(QColor("#d8e7f1"))
+            p.drawPath(head)
+            p.restore()
+        elif state == "HIGH_FIVE":
+            lift = math.sin(frame * 0.45) * 1.2
+            curve(19.2, 12, 21.4, 10, 23.2, 7 + lift, limbs, 1.9)
+            panel(21.5, 4.9 + lift, 3.6, 4.1, "#fff1bd", "#ffd58a", "#c99455", 1)
+            for i in range(3):
+                curve(22 + i, 5.5 + lift, 22 + i, 3.6 + lift,
+                      22 + i, 3.1 + lift, "#ffdda0", 0.75)
+            curve(21.6, 6.6 + lift, 20.4, 5.8 + lift, 20.7, 5.2 + lift, "#ffdda0", 0.8)
+            for i in range(3):
+                angle = -math.pi * (0.2 + i * 0.3)
+                reach = 3.4 + (frame % 4) * 0.25
+                x, y = 23 + math.cos(angle) * reach, 5 + lift + math.sin(angle) * reach
+                curve(x, y, x + math.cos(angle) * 0.5, y + math.sin(angle) * 0.5,
+                      x + math.cos(angle), y + math.sin(angle), "#ffe8a1", 0.5)
+        elif state == "COFFEE":
+            sip = max(0, math.sin(frame * 0.3))
+            p.save()
+            p.translate(-sip * 1.6, -sip * 2.4)
+            curve(21.6, 15.3, 25, 14.6, 24.1, 18.7, "#dbc0a0", 0.9)
+            panel(17.5, 14.8, 5.3, 5.1, "#fff2d4", "#e9cba8", "#b88c6b", 0.9, "#956f58")
+            oval(17.8, 14.5, 4.7, 1.2, "#9a644b")
+            oval(18.1, 14.5, 4.1, 0.7, "#5b4037")
+            for i in range(2):
+                drift = math.sin(frame * 0.35 + i) * 0.55
+                curve(18.6 + i * 2, 13.8, 17.9 + i * 2 + drift, 12.4,
+                      18.8 + i * 2 + drift, 10.9, tint("#fff1d9", 150), 0.45)
+            p.restore()
     p.restore()
     p.restore()

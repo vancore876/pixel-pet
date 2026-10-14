@@ -5,6 +5,7 @@ import tempfile
 import time
 import unittest
 from unittest.mock import patch
+import uuid
 
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
@@ -31,6 +32,9 @@ class TeamServiceTests(unittest.TestCase):
     def tearDown(self):
         for store, notes, team, _ in self.clients:
             team.stop()
+        for store, notes, team, _ in self.clients:
+            team._thread.join(timeout=2)
+            self.assertFalse(team._thread.is_alive(), 'Synthetic work-sync worker did not finish')
             notes.stop()
             store.close()
         QTest.qWait(20)
@@ -181,6 +185,97 @@ class TeamServiceTests(unittest.TestCase):
         self.sync(at)
         self.assertEqual(before, len([e for e in self.wire() if e['kind'] == 'note']))
         self.assertEqual(ae + be, [])
+
+    def test_restart_offline_restores_identity_inbox_and_durable_message_queue(self):
+        a, an, at, _ = self.client('Alice')
+        b, bn, bt, _ = self.client('Bob')
+        bob = bt.identity()['employee_id']
+        at.send_message('Cached customer reminder', 'Remember this after restart.', [bob])
+        self.wait(lambda: len(at.entities('message')) == 1 and not at._busy)
+        self.sync(bt)
+        bt.stop()
+        bt._thread.join(timeout=2)
+        disconnected = self.root / 'disconnected-share'
+        self.share.rename(disconnected)
+        returning = TeamService(bn, bt.settings, bt.profile_path, can_notify=lambda: False)
+        errors = []
+        returning.error.connect(errors.append)
+        self.clients.append((b, bn, returning, errors))
+        returning.configure(str(self.share), 'Bob')
+        self.wait(lambda: bool(returning.identity()) and not returning._busy)
+        self.assertEqual(returning.identity()['employee_id'], bob)
+        self.assertEqual(returning.inbox()[0]['title'], 'Cached customer reminder')
+        self.assertIn('unavailable', returning.status.lower())
+        self.assertFalse(self.share.exists())
+        returning.send_message('Offline reply', 'Durably saved until the folder returns.', [at.identity()['employee_id']])
+        self.wait(lambda: len(returning.entities('message')) == 2 and not returning._busy)
+        with_cache = TeamStore(returning.profile_path)
+        try:
+            self.assertTrue(any(event['kind'] == 'message' for event in with_cache.pending_events()))
+        finally:
+            with_cache.close()
+        disconnected.rename(self.share)
+        self.sync(returning)
+        self.sync(at)
+        self.assertTrue(any(message['title'] == 'Offline reply' for message in at.inbox()))
+        self.assertEqual(errors, [])
+
+    def test_unremembered_folder_cannot_reuse_cached_workspace_or_queue_to_previous_team(self):
+        store, notes, team, errors = self.client('Alice')
+        original_identity = team.identity()
+        team.configure(str(self.root / 'unremembered-unavailable-folder'), 'Alice')
+        self.wait(lambda: bool(errors) and not team._busy)
+        self.assertFalse(team.enabled)
+        self.assertFalse(team.send_message('Should not send', 'A different folder was selected.', []))
+        cached = TeamStore(team.profile_path)
+        try:
+            self.assertEqual(cached.identity(), {key: value for key, value in original_identity.items() if key != 'id'})
+            self.assertEqual(cached.entities('message'), [])
+        finally:
+            cached.close()
+
+    def test_opening_unassigned_shared_note_does_not_create_a_receipt_or_error(self):
+        a, an, at, errors = self.client('Alice')
+        b, bn, bt, _ = self.client('Bob')
+        note = an.save_note(None, 'Bob customer reminder', 'Only Bob receives the alert.', 30,
+                            details={'team_recipients': [bt.identity()['employee_id']]})
+        self.sync(at)
+        self.assertFalse(at.mark_note_read(note['id']))
+        self.sync(at)
+        cache = TeamStore(at.profile_path)
+        try:
+            self.assertFalse(cache.receipt(at.identity()['employee_id'], 'note', note['id'])['read'])
+        finally:
+            cache.close()
+        self.assertEqual(errors, [])
+
+    def test_api_reserved_note_cannot_materialize_or_generate_a_shared_folder_popup(self):
+        store, notes, team, errors = self.client('Alice', notify=True)
+        reserved = uuid.uuid4().hex
+        team.exclude_note_ids = lambda: {reserved}
+        notices = []
+        team.notification.connect(notices.append)
+        transport = SharedWorkspace(self.share)
+        producer = TeamStore(self.root / 'synthetic-producer.sqlite')
+        try:
+            producer.configure(transport.workspace_id, 'Synthetic sender')
+            event = producer.put_note({'id': reserved, 'title': 'API-owned customer order',
+                                       'body': 'The API already owns its alert.', 'created': time.time(),
+                                       'repeat_minutes': 30, 'recipients': [team.identity()['employee_id']]})
+            transport.publish_event(event)
+        finally:
+            producer.close()
+        self.sync(team)
+        self.assertIsNone(store.find(reserved))
+        self.assertEqual(notices, [])
+        self.assertFalse(team.notification_active({'entity_id': reserved, 'entity_kind': 'note'}))
+        cached = TeamStore(team.profile_path)
+        try:
+            # The event is retained for integrity; only API-owned UI delivery is suppressed.
+            self.assertTrue(cached.due_notifications(team.identity()['employee_id'], time.time()))
+        finally:
+            cached.close()
+        self.assertEqual(errors, [])
 
     def test_notification_receipt_is_saved_only_after_actual_popup_and_reminder_is_targeted(self):
         a, an, at, _ = self.client('Alice')

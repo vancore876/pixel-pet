@@ -2,25 +2,31 @@
 from heapq import nlargest
 from PySide6.QtCore import Signal, Qt
 from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel, QComboBox,
-    QTableWidget, QTableWidgetItem, QHeaderView)
+    QTableWidget, QTableWidgetItem, QHeaderView, QPushButton)
 from system_stats import format_bytes
-from themes import palette
+from ui_style import apply_window_style
 
 
 class ProcessWindow(QDialog):
     monitoring_changed = Signal(bool)
+    home_requested = Signal()
 
     def __init__(self, settings):
         super().__init__()
         self.settings = settings
-        self.setWindowTitle("PixelSystem Buddy · Top Apps")
+        self.setWindowTitle("Jeffery · PC activity")
         self.resize(560, 420)
         self.rows = []
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 20, 20, 20)
         title = QLabel("What's using your PC?")
         title.setStyleSheet("font-size: 20px; font-weight: 600;")
-        layout.addWidget(title)
+        heading = QHBoxLayout()
+        heading.addWidget(title, 1)
+        home = QPushButton("Home")
+        home.clicked.connect(self.home_requested.emit)
+        heading.addWidget(home)
+        layout.addLayout(heading)
         bar = QHBoxLayout()
         bar.addWidget(QLabel("Show top 20 by"))
         self.order = QComboBox()
@@ -39,25 +45,16 @@ class ProcessWindow(QDialog):
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
         self.table.setFocusPolicy(Qt.NoFocus)
+        self.table.setAlternatingRowColors(True)
         layout.addWidget(self.table)
         self.status = QLabel("CPU readings are ready after the second sample.")
         self.status.setWordWrap(True)
+        self.status.setObjectName("subtitle")
         layout.addWidget(self.status)
         self.configure()
 
     def configure(self):
-        c = palette(self.settings)
-        self.setStyleSheet(f"""
-            QDialog, QTableWidget {{ background: {c['bg']}; color: {c['text']}; }}
-            QWidget {{ color: {c['text']}; font-family: 'Segoe UI'; font-size: 12px; }}
-            QHeaderView::section {{ background: {c['panel']}; padding: 7px; border: 0; }}
-            QTableWidget {{ gridline-color: {c['border']}; border: 1px solid {c['border']}; }}
-            QTableWidget::item:selected {{ background: {c['border']}; }}
-            QComboBox, QComboBox QAbstractItemView {{ background: {c['panel']}; padding: 5px; }}
-            QScrollBar:vertical {{ background: {c['panel']}; width: 10px; }}
-            QScrollBar::handle:vertical {{ background: {c['border']}; border-radius: 4px; min-height: 24px; }}
-            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
-        """)
+        apply_window_style(self, self.settings)
 
     def accept_rows(self, rows):
         self.rows = rows

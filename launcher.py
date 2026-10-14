@@ -11,7 +11,7 @@ from PySide6.QtCore import QObject, Signal, QProcess, QUrl, QStandardPaths
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel,
     QPushButton, QComboBox, QLineEdit, QFileDialog, QMessageBox, QScrollArea, QWidget)
-from notepad_window import notes_style
+from ui_style import apply_window_style, ui_palette
 
 
 class ShortcutStore:
@@ -140,6 +140,8 @@ class QuickLauncher(QObject):
 
 
 class LauncherWindow(QDialog):
+    home_requested = Signal()
+
     def __init__(self, launcher, settings):
         super().__init__()
         self.launcher, self.settings = launcher, settings
@@ -149,7 +151,12 @@ class LauncherWindow(QDialog):
         layout.setContentsMargins(20, 20, 20, 20)
         title = QLabel("Your tools, one click away")
         title.setStyleSheet("font-size: 20px; font-weight: 600;")
-        layout.addWidget(title)
+        heading = QHBoxLayout()
+        heading.addWidget(title, 1)
+        home = QPushButton("Home")
+        home.clicked.connect(self.home_requested.emit)
+        heading.addWidget(home)
+        layout.addLayout(heading)
         self.scroll = QScrollArea()
         self.scroll.viewport().setObjectName("launcherViewport")
         self.scroll.setWidgetResizable(True)
@@ -186,15 +193,15 @@ class LauncherWindow(QDialog):
         self.refresh()
 
     def configure(self):
-        from themes import palette
-        c = palette(self.settings)
-        self.setStyleSheet(notes_style(self.settings) + f"QScrollArea, QWidget#shortcutGrid, QWidget#launcherViewport {{ background: {c['bg']}; border: 0; }} QComboBox {{ background: {c['panel']}; padding: 6px; }}")
+        apply_window_style(self, self.settings)
+        c = ui_palette(self.settings)
+        self.setStyleSheet(self.styleSheet() + f"QScrollArea, QWidget#shortcutGrid, QWidget#launcherViewport {{ background: {c['bg']}; border: 0; }}")
 
     def refresh(self):
         panel = QWidget()
         panel.setObjectName("shortcutGrid")
         grid = QGridLayout(panel)
-        entries = [("Browser", "browser"), ("VS Code", "vscode"), ("Jeffery's Notepad", "notepad"), ("Documents", "documents")]
+        entries = [("Browser", "browser"), ("VS Code", "vscode"), ("Notebook", "notepad"), ("Documents", "documents")]
         entries.extend((s["label"], s["id"]) for s in self.launcher.store.shortcuts)
         for index, (label, key) in enumerate(entries):
             row = QHBoxLayout()
@@ -204,7 +211,9 @@ class LauncherWindow(QDialog):
             row.addWidget(button, 1)
             if index >= 4:
                 remove = QPushButton("×")
-                remove.setFixedWidth(30)
+                remove.setFixedWidth(40)
+                remove.setToolTip(f"Remove {label}")
+                remove.setAccessibleName(f"Remove {label}")
                 remove.clicked.connect(lambda checked=False, identifier=key: self.remove_shortcut(identifier))
                 row.addWidget(remove)
             grid.addLayout(row, index // 2, index % 2)

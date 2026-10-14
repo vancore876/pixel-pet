@@ -29,6 +29,7 @@ def _reminder_label(row):
 
 class TeamWindow(QDialog):
     preferences_requested = Signal(object)
+    home_requested = Signal()
     notebook_requested = Signal()
     source_requested = Signal(str)
     assignment_requested = Signal(str, object)
@@ -49,6 +50,9 @@ class TeamWindow(QDialog):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 20, 20, 20)
         header = QHBoxLayout()
+        self.home_button = QPushButton("Home")
+        self.home_button.clicked.connect(self.home_requested.emit)
+        header.addWidget(self.home_button)
         title = plain_label("Your team, together")
         title.setStyleSheet("font-size: 21px; font-weight: 600;")
         header.addWidget(title, 1)
@@ -71,6 +75,10 @@ class TeamWindow(QDialog):
         self.service.error.connect(self.show_error)
         self.service.status_changed.connect(self.status.setText)
         self.service.message_queued.connect(self.message_saved)
+        # Enter in a draft must not activate Home, setup, or another dialog
+        # action through Qt's implicit default-button handling.
+        for button in self.findChildren(QPushButton):
+            button.setAutoDefault(False)
         self.configure()
         self.refresh()
         if not _setting(settings, "team_sync_enabled", False):
@@ -371,6 +379,9 @@ class TeamWindow(QDialog):
             self.send_button.setEnabled(True)
 
     def send(self):
+        if not self.send_button.isEnabled() or (not self.source_note_id
+                and self._message_draft() in self.pending_messages):
+            return
         recipients = [] if self.everyone.isChecked() else [self.recipients.item(i).data(Qt.UserRole)
             for i in range(self.recipients.count()) if self.recipients.item(i).checkState() == Qt.Checked]
         if not self.everyone.isChecked() and not recipients:

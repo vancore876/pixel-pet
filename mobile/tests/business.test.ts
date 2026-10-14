@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { changeNote, complete, freshBook, localReminder, matchNote, mergeBackup, newNote, normalizeNote, saveNote, signature, summary } from '../src/model';
+import { changeNote, complete, freshBook, localReminder, matchNote, mergeBackup, newNote, normalizeNote, saveNote, signature, summary,
+  MAX_PAYMENT_CENTS, MAX_UNIT_PRICE_CENTS } from '../src/model';
 import { context, parseAdvice, reminderMessages, requestGroq } from '../src/groq';
 import { planReminders } from '../src/reminder-plan';
 
@@ -12,6 +13,56 @@ test('order fields and checked items survive a desktop-format backup', () => {
   assert.equal(imported.notes[0].checklist[1].done, true);
   assert.equal(imported.notes[0].source, '');
   assert.equal(imported.notes[0].checklist[0].quantity, 2);
+});
+test('rich Famous Twins fields and exact JMD cents survive mobile save and JSON roundtrip', () => {
+  const desktop = { ...order(), vehicle: '2015 Toyota Corolla 1.8', registration: '1234 AB', vin: 'MANUAL VIN',
+    priority: 'urgent', order_type: 'quote', currency: 'JMD', payment_received_cents: 10001,
+    checklist: [{ id: 'part', text: 'Brake pads', quantity: 2, done: false, part_number: 'PAD-123',
+      supplier: 'Parts Supplier', bin_location: 'A-12', stock_status: 'to_order', unit_price_cents: 12345 }] };
+  const imported = mergeBackup(freshBook(), { version: 2, notes: [desktop] });
+  const edited = saveNote(imported, { ...imported.notes[0], body: 'Pickup moved to Friday.' });
+  const exported = JSON.parse(JSON.stringify({ version: 2, notes: edited.notes }));
+  const restored = mergeBackup(freshBook(), exported).notes[0];
+  for (const key of ['vehicle', 'registration', 'vin', 'priority', 'order_type', 'currency', 'payment_received_cents'] as const) {
+    assert.equal(restored[key], desktop[key]);
+  }
+  assert.deepEqual(restored.checklist, desktop.checklist);
+  assert.equal(restored.body, 'Pickup moved to Friday.');
+  for (const query of ['corolla', '1234 ab', 'manual vin', 'pad-123', 'parts supplier', 'a-12', 'to_order', 'urgent', 'quote', 'jmd']) {
+    assert.ok(matchNote(restored, query), `Could not search rich field: ${query}`);
+  }
+});
+test('rich field edits invalidate advice and legacy optional defaults have a stable signature', () => {
+  const original = order(), normalized = normalizeNote(original)!;
+  assert.equal(signature(original), signature(normalized));
+  const changes = { vehicle: 'Other vehicle', registration: 'OTHER', vin: 'OTHER VIN', priority: 'urgent',
+    order_type: 'quote', payment_received_cents: 123 };
+  for (const [key, value] of Object.entries(changes)) {
+    assert.notEqual(signature(normalized), signature({ ...normalized, [key]: value }), key);
+  }
+  for (const [key, value] of Object.entries({ part_number: 'PAD-1', supplier: 'Supplier', bin_location: 'B-1',
+    stock_status: 'picked', unit_price_cents: 100 })) {
+    assert.notEqual(signature(normalized), signature({ ...normalized,
+      checklist: normalized.checklist.map((item, i) => i === 0 ? { ...item, [key]: value } : item) }), key);
+  }
+});
+test('invalid JMD amounts default to zero, oversized integers cap and business text is bounded', () => {
+  for (const amount of [-1, 1.5, NaN, Infinity, -Infinity, '100', true, false, null, {}]) {
+    const n = normalizeNote({ ...order(), payment_received_cents: amount,
+      checklist: [{ id: 'part', text: 'Part', quantity: 1, unit_price_cents: amount, stock_status: 'automatic' }],
+      currency: 'USD', order_type: 'invoice', priority: 'fast' })!;
+    assert.equal(n.payment_received_cents, 0);
+    assert.equal(n.checklist[0].unit_price_cents, 0);
+    assert.equal(n.checklist[0].stock_status, 'check_stock');
+    assert.equal(n.currency, 'JMD'); assert.equal(n.order_type, 'order'); assert.equal(n.priority, 'normal');
+  }
+  const n = normalizeNote({ ...order(), vehicle: 'v'.repeat(300), registration: 'r'.repeat(100), vin: 'n'.repeat(100),
+    payment_received_cents: 1e100, checklist: [{ text: 'Part', unit_price_cents: 1e100,
+      part_number: 'p'.repeat(200), supplier: 's'.repeat(200), bin_location: 'b'.repeat(200) }] })!;
+  assert.equal(n.payment_received_cents, MAX_PAYMENT_CENTS);
+  assert.equal(n.checklist[0].unit_price_cents, MAX_UNIT_PRICE_CENTS);
+  assert.deepEqual([n.vehicle!.length, n.registration!.length, n.vin!.length], [160, 32, 32]);
+  assert.deepEqual([n.checklist[0].part_number!.length, n.checklist[0].supplier!.length, n.checklist[0].bin_location!.length], [80, 100, 60]);
 });
 test('terminal order statuses stop reminders, restore reopens them', () => {
   const n = { ...order(), next_due: 2000 }, book = saveNote(freshBook(), n);

@@ -1,5 +1,7 @@
 # Local dependencies and generated output
 .venv/
+.server-venv/
+server-data/
 venv/
 __pycache__/
 *.py[cod]

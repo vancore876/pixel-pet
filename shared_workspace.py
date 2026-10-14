@@ -7,8 +7,10 @@ uses a non-replacing hard link so two writers never overwrite one another.
 from __future__ import annotations
 
 import codecs
+from collections import OrderedDict
 from collections.abc import Mapping
 from contextlib import contextmanager
+import copy
 import hashlib
 import json
 import math
@@ -24,6 +26,8 @@ MAX_EVENT_BYTES = 256 * 1024
 MAX_DOCUMENT_CHARACTERS = 1_000_000_000
 MAX_DOCUMENT_BYTES = 4 * MAX_DOCUMENT_CHARACTERS
 COPY_BYTES = 512 * 1024
+MAX_CACHED_EVENT_BYTES = 8 * 1024 * 1024
+MAX_CACHED_EVENTS = 512
 _EVENT_ID = re.compile(r"[0-9a-f]{32}\Z")
 _HASH = re.compile(r"[0-9a-f]{64}\Z")
 
@@ -194,27 +198,55 @@ def _copy_utf8(source, target=None, *, cancel=None):
 class SharedWorkspace:
     """Transport attached to an existing user-selected directory or UNC share."""
 
-    def __init__(self, selected_folder):
+    def __init__(self, selected_folder, cached_workspace_id=None):
         self.selected_folder = Path(selected_folder).expanduser().absolute()
+        self._event_cache = OrderedDict()
+        self._event_cache_bytes = 0
+        self._confirmed_events = {}
+        self._read_fingerprints = {}
+        if cached_workspace_id is not None:
+            if not isinstance(cached_workspace_id, str) or not _EVENT_ID.fullmatch(cached_workspace_id):
+                raise SharedWorkspaceError("Cached shared workspace identity is invalid.")
+            # A locally verified folder binding lets a returning employee use
+            # cached notes and reminders before the network share comes back.
+            # Never create a folder here. Every operation still verifies the
+            # actual manifest, so a replacement share cannot receive this data.
+            self._set_paths()
+            self.workspace_id = cached_workspace_id
+            return
         try:
             if not self.selected_folder.is_dir():
                 raise SharedWorkspaceError("Choose an existing shared folder.")
             # Resolve the explicitly selected root, then disallow redirected children.
             self.selected_folder = self.selected_folder.resolve(strict=True)
-            self.path = self.selected_folder / "JefferyWorkspace"
+            self._set_paths()
             self._ensure_directory(self.path)
-            self.events_path = self.path / "events"
-            self.blobs_path = self.path / "blobs"
-            self.notifications_path = self.path / "notifications"
             for child in (self.events_path, self.blobs_path, self.notifications_path):
                 self._ensure_directory(child)
-            self.manifest_path = self.path / "workspace.json"
             if not self.manifest_path.exists():
                 raw = _json_bytes({"version": 1, "workspace_id": uuid.uuid4().hex})
                 _publish_new(_stage_bytes(self.path, raw), self.manifest_path)
             self.workspace_id = self._read_manifest()
         except OSError as exc:
             raise SharedWorkspaceError("The selected shared folder is unavailable.") from exc
+
+    def _set_paths(self):
+        self.path = self.selected_folder / "JefferyWorkspace"
+        self.events_path = self.path / "events"
+        self.blobs_path = self.path / "blobs"
+        self.notifications_path = self.path / "notifications"
+        self.manifest_path = self.path / "workspace.json"
+
+    def _remember_event(self, filename, fingerprint, value, byte_count):
+        previous = self._event_cache.pop(filename, None)
+        if previous:
+            self._event_cache_bytes -= previous[2]
+        self._event_cache[filename] = (fingerprint, value, byte_count)
+        self._event_cache_bytes += byte_count
+        while (len(self._event_cache) > MAX_CACHED_EVENTS
+               or self._event_cache_bytes > MAX_CACHED_EVENT_BYTES):
+            _, removed = self._event_cache.popitem(last=False)
+            self._event_cache_bytes -= removed[2]
 
     @staticmethod
     def _ensure_directory(path):
@@ -274,8 +306,18 @@ class SharedWorkspace:
                 raise SharedWorkspaceError("A different shared event already uses this ID.")
         return created
 
-    def read_events(self):
-        """Return valid events in deterministic order and bounded diagnostic warnings."""
+    def confirm_event(self, event_id):
+        """Skip a read event only after its caller commits it to local storage."""
+        fingerprint = self._read_fingerprints.pop(event_id, None)
+        if fingerprint is not None:
+            self._confirmed_events[event_id] = fingerprint
+
+    def read_events(self, incremental=False):
+        """Read valid events; incremental mode skips confirmed unchanged files.
+
+        Reading alone never advances the cursor. Failed local commits therefore
+        retry on the next pass. The default retains full replay for other users.
+        """
         self._available()
         events, warnings = [], []
         warning_count = 0
@@ -288,11 +330,26 @@ class SharedWorkspace:
                 try:
                     if not _EVENT_ID.fullmatch(identifier):
                         raise SharedWorkspaceError("Invalid event filename.")
-                    value = _json_object(_read_small(path))
+                    details = path.lstat()
+                    fingerprint = (details.st_size, details.st_mtime_ns, details.st_ctime_ns,
+                                   details.st_ino, details.st_mode)
+                    if incremental and self._confirmed_events.get(identifier) == fingerprint:
+                        continue
+                    cached = self._event_cache.get(path.name)
+                    if cached and cached[0] == fingerprint:
+                        self._event_cache.move_to_end(path.name)
+                        events.append(copy.deepcopy(cached[1]))
+                        self._read_fingerprints[identifier] = fingerprint
+                        continue
+                    raw = _read_small(path)
+                    value = _json_object(raw)
                     if value.get("workspace_id") != self.workspace_id:
                         raise SharedWorkspaceError("Event workspace does not match.")
-                    events.append(self._validate_event(value, identifier))
-                except SharedWorkspaceError as exc:
+                    value = self._validate_event(value, identifier)
+                    self._remember_event(path.name, fingerprint, value, len(raw))
+                    events.append(copy.deepcopy(value))
+                    self._read_fingerprints[identifier] = fingerprint
+                except (OSError, SharedWorkspaceError) as exc:
                     warning_count += 1
                     if len(warnings) < 100:
                         warnings.append(f"Ignored shared event {path.name[:80]}: {exc}")

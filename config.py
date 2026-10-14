@@ -11,6 +11,7 @@ ROOT = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) el
 ASSETS = Path(getattr(sys, "_MEIPASS", ROOT)) / "assets" / "pet"
 DEFAULTS = {
     "always_on_top": True, "start_with_windows": False, "launch_minimized": False,
+    "interface_appearance": "light", "home_on_start": True,
     "show_cpu": True, "show_ram": True, "show_disk": True, "show_network": True,
     "show_gpu": True, "opacity": 88, "interval_ms": 1000, "compact": False,
     "graphs": True, "click_through": False, "overlay_visible": True,
@@ -29,12 +30,13 @@ DEFAULTS = {
     "mini_hud": True, "monitor_style": "medieval", "desktop_enabled": True, "desktop_random": True,
     "portal_toys": False,
     "ai_autonomy": True, "ai_interval_seconds": 120, "ai_share_desktop_names": False,
-    "business_mode": True, "business_name": "", "ai_greetings": True,
+    "business_mode": True, "business_name": "Famous Twins", "ai_greetings": True,
     "memory_enabled": True, "memory_ai": True, "ai_share_memory": True,
     "pdf_engine": "auto", "pdf_ocr": False, "ocr_language": "eng", "tesseract_path": "",
     "semantic_memory_enabled": False, "semantic_model_path": "",
     "team_sync_enabled": False, "team_shared_folder": "", "team_employee_id": "",
     "team_employee_name": "", "team_reminder_minutes": 30, "team_share_notes_with_ai": False,
+    "work_chat_server": "", "work_chat_username": "",
 }
 
 
@@ -59,7 +61,13 @@ def _network_location(path):
 
 
 def data_directory() -> Path:
-    """Prefer portable data beside the app; use per-user storage if read-only."""
+    """Keep shared-office profiles local; otherwise prefer portable app data."""
+    if os.environ.get("JEFFERY_WORK_PROFILE") == "1":
+        local_base = os.environ.get("LOCALAPPDATA") or Path.home() / ".local" / "share"
+        profile = Path(local_base) / "PixelSystemBuddy" / "work-data"
+        profile.mkdir(parents=True, exist_ok=True)
+        return profile
+
     preferred = ROOT / "data"
     # A shared application folder must not turn SQLite and personal identity
     # into shared writable files. The work workspace has its own sync format.

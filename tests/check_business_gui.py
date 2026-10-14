@@ -18,6 +18,8 @@ app = QApplication([]); app.setQuitOnLastWindowClosed(False)
 temp = tempfile.TemporaryDirectory(); root = Path(temp.name)
 preview = Path(os.environ.get('BUDDY_QA_DIR', root)); preview.mkdir(parents=True, exist_ok=True)
 buddy = BuddyApp(app, AppSettings(root / 'settings.json'), show_tray=False)
+# This scripted AI check isolates the local business editor; shared transport has its own integration checks.
+buddy.notepad.shared_business = None
 state, errors = {}, []
 
 class Credentials:
@@ -59,7 +61,7 @@ def begin():
         n = buddy.notes_store.find(state['id']); assert n['kind'] == 'order' and n['checklist'][1]['done']
         assert n['checklist'][0]['quantity'] == 2 and n['order_due'] > n['next_due']
         window.load_note(n['id']); assert window.body.toPlainText() == n['body'], 'Loading duplicated checklist details into the body'
-        window.editor_tabs.setCurrentIndex(2); window.grab().save(str(preview / 'business-orders.png'))
+        window.show_section('orders'); window.grab().save(str(preview / 'business-orders.png'))
         buddy.note_service.tick(); assert '2 × Brake pads' in buddy.note_popup.body.toPlainText()
         buddy.smart_notes.refresh(); QTimer.singleShot(400, guidance_ready)
     except Exception as exc: errors.append(repr(exc)); app.quit()

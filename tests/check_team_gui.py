@@ -19,7 +19,9 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from PySide6.QtCore import QDateTime, Qt, qInstallMessageHandler
-from PySide6.QtWidgets import QApplication
+from PySide6.QtGui import QTextCursor
+from PySide6.QtTest import QTest
+from PySide6.QtWidgets import QApplication, QDialog
 
 import config
 import shared_workspace
@@ -123,8 +125,10 @@ def run():
 
         def send(buddy, recipient, title, repeat=1):
             window = buddy.team_window
+            buddy.show_team()
             window.refresh()
             window.clear_source()
+            window.tabs.setCurrentWidget(window.compose_page)
             window.everyone.setChecked(recipient is None)
             if recipient is not None:
                 choose_recipient(window.recipients, recipient)
@@ -133,9 +137,20 @@ def run():
             window.repeat.setValue(repeat)
             window.scheduled.setChecked(False)
             previous = {row['id'] for row in buddy.team.entities('message')}
-            window.send_button.click()
+            window.body.moveCursor(QTextCursor.End)
+            window.body.setFocus()
+            visible_dialogs = {id(widget) for widget in app.topLevelWidgets()
+                               if isinstance(widget, QDialog) and widget.isVisible()}
+            QTest.keyClick(window.body, Qt.Key_Return, Qt.ShiftModifier)
+            assert window.body.toPlainText().endswith('\n'), 'Shift+Enter did not insert a newline'
+            assert {row['id'] for row in buddy.team.entities('message')} == previous, 'Shift+Enter sent the draft'
+            QTest.keyClick(window.body, Qt.Key_Return)
+            assert window.isVisible() and window.tabs.currentWidget() is window.compose_page
+            assert {id(widget) for widget in app.topLevelWidgets()
+                    if isinstance(widget, QDialog) and widget.isVisible()} == visible_dialogs, \
+                'Enter opened another dialog instead of sending the message'
             wait_for(lambda: any(row['id'] not in previous for row in buddy.team.entities('message')),
-                     'message committed through the composer')
+                     'message committed by Enter in the composer')
             return next(row['id'] for row in buddy.team.entities('message') if row['id'] not in previous)
 
         try:
@@ -353,7 +368,8 @@ def run():
                 widget.hide()
             app.processEvents()
 
-    print('PASS: two-PC team setup, employee-targeted initial popup and timed reminder, read/dismiss, '
+    print('PASS: two-PC team setup, Enter sends without another dialog, Shift+Enter adds a line, '
+          'employee-targeted initial popup and timed reminder, read/dismiss, '
           'snooze/acknowledgement, quiet/busy/refused-popup delivery, shared customer orders, '
           'Done/Delivered cancellation, full document sync, default work AI/privacy, copied-settings '
           'identity isolation, local SQLite and bounded worker shutdown. No live Groq or SMB was used.')

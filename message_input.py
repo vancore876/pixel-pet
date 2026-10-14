@@ -12,7 +12,7 @@ class MessageInput(QPlainTextEdit):
             # Consume Enter even when sending is unavailable. It must never
             # activate another QDialog button or open a secondary window.
             event.accept()
-            if not event.isAutoRepeat():
+            if not event.isAutoRepeat() and not self.isReadOnly():
                 self.send_requested.emit()
             return
         super().keyPressEvent(event)

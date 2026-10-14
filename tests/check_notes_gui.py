@@ -90,7 +90,7 @@ def advice_ready():
         assert buddy.note_popup.guidance.isVisible()
         assert buddy.note_popup.guidance.text.startswith('Prepare the customer order')
         window = buddy.notepad
-        window.editor_tabs.setCurrentIndex(1)
+        window.show_section('advice')
         assert window.use_time.isVisible()
         window.grab().save(str(preview / 'smart-notes.png'))
         window.apply_suggested_time()

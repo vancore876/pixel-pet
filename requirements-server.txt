@@ -1,0 +1,4 @@
+# Optional: install only on the central work chat server.
+fastapi==0.142.2
+uvicorn==0.53.0
+argon2-cffi==25.1.0

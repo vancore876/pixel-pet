@@ -6,31 +6,14 @@ from PySide6.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPlainTextEdit, QPushButton, QComboBox)
 
 from config import clamp_position
-from themes import palette
+from ui_style import ui_palette, window_style
 
 
 def team_style(settings):
-    colors = palette(settings)
-    return f"""
-        QDialog, QWidget#teamCard, QWidget#teamPage {{ background: {colors['bg']}; }}
-        QWidget {{ color: {colors['text']}; font-family: 'Segoe UI'; font-size: 12px; }}
-        QLabel#hint {{ color: {colors['muted']}; }}
-        QPlainTextEdit, QLineEdit, QListWidget, QSpinBox, QDateTimeEdit, QComboBox {{
-            background: {colors['panel']}; color: {colors['text']}; border: 1px solid {colors['border']};
-            border-radius: 6px; padding: 6px;
-        }}
-        QListWidget::item {{ padding: 8px; }}
-        QListWidget::item:selected {{ background: {colors['border']}; }}
-        QComboBox QAbstractItemView {{ background: {colors['panel']}; selection-background-color: {colors['border']}; }}
-        QPushButton {{ background: {colors['panel']}; border: 1px solid {colors['border']};
-            border-radius: 6px; padding: 7px 11px;
-        }}
-        QPushButton:hover {{ border-color: {colors['accent']}; }}
-        QPushButton#primary {{ border-color: {colors['accent']}; }}
-        QTabWidget::pane {{ border: 1px solid {colors['border']}; }}
-        QTabBar::tab {{ background: {colors['panel']}; color: {colors['muted']}; padding: 8px 12px; }}
-        QTabBar::tab:selected {{ color: {colors['accent']}; }}
-        QCheckBox {{ spacing: 6px; }}
+    colors = ui_palette(settings)
+    return window_style(settings) + f"""
+        QWidget#teamCard, QWidget#teamPage {{ background: {colors['bg']}; }}
+        QSplitter::handle {{ background: {colors['bg']}; width: 10px; }}
     """
 
 

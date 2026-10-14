@@ -31,12 +31,18 @@ class TeamAuditTests(unittest.TestCase):
         self.share = self.root / 'share'
         self.share.mkdir()
         self.clients = []
+        self.documents = []
 
     def tearDown(self):
         for store, notes, team in self.clients:
             team.stop()
+        for store, notes, team in self.clients:
+            team._thread.join(timeout=2)
+            self.assertFalse(team._thread.is_alive(), 'Synthetic work-sync worker did not finish')
             notes.stop()
             store.close()
+        for documents in self.documents:
+            documents.close(timeout=2)
         QTest.qWait(10)
         self.temp.cleanup()
 
@@ -108,6 +114,7 @@ class TeamAuditTests(unittest.TestCase):
         transport = SharedWorkspace(self.share)
         document_path = self.root / 'staged.sqlite'
         documents = DocumentStore(document_path)
+        self.documents.append(documents)
         restore_id = documents.begin_restore([], 0)
         employee, entity, occurrence = uuid.uuid4().hex, uuid.uuid4().hex, uuid.uuid4().hex
         token = transport.claim_notification(employee, entity, occurrence)
@@ -187,6 +194,7 @@ class TeamAuditTests(unittest.TestCase):
         team.stop()
         document_path = store.path.parent / 'documents.sqlite'
         documents = DocumentStore(document_path)
+        self.documents.append(documents)
         restore_id = documents.begin_restore([], 0)
         source = self.root / 'shared-text.txt'
         text = 'Synthetic customer reference 🐈\n' * 500

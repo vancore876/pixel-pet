@@ -3,13 +3,14 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel,
     QCheckBox, QLineEdit, QComboBox, QPushButton, QListWidget, QListWidgetItem,
     QMessageBox)
-from notepad_window import notes_style
+from ui_style import apply_window_style
 from memory import MAX_TEXT
 
 
 class MemoryWindow(QDialog):
     preferences_changed = Signal(object)
     changed = Signal()
+    home_requested = Signal()
 
     def __init__(self, store, settings):
         super().__init__()
@@ -20,19 +21,31 @@ class MemoryWindow(QDialog):
         layout = QVBoxLayout(self)
         title = QLabel("What Jeffery remembers")
         title.setStyleSheet("font-size: 21px; font-weight: 600;")
-        layout.addWidget(title)
+        heading = QHBoxLayout()
+        heading.addWidget(title, 1)
+        home = QPushButton("Home")
+        home.clicked.connect(self.home_requested.emit)
+        heading.addWidget(home)
+        layout.addLayout(heading)
         hint = QLabel("Preferences stay on this computer. Edit or forget them any time. Daily tasks stay connected to your notebook.")
         hint.setWordWrap(True)
+        hint.setObjectName("subtitle")
         layout.addWidget(hint)
         self.enabled = QCheckBox("Learn preferences from my messages and daily tasks")
         self.enabled.setChecked(settings["memory_enabled"])
-        self.enriched = QCheckBox("Let Groq help identify preferences in my messages")
+        self.enriched = QCheckBox("Use AI to identify preferences in my messages")
+        self.enriched.setToolTip("Messages are sent to Groq when this option is on.")
         self.enriched.setChecked(settings["memory_ai"])
-        self.sharing = QCheckBox("Use saved preferences in Groq replies")
+        self.sharing = QCheckBox("Use saved preferences in AI replies")
+        self.sharing.setToolTip("Relevant saved preferences are shared with Groq.")
         self.sharing.setChecked(settings["ai_share_memory"])
         for control in (self.enabled, self.enriched, self.sharing):
             layout.addWidget(control)
             control.toggled.connect(self.update_preferences)
+        preferences_hint = QLabel("Memory options save immediately. Choose a memory below to edit or forget it.")
+        preferences_hint.setObjectName("subtitle")
+        preferences_hint.setWordWrap(True)
+        layout.addWidget(preferences_hint)
         self.search = QLineEdit()
         self.search.setPlaceholderText("Search remembered preferences…")
         self.search.textChanged.connect(self.refresh)
@@ -51,21 +64,29 @@ class MemoryWindow(QDialog):
         row.addWidget(self.text, 1)
         layout.addLayout(row)
         actions = QHBoxLayout()
+        self.action_buttons = {}
         for label, method in (("Save memory", self.save_entry), ("New", self.new_entry),
                               ("Forget selected", self.forget_entry), ("Clear memory", self.clear_memory)):
             button = QPushButton(label)
             button.clicked.connect(method)
+            self.action_buttons[label] = button
+            if label == "Save memory":
+                button.setObjectName("primary")
+            elif label in ("Forget selected", "Clear memory"):
+                button.setObjectName("danger")
             actions.addWidget(button)
+        self.action_buttons["Forget selected"].setEnabled(False)
         layout.addLayout(actions)
         self.status = QLabel("")
         self.status.setTextFormat(Qt.PlainText)
         self.status.setWordWrap(True)
+        self.status.setObjectName("subtitle")
         layout.addWidget(self.status)
         self.configure()
         self.refresh()
 
     def configure(self):
-        self.setStyleSheet(notes_style(self.settings))
+        apply_window_style(self, self.settings)
         for control, key in ((self.enabled, "memory_enabled"), (self.enriched, "memory_ai"), (self.sharing, "ai_share_memory")):
             previous = control.blockSignals(True)
             control.setChecked(self.settings[key])
@@ -89,6 +110,8 @@ class MemoryWindow(QDialog):
         if selected and self.list.currentItem() is None:
             self.editing_id = None
             self.text.clear()
+        self.action_buttons["Forget selected"].setEnabled(bool(self.editing_id))
+        self.action_buttons["Clear memory"].setEnabled(bool(self.store.entries()))
         if getattr(self.store, "warning", ""):
             self.status.setText(self.store.warning)
 
@@ -101,11 +124,13 @@ class MemoryWindow(QDialog):
             self.editing_id = identifier
             self.kind.setCurrentIndex(max(0, self.kind.findData(entry['kind'])))
             self.text.setText(entry['text'])
+            self.action_buttons["Forget selected"].setEnabled(True)
 
     def new_entry(self):
         self.editing_id = None
         self.list.clearSelection()
         self.text.clear()
+        self.action_buttons["Forget selected"].setEnabled(False)
         self.text.setFocus()
 
     def save_entry(self):

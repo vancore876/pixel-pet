@@ -39,6 +39,11 @@ def _entity_id(note):
     return hashlib.sha256(str(value).encode('utf-8')).hexdigest()[:32]
 
 
+def _folder_key(folder):
+    # Do not resolve a network path: the remembered folder must work offline.
+    return os.path.normcase(os.path.abspath(os.path.expanduser(str(folder))))
+
+
 def shared_note_payload(note):
     """Copy only the shared content, assignment and intentional schedule.
 
@@ -70,7 +75,16 @@ class _Baseline:
                         'PRIMARY KEY(workspace,local_id))')
         if 'conflict_revision' not in {row[1] for row in self.db.execute('PRAGMA table_info(notes)')}:
             self.db.execute("ALTER TABLE notes ADD COLUMN conflict_revision TEXT NOT NULL DEFAULT ''")
+        self.db.execute('CREATE TABLE IF NOT EXISTS workspace_folders(folder TEXT PRIMARY KEY,workspace TEXT NOT NULL)')
         self.db.commit()
+
+    def workspace_for_folder(self, folder):
+        row = self.db.execute('SELECT workspace FROM workspace_folders WHERE folder=?', (_folder_key(folder),)).fetchone()
+        return row[0] if row else None
+
+    def bind_folder(self, folder, workspace):
+        with self.db:
+            self.db.execute('INSERT OR REPLACE INTO workspace_folders VALUES(?,?)', (_folder_key(folder), workspace))
 
     def rows(self, workspace):
         return {r[0]: {'local_id': r[0], 'entity_id': r[1], 'payload': json.loads(r[2]),
@@ -269,6 +283,10 @@ class TeamService(QObject):
     def mark_note_read(self, local_id):
         note = self.note_service.store.find(local_id)
         if note and note.get('team_id') and note.get('team_workspace_id') == self._identity.get('workspace_id'):
+            recipients = note.get('team_recipients', [])
+            if (local_id in set(self.exclude_note_ids())
+                    or recipients and '*' not in recipients and self._identity.get('employee_id') not in recipients):
+                return False
             return self.mark_read(note['team_id'], 'note')
         return False
 
@@ -292,6 +310,8 @@ class TeamService(QObject):
             return False
         kind = notification.get('entity_kind', 'message')
         entity_id = notification.get('entity_id', notification.get('id'))
+        if kind == 'note' and entity_id in {_entity_id({'id': identifier}) for identifier in self.exclude_note_ids()}:
+            return False
         entity = self._entities.get((kind, entity_id))
         if not entity or entity['deleted']:
             return False
@@ -382,7 +402,12 @@ class TeamService(QObject):
                             self.profile_path.parent.mkdir(parents=True, exist_ok=True)
                             state['store'] = TeamStore(self.profile_path)
                             state['ledger'] = _Baseline(self.profile_path.with_suffix('.bridge.sqlite'))
-                        transport = SharedWorkspace(arguments['folder'])
+                        cached_workspace = state['ledger'].workspace_for_folder(arguments['folder'])
+                        transport = SharedWorkspace(arguments['folder'], cached_workspace_id=cached_workspace)
+                        if not cached_workspace:
+                            # This binding is recorded only after a successful
+                            # first connection, never from portable settings.
+                            state['ledger'].bind_folder(arguments['folder'], transport.workspace_id)
                         identity = state['store'].configure(transport.workspace_id, arguments['name'], arguments.get('employee_id'))
                         current = state['store'].get_entity('profile', identity['employee_id'])
                         if not current or current['payload'].get('name') != identity['name']:
@@ -402,6 +427,8 @@ class TeamService(QObject):
                         continue
                     elif generation != state['generation'] or state['store'] is None:
                         continue
+                    elif state['transport'] is None:
+                        raise OSError('Connect to the shared work folder first.')
                     elif operation == 'sync':
                         if state['transport'] is None:
                             raise OSError('The shared folder is not connected. Check the folder and reconnect.')
@@ -409,10 +436,14 @@ class TeamService(QObject):
                     elif operation == 'baseline':
                         for row in arguments['rows']:
                             state['ledger'].save(state['store'].identity()['workspace_id'], **row)
-                        if arguments.get('abort_restore'):
-                            from documents import DocumentStore
-                            DocumentStore(arguments['document_path']).abort_restore(arguments['abort_restore'])
                         pending_result = state['pending_results'].get(arguments.get('_cleanup_key'))
+                        documents = arguments.get('_documents')
+                        if pending_result:
+                            documents = pending_result.pop('_documents', documents)
+                        if arguments.get('abort_restore'):
+                            self._abort_restore(arguments['document_path'], arguments['abort_restore'], documents)
+                        elif documents is not None:
+                            documents.close()
                         if pending_result:
                             pending_result['restore_id'] = None
                             if not pending_result.get('notification'):
@@ -452,7 +483,7 @@ class TeamService(QObject):
                     else:
                         continue
                     result.update(generation=generation, operation=operation)
-                    if result.get('restore_id') or result.get('notification'):
+                    if result.get('restore_id') or result.get('notification') or result.get('_documents'):
                         result['_cleanup_key'] = uuid.uuid4().hex
                         result['_transport'] = state['transport']
                         result['_employee_id'] = state['store'].identity()['employee_id']
@@ -476,14 +507,25 @@ class TeamService(QObject):
                 state['ledger'].close()
 
     @staticmethod
+    def _abort_restore(document_path, restore_id, documents=None):
+        from documents import DocumentStore
+        documents = documents if documents is not None else DocumentStore(document_path)
+        try:
+            documents.abort_restore(restore_id)
+        finally:
+            documents.close()
+
+    @staticmethod
     def _cleanup_result(result):
         """Discard uncommitted streamed text and claims from obsolete workers."""
+        documents = result.pop('_documents', None)
         if result.get('restore_id') and result.get('document_path'):
             try:
-                from documents import DocumentStore
-                DocumentStore(result['document_path']).abort_restore(result['restore_id'])
+                TeamService._abort_restore(result['document_path'], result['restore_id'], documents)
             except (OSError, ValueError):
                 pass  # Durable restore recovery retains the original text.
+        elif documents is not None:
+            documents.close()
         notification = result.get('notification')
         transport = result.get('_transport')
         if notification and notification.get('_claim_token') and transport:
@@ -518,13 +560,14 @@ class TeamService(QObject):
         warnings = []
         online = True
         try:
-            events, incoming_warnings = transport.read_events()
+            events, incoming_warnings = transport.read_events(incremental=True)
             warnings.extend(str(w) for w in incoming_warnings)
             for event in events:
                 if cancel.is_set():
                     raise RuntimeError('The previous work connection was canceled.')
                 try:
                     store.ingest_event(event)
+                    transport.confirm_event(event['event_id'])
                 except ValueError as exc:
                     warnings.append(str(exc))
         except (OSError, SharedWorkspaceError) as exc:
@@ -597,7 +640,7 @@ class TeamService(QObject):
                 warnings.append(f'Shared folder unavailable: {exc}. Changes remain queued locally.')
         result = self._cached(state)
         result['snapshot'] = snapshot
-        result['updates'], result['restore_id'] = self._prepare_updates(state, snapshot, cancel, warnings)
+        result['updates'], result['restore_id'], result['_documents'] = self._prepare_updates(state, snapshot, cancel, warnings)
         result['document_path'] = snapshot['document_path']
         result['status'] = ('Connected. Notes and employee reminders are synced.' if online else
                             'Offline. Saved changes will sync when the shared folder returns.')
@@ -606,7 +649,10 @@ class TeamService(QObject):
         result['warnings'] = warnings
         if notify and not cancel.is_set():
             employee = store.identity()['employee_id']
+            excluded_entities = {_entity_id({'id': identifier}) for identifier in snapshot.get('excluded_ids', [])}
             for candidate in store.due_notifications(employee, time.time()):
+                if candidate['entity_kind'] == 'note' and candidate['entity_id'] in excluded_entities:
+                    continue  # The work-server API handles this record's alerts.
                 claim_deadline = time.monotonic() + 30
                 token = None
                 if online:
@@ -626,7 +672,11 @@ class TeamService(QObject):
         from documents import DocumentStore
         with tempfile.TemporaryDirectory(prefix='team-document-', dir=self.profile_path.parent) as folder:
             target = Path(folder) / 'text.txt'
-            DocumentStore(document_path).export_document(note['document_id'], target, cancel=cancel)
+            documents = DocumentStore(document_path)
+            try:
+                documents.export_document(note['document_id'], target, cancel=cancel)
+            finally:
+                documents.close()
             uploaded = transport.upload_blob(target, expected_characters=note['body_characters'], cancel=cancel)
             if uploaded['sha256'] != note['body_sha256']:
                 raise ValueError('The full document checksum changed; its note was not shared.')
@@ -636,6 +686,8 @@ class TeamService(QObject):
         store = state['store']
         workspace = store.identity()['workspace_id']
         locals_by_id = {note['id']: note for note in snapshot['notes']}
+        excluded_ids = set(snapshot.get('excluded_ids', []))
+        excluded_entities = {_entity_id({'id': identifier}) for identifier in excluded_ids}
         linked = {}
         documents_by_hash = {}
         for note in snapshot['notes']:
@@ -646,6 +698,8 @@ class TeamService(QObject):
         rows = []
         active_conflicts = set()
         for entity in store.entities('note'):
+            if entity['id'] in excluded_entities:
+                continue  # The work-server API owns these cached records.
             variants = entity['variants']
             winner = max(variants, key=lambda variant: (variant['deleted'], variant['revision']))
             for variant in variants:
@@ -657,6 +711,8 @@ class TeamService(QObject):
                 original = linked.get((entity['id'], conflict_revision))
                 local_id = original['id'] if original else entity['id'] if not conflict_revision else hashlib.sha256(
                     f"{entity['id']}:{conflict_revision}".encode()).hexdigest()[:32]
+                if local_id in excluded_ids:
+                    continue
                 if original is None and not conflict_revision:
                     original = next((note for note in snapshot['notes'] if _entity_id(note) == entity['id']
                                      and not note.get('team_conflict_revision')
@@ -670,7 +726,8 @@ class TeamService(QObject):
         # consumed the old heads; their preserved event bodies remain durable.
         for note in snapshot['notes']:
             branch = note.get('team_conflict_revision')
-            if branch and note.get('team_workspace_id') == workspace and (note['team_id'], branch) not in active_conflicts:
+            if (note['id'] not in excluded_ids and _entity_id(note) not in excluded_entities and branch
+                    and note.get('team_workspace_id') == workspace and (note['team_id'], branch) not in active_conflicts):
                 rows.append({'local_id': note['id'], 'entity_id': note['team_id'], 'payload': shared_note_payload(note),
                              'revisions': note.get('team_revisions', []), 'deleted': True,
                              'conflict_revision': branch, 'original': note})
@@ -688,11 +745,12 @@ class TeamService(QObject):
                     if old and old.get('document_id'):
                         retired.add(old['document_id'])
         restore_id = None
+        documents = None
         if needs_import:
             documents = DocumentStore(snapshot['document_path'])
             other_inline = sum(len(note['body']) for note in snapshot['notes'] if not note.get('document_id'))
-            restore_id = documents.begin_restore(retired, other_inline)
             try:
+                restore_id = documents.begin_restore(retired, other_inline)
                 for row in needs_import:
                     descriptor = row['payload']['document']
                     with tempfile.TemporaryDirectory(prefix='team-download-', dir=self.profile_path.parent) as folder:
@@ -704,22 +762,32 @@ class TeamService(QObject):
                         raise ValueError('The shared document checksum or length does not match.')
                     row['document'] = prepared
             except Exception as exc:
-                documents.abort_restore(restore_id)
-                restore_id = None
+                try:
+                    if restore_id:
+                        documents.abort_restore(restore_id)
+                finally:
+                    restore_id = None
+                    documents.close()
+                    documents = None
                 warnings.append(f'Full shared documents could not be downloaded. Existing local text was preserved: {exc}')
                 rows = [row for row in rows if row not in needs_import]
-        return rows, restore_id
+        return rows, restore_id, documents
 
     def _receive(self, result):
         if self._stopped or result['generation'] != self._generation or not self.enabled:
-            if result.get('restore_id') or result.get('notification'):
+            if result.get('restore_id') or result.get('notification') or result.get('_documents'):
                 self._commands.put(('cleanup', result['generation'], result))
             return
         if result['operation'] in ('configure', 'sync'):
             self._busy = False
         if result.get('error'):
+            if result['operation'] == 'configure':
+                self.enabled = False
+                self.timer.stop()
+                self.note_service.team_notifications_active = False
             self._set_status(result['error'])
             self.error.emit(result['error'])
+            self.changed.emit()
             return
         self._identity = result.get('identity', self._identity)
         self._roster = result.get('roster', self._roster)
@@ -833,4 +901,5 @@ class TeamService(QObject):
             self._applying = False
             self._commands.put(('baseline', self._generation, {'rows': baseline_rows, 'document_path': result['document_path'],
                                 'abort_restore': result.get('restore_id') if not committed else None,
+                                '_documents': result.get('_documents'),
                                 '_cleanup_key': result.get('_cleanup_key')}))

@@ -47,6 +47,33 @@ class SharedWorkspaceTests(unittest.TestCase):
             identifiers = list(pool.map(lambda _: SharedWorkspace(another).workspace_id, range(24)))
         self.assertEqual(len(set(identifiers)), 1)
 
+    def test_cached_workspace_starts_offline_without_recreating_share_and_reconnects(self):
+        displaced = self.root / 'disconnected'
+        self.share.rename(displaced)
+        returning = SharedWorkspace(self.share, cached_workspace_id=self.workspace.workspace_id)
+        self.assertEqual(returning.workspace_id, self.workspace.workspace_id)
+        with self.assertRaises(SharedWorkspaceError):
+            returning.read_events()
+        self.assertFalse(self.share.exists())
+        displaced.rename(self.share)
+        self.assertEqual(returning.read_events(), ([], []))
+
+    def test_cached_workspace_never_initializes_a_different_or_missing_workspace(self):
+        missing = self.root / 'missing'
+        cached = SharedWorkspace(missing, cached_workspace_id=self.workspace.workspace_id)
+        with self.assertRaises(SharedWorkspaceError):
+            cached.publish_event(self.event())
+        self.assertFalse(missing.exists())
+        other = self.root / 'other'
+        other.mkdir()
+        actual = SharedWorkspace(other)
+        wrong = SharedWorkspace(other, cached_workspace_id=self.workspace.workspace_id)
+        with self.assertRaisesRegex(SharedWorkspaceError, 'different workspace'):
+            wrong.publish_event(self.event())
+        self.assertEqual(actual.read_events(), ([], []))
+        with self.assertRaises(SharedWorkspaceError):
+            SharedWorkspace(other, cached_workspace_id='invalid')
+
     def test_corrupt_and_replaced_manifest_are_rejected(self):
         self.workspace.manifest_path.write_text("{}", encoding="utf-8")
         with self.assertRaises(SharedWorkspaceError):
@@ -67,6 +94,53 @@ class SharedWorkspaceTests(unittest.TestCase):
         events, warnings = self.workspace.read_events()
         self.assertEqual(events, [{**event, "workspace_id": self.workspace.workspace_id}])
         self.assertEqual(warnings, [])
+
+    def test_unchanged_event_payloads_are_cached_but_changed_files_are_validated(self):
+        event = self.event()
+        self.workspace.publish_event(event)
+        with patch.object(shared_workspace, '_read_small', wraps=shared_workspace._read_small) as read:
+            first, _ = self.workspace.read_events()
+            first[0]['payload'] = 'Mutating a result must not change the cache.'
+            again, _ = self.workspace.read_events()
+            event_reads = [call for call in read.call_args_list if Path(call.args[0]).suffix == '.json'
+                           and Path(call.args[0]).name != 'workspace.json']
+        self.assertEqual(len(event_reads), 1)
+        self.assertEqual(again[0]['payload'], event['payload'])
+        event_path = self.workspace.events_path / (event['event_id'] + '.json')
+        event_path.write_text('malformed replacement', encoding='utf-8')
+        events, warnings = self.workspace.read_events()
+        self.assertEqual(events, [])
+        self.assertEqual(len(warnings), 1)
+
+    def test_event_cache_is_bounded_and_older_events_remain_replayable(self):
+        events = [self.event() for _ in range(4)]
+        for event in events:
+            self.workspace.publish_event(event)
+        with patch.object(shared_workspace, 'MAX_CACHED_EVENTS', 2):
+            first, _ = self.workspace.read_events()
+            second, _ = self.workspace.read_events()
+        self.assertEqual(first, second)
+        self.assertLessEqual(len(self.workspace._event_cache), 2)
+
+    def test_incremental_scan_advances_only_after_local_commit_confirmation(self):
+        first, second = self.event(), self.event()
+        self.workspace.publish_event(first)
+        self.workspace.publish_event(second)
+        events, _ = self.workspace.read_events(incremental=True)
+        self.assertEqual(len(events), 2)
+        self.workspace.confirm_event(first['event_id'])
+        retried, _ = self.workspace.read_events(incremental=True)
+        self.assertEqual([event['event_id'] for event in retried], [second['event_id']])
+        self.workspace.confirm_event(second['event_id'])
+        with patch.object(shared_workspace, '_read_small', wraps=shared_workspace._read_small) as read:
+            unchanged, _ = self.workspace.read_events(incremental=True)
+            event_reads = [call for call in read.call_args_list if Path(call.args[0]).name != 'workspace.json']
+        self.assertEqual(unchanged, [])
+        self.assertEqual(event_reads, [])
+        self.assertEqual(len(self.workspace.read_events()[0]), 2)
+        path = self.workspace.events_path / (first['event_id'] + '.json')
+        path.write_text('changed to corrupt text', encoding='utf-8')
+        self.assertEqual(len(self.workspace.read_events(incremental=True)[1]), 1)
 
     def test_concurrent_identical_event_publish_has_one_winner(self):
         event = self.event()

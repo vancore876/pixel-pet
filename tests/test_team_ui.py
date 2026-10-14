@@ -1,13 +1,18 @@
 """Employee messages stay explicit, recipient-specific, and safe during refresh."""
 from copy import deepcopy
+from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 from PySide6.QtCore import QObject, Signal, Qt, QCoreApplication, QEvent, QDateTime
+from PySide6.QtGui import QKeyEvent
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
 from config import DEFAULTS
 from team_popup import TeamPopup
 from team_window import TeamWindow
+from ui_style import ui_palette, window_style
 
 app = QApplication.instance() or QApplication([])
 
@@ -94,6 +99,108 @@ class TeamUiTests(unittest.TestCase):
         self.window.body.setPlainText("Call before pickup.")
         self.window.customer.setText("Acme")
         self.select_recipient("ben")
+
+    def focus_composer(self):
+        self.window.tabs.setCurrentWidget(self.window.compose_page)
+        self.window.show()
+        self.window.body.setFocus()
+        app.processEvents()
+
+    def test_enter_sends_once_in_same_window_and_pending_enter_keeps_draft(self):
+        self.draft()
+        home, preferences = [], []
+        self.window.home_requested.connect(lambda: home.append(True))
+        self.window.preferences_requested.connect(preferences.append)
+        self.window.home_button.setDefault(True)
+        self.focus_composer()
+        QTest.keyClick(self.window.body, Qt.Key_Return)
+        self.assertEqual(len(self.service.sent), 1)
+        self.assertTrue(self.window.isVisible())
+        self.assertIs(self.window.tabs.currentWidget(), self.window.compose_page)
+        self.assertEqual(self.window.body.toPlainText(), "Call before pickup.")
+        QTest.keyClick(self.window.body, Qt.Key_Return)
+        self.assertEqual(len(self.service.sent), 1)
+        self.assertEqual(home, [])
+        self.assertEqual(preferences, [])
+
+    def test_shift_enter_adds_line_without_sending(self):
+        self.draft()
+        self.focus_composer()
+        self.window.body.moveCursor(self.window.body.textCursor().MoveOperation.End)
+        QTest.keyClick(self.window.body, Qt.Key_Return, Qt.ShiftModifier)
+        QTest.keyClicks(self.window.body, "Bring the receipt.")
+        self.assertEqual(self.window.body.toPlainText(), "Call before pickup.\nBring the receipt.")
+        self.assertEqual(self.service.sent, [])
+
+    def test_keypad_and_ctrl_enter_send_once(self):
+        for key, modifier in ((Qt.Key_Enter, Qt.NoModifier),
+                (Qt.Key_Return, Qt.ControlModifier), (Qt.Key_Enter, Qt.ControlModifier)):
+            with self.subTest(key=key, modifier=modifier):
+                self.draft()
+                self.focus_composer()
+                previous = len(self.service.sent)
+                QTest.keyClick(self.window.body, key, modifier)
+                self.assertEqual(len(self.service.sent), previous + 1)
+                self.service.message_queued.emit(self.queued_event())
+                self.assertEqual(self.window.body.toPlainText(), "")
+
+    def test_invalid_or_rejected_enter_never_opens_another_window(self):
+        home, preferences = [], []
+        self.window.home_requested.connect(lambda: home.append(True))
+        self.window.preferences_requested.connect(preferences.append)
+        self.window.home_button.setDefault(True)
+        self.window.body.setPlainText("Draft without a subject or recipient")
+        self.focus_composer()
+        QTest.keyClick(self.window.body, Qt.Key_Return)
+        self.assertEqual(self.service.sent, [])
+        self.assertEqual(self.window.body.toPlainText(), "Draft without a subject or recipient")
+        self.draft()
+        self.service.accepted = False
+        QTest.keyClick(self.window.body, Qt.Key_Return)
+        self.assertEqual(self.service.sent, [])
+        self.assertEqual(self.window.body.toPlainText(), "Call before pickup.")
+        self.assertTrue(self.window.isVisible())
+        self.assertEqual(home, [])
+        self.assertEqual(preferences, [])
+
+    def test_auto_repeat_enter_and_read_only_source_do_not_send(self):
+        self.draft()
+        self.focus_composer()
+        for key in (Qt.Key_Return, Qt.Key_Enter):
+            repeat = QKeyEvent(QEvent.KeyPress, key, Qt.NoModifier, "\r", True, 2)
+            QApplication.sendEvent(self.window.body, repeat)
+            self.assertTrue(repeat.isAccepted())
+        self.assertEqual(self.service.sent, [])
+        assignments = []
+        self.window.assignment_requested.connect(lambda identifier, people: assignments.append(identifier))
+        self.window.compose_note({"id": "order-1", "title": "Acme order", "body": "Pack the items."})
+        QTest.keyClick(self.window.body, Qt.Key_Return)
+        self.assertEqual(assignments, [])
+        self.assertEqual(self.service.sent, [])
+
+    def test_team_windows_follow_workspace_appearance_and_home_is_explicit(self):
+        home = []
+        self.window.home_requested.connect(lambda: home.append(True))
+        self.window.home_button.click()
+        self.assertEqual(home, [True])
+        for appearance in ("light", "dark"):
+            self.settings["interface_appearance"] = appearance
+            self.settings["theme"] = "plum"
+            self.window.configure()
+            self.popup.configure()
+            style = window_style(self.settings)
+            for widget in (self.window, self.popup):
+                self.assertTrue(widget.styleSheet().startswith(style))
+                self.assertIn(ui_palette(self.settings)["bg"], widget.styleSheet())
+        self.settings["interface_appearance"] = "system"
+        for scheme, appearance in ((Qt.ColorScheme.Light, "light"), (Qt.ColorScheme.Dark, "dark")):
+            hints = SimpleNamespace(colorScheme=lambda: scheme)
+            with patch("ui_style.QApplication.instance", return_value=SimpleNamespace(styleHints=lambda: hints)):
+                self.window.configure()
+                self.popup.configure()
+                expected = ui_palette(dict(self.settings, interface_appearance=appearance))["bg"]
+                self.assertIn(expected, self.window.styleSheet())
+                self.assertIn(expected, self.popup.styleSheet())
 
     def test_connect_selects_existing_employee_and_emits_preferences_only(self):
         applied = []

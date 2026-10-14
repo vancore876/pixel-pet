@@ -1,7 +1,12 @@
 export type Kind = 'note' | 'list' | 'order';
 export const orderStatuses = ['new', 'preparing', 'ready', 'delivered', 'cancelled'] as const;
 export type OrderStatus = typeof orderStatuses[number];
-export type Item = { id: string; text: string; quantity: number; done: boolean };
+export const stockStatuses = ['check_stock', 'in_stock', 'to_order', 'ordered', 'picked'] as const;
+export type StockStatus = typeof stockStatuses[number];
+export const MAX_PAYMENT_CENTS = 100_000_000_000_000;
+export const MAX_UNIT_PRICE_CENTS = 1_000_000_000;
+export type Item = { id: string; text: string; quantity: number; done: boolean;
+  part_number?: string; supplier?: string; bin_location?: string; unit_price_cents?: number; stock_status?: StockStatus };
 export type Advice = { reminder: string; next_step: string; suggested_due: number | null; reason: string; signature: string };
 export type Note = {
   id: string; title: string; body: string; kind: Kind; created: number; updated: number; written: number;
@@ -9,6 +14,8 @@ export type Note = {
   unannounced: boolean; source: string; customer: string; contact: string; order_ref: string;
   order_status: OrderStatus; order_due: number | null; checklist: Item[]; reminder_history: string[]; advice?: Advice;
   team_shared?: true;
+  vehicle?: string; registration?: string; vin?: string; priority?: 'normal' | 'urgent';
+  order_type?: 'order' | 'quote'; currency?: 'JMD'; payment_received_cents?: number;
 };
 export type Preferences = { businessName: string; model: string; ai: boolean; notifications: boolean; character: 'robot' | 'cat' | 'knight'; quiet: boolean };
 export type Book = { version: 2; notes: Note[]; preferences: Preferences; phrases: string[] };
@@ -25,6 +32,18 @@ export function isSharedNote(raw: unknown): boolean {
     Array.isArray(n.team_revisions) && n.team_revisions.length ||
     Array.isArray(n.team_recipients) && n.team_recipients.length || n.team_due_at != null);
 }
+const cents = (v: unknown, maximum: number) => typeof v === 'number' && Number.isInteger(v) && v >= 0 ? Math.min(maximum, v) : 0;
+const partDetails = (row: { part_number?: unknown; supplier?: unknown; bin_location?: unknown; unit_price_cents?: unknown; stock_status?: unknown }) => ({
+  part_number: clean(row.part_number, 80), supplier: clean(row.supplier, 100), bin_location: clean(row.bin_location, 60),
+  unit_price_cents: cents(row.unit_price_cents, MAX_UNIT_PRICE_CENTS),
+  stock_status: stockStatuses.includes(row.stock_status as StockStatus) ? row.stock_status as StockStatus : 'check_stock' as StockStatus,
+});
+const orderDetails = (n: { vehicle?: unknown; registration?: unknown; vin?: unknown; priority?: unknown; order_type?: unknown; payment_received_cents?: unknown }) => ({
+  vehicle: clean(n.vehicle, 160), registration: clean(n.registration, 32), vin: clean(n.vin, 32),
+  priority: n.priority === 'urgent' ? 'urgent' as const : 'normal' as const,
+  order_type: n.order_type === 'quote' ? 'quote' as const : 'order' as const, currency: 'JMD' as const,
+  payment_received_cents: cents(n.payment_received_cents, MAX_PAYMENT_CENTS),
+});
 export function normalizeNote(raw: unknown): Note | null {
   if (!raw || typeof raw !== 'object') return null;
   const n = raw as Record<string, unknown>;
@@ -41,12 +60,12 @@ export function normalizeNote(raw: unknown): Note | null {
     const text = clean(rawItem.text, 200), itemId = clean(rawItem.id, 64) || identifier();
     if (!text || seen.has(itemId)) return [];
     seen.add(itemId);
-    return [{ id: itemId, text, quantity: integer(rawItem.quantity, 1, 9999, 1), done: rawItem.done === true }];
+    return [{ id: itemId, text, quantity: integer(rawItem.quantity, 1, 9999, 1), done: rawItem.done === true, ...partDetails(rawItem) }];
   });
   const note: Note = { id, title, body, kind, created, updated, written: stamp(n.written) || updated,
     next_due: done ? null : stamp(n.next_due), repeat_minutes: integer(n.repeat_minutes, 0, 1440, 30),
     done, pinned: false, pin_position: null, unannounced: false, source: '', customer: clean(n.customer, 100),
-    contact: clean(n.contact, 100), order_ref: clean(n.order_ref, 80), order_status: status, order_due: stamp(n.order_due), checklist,
+    contact: clean(n.contact, 100), order_ref: clean(n.order_ref, 80), order_status: status, order_due: stamp(n.order_due), checklist, ...orderDetails(n),
     reminder_history: (Array.isArray(n.reminder_history) ? n.reminder_history : []).slice(-5).map(v => clean(v, 280)).filter(Boolean) };
   // Desktop work backups must retain their privacy classification without
   // copying employee identities, workspace references or delivery metadata.
@@ -66,7 +85,8 @@ export function newNote(kind: Kind = 'note'): Note {
     kind, created: now, updated: now, written: now, repeat_minutes: 0 })!;
 }
 export function signature(n: Note): string {
-  return JSON.stringify([n.title, n.body, n.kind, n.customer, n.contact, n.order_ref, n.order_status, n.order_due, n.checklist]);
+  return JSON.stringify([n.title, n.body, n.kind, n.customer, n.contact, n.order_ref, n.order_status, n.order_due,
+    n.checklist.map(i => ({ id: i.id, text: i.text, quantity: i.quantity, done: i.done, ...partDetails(i) })), orderDetails(n)]);
 }
 export function saveNote(book: Book, draft: Note, now = Date.now() / 1000): Book {
   if (!draft.title.trim() && !draft.body.trim()) throw new Error('Give your note or order a title.');
@@ -93,7 +113,9 @@ export function summary(notes: Note[], now = Date.now() / 1000) {
     late: orders.filter(n => n.order_due && n.order_due < now).length, unchecked: active.reduce((a, n) => a + n.checklist.filter(i => !i.done).length, 0) };
 }
 export function matchNote(n: Note, query: string): boolean {
-  return [n.title, n.body, n.customer, n.contact, n.order_ref, ...n.checklist.map(i => i.text)].join(' ').toLowerCase().includes(query.trim().toLowerCase());
+  return [n.title, n.body, n.customer, n.contact, n.order_ref, n.order_status, n.vehicle, n.registration, n.vin,
+    n.priority, n.order_type, n.currency, ...n.checklist.flatMap(i => [i.text, i.part_number, i.supplier, i.bin_location, i.stock_status])]
+    .join(' ').toLowerCase().includes(query.trim().toLowerCase());
 }
 export function localReminder(n: Note, index = 0): string {
   const pending = n.checklist.filter(i => !i.done), label = n.order_ref || n.title;
