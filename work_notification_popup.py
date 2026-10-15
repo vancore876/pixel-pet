@@ -43,5 +43,8 @@ class WorkNotificationPopup(TeamPopup):
         self.identifier = ""
         self.notification = {}
         self.body.clear()
+        self.preview.clear()
         self.title.clear()
+        self.title.setToolTip("")
         self.details.clear()
+        self.details.setToolTip("")

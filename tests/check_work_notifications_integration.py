@@ -14,12 +14,109 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from tests import check_work_chat_integration as chat_check
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QApplication
 from work_notification_popup import WorkNotificationPopup
 from work_notifications import WorkNotificationService
 
 
 @unittest.skipUnless(chat_check.SERVER_PYTHON.is_file(), "Optional server interpreter is not installed")
 class RealNotificationTests(chat_check.RealServerTests):
+    def test_visible_other_conversation_popup_preserves_selection_and_draft(self):
+        alice = self.account("visible_alice")
+        bob = self.account("visible_bob")
+        carol = self.account("visible_carol")
+        self.choose(bob, alice.user["id"])
+        draft = "Keep Alice's unfinished reply\nwith its second line"
+        bob.composer.setPlainText(draft)
+        service = WorkNotificationService(bob.settings,
+            Path(self.temp.name) / "visible-notification-cursor.json",
+            can_notify=lambda: not popup.isVisible())
+        popup = WorkNotificationPopup(bob.settings)
+        self.addCleanup(service.stop)
+        self.addCleanup(popup.shutdown)
+        offered = []
+
+        def show(row):
+            self.assertTrue(popup.present(row))
+            offered.append(dict(row))
+            self.assertTrue(service.mark_notification_presented(row))
+
+        service.notification.connect(show)
+        service.session_changed(bob.api.base_url, bob.token, bob.user)
+        chat_check.wait_for(lambda: service._cursor is not None and not service._request_pending)
+        service.timer.stop()
+
+        def send(body, peer=None):
+            self.choose(carol, peer)
+            carol.composer.setPlainText(body)
+            carol.send_message()
+            chat_check.wait_for(lambda: not carol._send_pending)
+            self.assertEqual(carol.composer.toPlainText(), "", carol.status.text())
+
+        direct_body = "Carol's DM while Bob is replying to Alice: <b>literal</b>"
+        team_body = "Team update while Bob is replying to Alice"
+        send(direct_body, bob.user["id"])
+        bob.show()
+        bob.raise_()
+        bob.activateWindow()
+        bob.composer.setFocus()
+        chat_check.APP.processEvents()
+        active_window = QApplication.activeWindow()
+        self.assertIs(active_window, bob)
+        service.pump()
+        chat_check.wait_for(lambda: popup.isVisible())
+        self.assertEqual(popup.body.toPlainText(), direct_body)
+        self.assertEqual(bob._peer_id, alice.user["id"])
+        self.assertEqual(bob.composer.toPlainText(), draft)
+        self.assertNotIn(direct_body, bob.transcript.toPlainText())
+        self.assertTrue(popup.testAttribute(Qt.WA_ShowWithoutActivating))
+        self.assertTrue(popup.windowFlags() & Qt.WindowDoesNotAcceptFocus)
+        # Headless Qt backends activate every shown window, including a bare
+        # no-focus QWidget. Only a native backend can validate OS activation.
+        if QApplication.platformName() not in ("offscreen", "minimal"):
+            self.assertIs(QApplication.activeWindow(), active_window,
+                          "An incoming card must not activate itself or select a different chat")
+
+        send(team_body)
+        service.pump()
+        chat_check.wait_for(lambda: not service._request_pending)
+        self.assertEqual(len(offered), 1, "A visible card must keep the next incoming message queued")
+        self.assertEqual([row["body"] for row in service._queue], [team_body])
+        self.assertEqual(bob._peer_id, alice.user["id"])
+        self.assertEqual(bob.composer.toPlainText(), draft)
+
+        current_id = offered[0]["id"]
+        for expanded in (True, False):
+            popup.expand_button.click()
+            service.pump()
+            chat_check.wait_for(lambda: not service._request_pending)
+            self.assertEqual(popup.expanded, expanded)
+            self.assertEqual(popup.identifier, str(current_id))
+            self.assertEqual(len(offered), 1)
+            self.assertEqual([row["body"] for row in service._queue], [team_body])
+            self.assertIn(current_id, service._reminders)
+            self.assertEqual(bob._peer_id, alice.user["id"])
+            self.assertEqual(bob.composer.toPlainText(), draft)
+
+        popup.conversation_requested.connect(bob.open_notification)
+        popup.open_button.click()
+        chat_check.wait_for(lambda: bob._peer_id == carol.user["id"] and not bob._messages_pending)
+        self.assertEqual(bob._drafts[alice.user["id"]], draft)
+        self.assertIn(direct_body, bob.transcript.toPlainText())
+        self.assertIn(offered[0]["id"], service._reminders, "Open must keep the message's reminder")
+        self.choose(bob, alice.user["id"])
+        self.assertEqual(bob.composer.toPlainText(), draft)
+        service.pump()
+        chat_check.wait_for(lambda: popup.isVisible() and len(offered) == 2)
+        self.assertEqual(popup.body.toPlainText(), team_body)
+        self.assertEqual(bob._peer_id, alice.user["id"])
+        self.assertEqual(bob.composer.toPlainText(), draft)
+        popup.open_button.click()
+        chat_check.wait_for(lambda: bob._peer_id is None and not bob._messages_pending)
+        self.assertIn(team_body, bob.transcript.toPlainText())
+        self.assertEqual(bob._drafts[alice.user["id"]], draft)
+
     def test_background_all_conversations_quiet_reconnect_and_private_scope(self):
         alice = self.account("notify_alice")
         bob = self.account("notify_bob")
@@ -125,7 +222,8 @@ class RealNotificationTests(chat_check.RealServerTests):
 
 
 if __name__ == "__main__":
-    suite = unittest.TestSuite([RealNotificationTests(
-        "test_background_all_conversations_quiet_reconnect_and_private_scope")])
+    suite = unittest.TestSuite(RealNotificationTests(name) for name in (
+        "test_background_all_conversations_quiet_reconnect_and_private_scope",
+        "test_visible_other_conversation_popup_preserves_selection_and_draft"))
     result = unittest.TextTestRunner(verbosity=2).run(suite)
     raise SystemExit(not result.wasSuccessful())

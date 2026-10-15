@@ -3,7 +3,8 @@ from __future__ import annotations
 
 from PySide6.QtCore import Qt, QPointF
 from PySide6.QtGui import QColor, QIcon, QPainter, QPen, QPixmap
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import (QApplication, QDialog, QFileDialog, QInputDialog,
+                              QMainWindow, QMessageBox)
 
 LIGHT = {
     'bg': '#f3f6f8', 'panel': '#ffffff', 'border': '#d3dfe5',
@@ -102,7 +103,38 @@ def window_style(settings):
     """
 
 
+def apply_workspace_window_controls(widget):
+    """Give workspace windows the native minimize, maximize/restore and close buttons.
+
+    Keep dialog semantics and close guards intact. Menus, confirmations and the
+    frameless desktop widgets keep their own presentation. Reapplying a theme is
+    usually a no-op here: changing Qt window flags recreates a native window and
+    would otherwise hide an already open workspace.
+    """
+    if (not isinstance(widget, (QDialog, QMainWindow)) or not widget.isWindow()
+            or isinstance(widget, (QMessageBox, QFileDialog, QInputDialog))
+            or widget.windowModality() != Qt.NonModal):
+        return False
+    current = widget.windowFlags()
+    if (widget.windowType() not in (Qt.Window, Qt.Dialog)
+            or current & Qt.FramelessWindowHint):
+        return False
+    desired = ((current | Qt.WindowTitleHint | Qt.WindowSystemMenuHint
+                | Qt.WindowMinimizeButtonHint | Qt.WindowMaximizeButtonHint
+                | Qt.WindowCloseButtonHint) & ~Qt.WindowContextHelpButtonHint)
+    if desired == current:
+        return False
+    visible, state, position = widget.isVisible(), widget.windowState(), widget.pos()
+    widget.setWindowFlags(desired)
+    widget.move(position)
+    widget.setWindowState(state)
+    if visible:
+        widget.show()
+    return True
+
+
 def apply_window_style(widget, settings):
+    apply_workspace_window_controls(widget)
     widget.setStyleSheet(window_style(settings))
 
 

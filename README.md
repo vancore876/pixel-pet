@@ -15,6 +15,12 @@ details, manual sourcing, pickup summaries, and daily checklist templates.
 **Home numbers, office messages, accounts, and stock:** Home now shows larger,
 unclipped counts and balances. Signed-in desktop Work Chat displays personal
 and Team Room popups even when chat is hidden or another conversation is open.
+Message cards now start compact. Use the arrow to expand or collapse the full
+message, and **More** for reminder times and acknowledgement. Set the default in
+**Settings → Getting started → Message popup size**; the same size option applies
+to shared-folder team cards. Expanding a card keeps the next message queued.
+Jeffery's workspace windows have standard minimize, maximize/restore, and close
+buttons. Closing a workspace keeps Jeffery running and preserves unsent drafts.
 Configure popups and repeat reminders in Settings. **Forgot password?** uses a
 recovery code; **Account security** can generate a code or permanently delete
 your server account after password and username confirmation. Shared work
@@ -758,10 +764,14 @@ errors. No automatic installation at login occurs unless Start with Windows is e
 
 ## Validation and practical limits
 
-The desktop unit suite passed 725 tests with Python 3.12 and Linux offscreen Qt.
+The desktop unit suite passed 741 tests with Python 3.12 and Linux offscreen Qt.
 All 13 GUI workflows passed, including readable Home counts, background office
 message popups, account recovery and permanent deletion, shared Excel inventory,
-two-PC shared-folder messaging, and customer reminders. Three
+two-PC shared-folder messaging, and customer reminders. Compact/expanded cards
+and native window-control flags were checked across twelve workspaces, including
+draft preservation. Two real background-feed cases also passed with hidden chat
+and another conversation open. Native Windows focus and titlebar rendering still
+need checking on a work PC. Three
 real office-server integration checks passed, and the mobile suite passed 25
 tests plus TypeScript validation. A Linux packaged build and two packaged
 employee profiles also passed startup and actual popup delivery checks.

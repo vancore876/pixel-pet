@@ -30,6 +30,20 @@ current-session reminders; Settings controls popups and the repeat interval
 (0 disables repeats). Message bodies and passwords are not stored in the local
 notification file. Sign out clears its in-memory message content.
 
+Cards start small with the sender and a two-line message preview. Use the arrow
+to expand the full, scrollable message or collapse it again. **More** offers
+5-, 15-, 30-, and 60-minute snoozes and **Acknowledge**. Choose **Settings →
+Getting started → Message popup size** to start every card expanded instead.
+This setting also applies to shared-folder team notifications. An expanded card
+stays open while you read; another incoming card waits until you close or act on
+the current one. Expanding and collapsing do not acknowledge or snooze anything.
+
+Notifications also appear when you are in a different personal chat or the Team
+Room. They leave the selected conversation and its unsent reply in place; only
+**Open** switches to the message's conversation. Normal workspace windows,
+including Work Chat, have native minimize, maximize/restore, and close buttons.
+Closing a workspace keeps the background app running and retains its draft.
+
 New accounts receive a one-time recovery code. Save it privately. Existing
 signed-in users can open **Account security** and enter their current password
 to generate or replace a code. **Forgot password?** accepts the username,

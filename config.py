@@ -38,6 +38,7 @@ DEFAULTS = {
     "team_employee_name": "", "team_reminder_minutes": 30, "team_share_notes_with_ai": False,
     "work_chat_server": "", "work_chat_username": "",
     "work_chat_notifications": True, "work_chat_reminder_minutes": 30,
+    "notification_size": "compact",
     "inventory_shared": True, "inventory_share_with_ai": False,
 }
 

@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (QApplication, QDialog, QWidget, QVBoxLayout,
 
 from team_popup import team_style, plain_label
 from message_input import MessageInput
+from ui_style import apply_workspace_window_controls
 
 
 def _setting(settings, key, default=None):
@@ -243,6 +244,7 @@ class TeamWindow(QDialog):
         layout.addStretch(1)
 
     def configure(self):
+        apply_workspace_window_controls(self)
         self.setStyleSheet(team_style(self.settings))
 
     def browse_folder(self):

@@ -13,7 +13,7 @@ from characters import draw_character
 from desktop_bridge import DesktopBridge, checked_rect
 from config import clamp_position
 from notepad_window import notes_style
-from ui_style import ui_palette
+from ui_style import ui_palette, apply_workspace_window_controls
 
 
 def graphemes(text):
@@ -110,6 +110,7 @@ class TextPlayWindow(QDialog):
         self.configure()
 
     def configure(self):
+        apply_workspace_window_controls(self)
         c = ui_palette(self.desktop.settings)
         self.setStyleSheet(notes_style(self.desktop.settings) + f"\nQListWidget::item {{ background: {c['panel']}; border: 1px solid {c['border']}; border-radius: 5px; font-size: 18px; }}")
 
@@ -258,6 +259,7 @@ class DesktopPanel(QDialog):
         self.configure()
 
     def configure(self):
+        apply_workspace_window_controls(self)
         self.setStyleSheet(notes_style(self.desktop.settings))
 
     def refresh(self):

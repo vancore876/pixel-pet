@@ -8,7 +8,7 @@ from PySide6.QtNetwork import QNetworkAccessManager, QNetworkRequest
 from PySide6.QtWidgets import (QApplication, QDialog, QVBoxLayout, QHBoxLayout,
     QLabel, QPlainTextEdit, QLineEdit, QPushButton, QCheckBox, QComboBox, QTabWidget, QWidget, QFormLayout, QSpinBox, QScrollArea, QFrame, QMenu)
 from credentials import redact
-from ui_style import window_style, ui_palette
+from ui_style import window_style, ui_palette, apply_workspace_window_controls
 from sliding_text import SlideTranscript, plain_reply
 from content_intake import IntakeService, cleanup_result
 from ai_privacy import (filtered_ai_context, note_allowed_for_ai, notes_allowed_for_ai,
@@ -468,6 +468,7 @@ class ChatWindow(QDialog):
             self.tabs.setCurrentIndex(1)
 
     def configure(self):
+        apply_workspace_window_controls(self)
         current_permissions = sharing_permissions(self.settings, self.notes.isChecked())
         if permissions_withdrawn(self._sharing_permissions, current_permissions):
             self.cancel_request()

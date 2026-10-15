@@ -43,6 +43,7 @@ class AppSettings:
                   "work_chat_reminder_minutes": (0, 1440)}
         options = {"theme": ("midnight", "forest", "plum"), "pet_palette": ("mint", "sky", "amber", "rose"),
                    "interface_appearance": ("light", "dark", "system"),
+                   "notification_size": ("compact", "expanded"),
                    "roaming_mode": ("bottom", "free"), "character": ("robot", "cat", "knight"),
                    "monitor_style": ("medieval", "classic"),
                    "pdf_engine": ("auto", "pdfium", "pypdf"),

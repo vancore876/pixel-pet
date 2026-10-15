@@ -1,5 +1,24 @@
 # Jeffery 6.0 verification
 
+The compact notification and window controls update passed all 741 desktop
+unit tests and all 13 Qt GUI workflows on Python 3.12/Linux offscreen Qt.
+Two real HTTP background-notification cases and the full BuddyApp office workflow
+exercised personal and Team Room messages while chat was hidden or another
+conversation was selected. Expand/collapse kept queued messages, reminders,
+conversation selection, and unsent drafts intact. Cards default to a bounded
+350 × 196 logical-pixel preview with explicit expansion and a More menu;
+small monitors, long Unicode text, live settings, and logout clearing passed.
+Both compact and expanded layouts were visually inspected.
+
+Twelve workspace windows passed minimize, maximize/restore, close, and theme
+change checks with the background app and drafts preserved. Dialog semantics
+and close guards remain intact. Passive cards set both Qt's show-without-activation
+attribute and no-focus window flag. Headless Qt synthesizes activation even for
+no-focus windows, so OS focus preservation is asserted only on native backends;
+Windows titlebar rendering and native focus behavior still need checking on a
+work PC. Source startup smoke passed. No new native Windows installer was built
+in this cloud for this update.
+
 The Home/chat/accounts/inventory update passed all 725 desktop tests and all 13
 Qt GUI workflows on Python 3.12/Linux offscreen Qt. Actual disposable HTTP
 accounts exercised personal and team popups while chat was hidden or another

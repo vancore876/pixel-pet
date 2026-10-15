@@ -64,6 +64,15 @@ class InterfaceSettingsTests(unittest.TestCase):
         self.assertEqual(self.window.controls["pet_name"].text(), "Jeffery")
         self.assertEqual(self.window.controls["interface_appearance"].currentData(), "light")
 
+    def test_notification_size_defaults_compact_and_applies_only_after_save(self):
+        self.assertEqual(self.settings['notification_size'], 'compact')
+        control = self.window.controls['notification_size']
+        control.setCurrentIndex(control.findData('expanded'))
+        self.assertEqual(self.settings['notification_size'], 'compact')
+        self.settings.save({'notification_size': control.currentData()})
+        self.assertEqual(AppSettings(self.settings.path)['notification_size'], 'expanded')
+        self.assertEqual(AppSettings.validate({'notification_size': 'oversized'})['notification_size'], 'compact')
+
     def test_apply_emits_current_draft_without_discarding_other_controls(self):
         self.settings.save({"theme": "forest"})
         self.window.refresh()

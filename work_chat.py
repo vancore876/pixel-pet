@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (QCheckBox, QDialog, QFormLayout, QFrame, QHBoxLay
     QApplication, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMessageBox, QPlainTextEdit, QPushButton,
     QScrollArea, QSplitter, QStackedWidget, QVBoxLayout, QWidget)
 
-from ui_style import window_style, ui_palette
+from ui_style import window_style, ui_palette, apply_workspace_window_controls
 from message_input import MessageInput
 
 MAX_RESPONSE_BYTES = 1024 * 1024
@@ -685,6 +685,7 @@ class WorkChatWindow(QDialog):
         self._update_send()
 
     def configure(self, settings=None):
+        apply_workspace_window_controls(self)
         if settings is not None:
             self.settings = settings
         colors = ui_palette(self.settings)

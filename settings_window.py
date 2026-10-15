@@ -68,6 +68,8 @@ class SettingsWindow(QDialog):
         self.checkbox(general, "low_power", "Low power mode: slower sampling and animation")
         self.checkbox(general, "quiet_mode", "Quiet mode: hide speech and focus notifications")
         self.checkbox(general, "work_chat_notifications", "Show personal and team Work Chat popups")
+        self.combobox(general, "notification_size", "Message popup size", [
+            ("Compact · expand when needed", "compact"), ("Expanded message", "expanded")])
         self.spinbox(general, "work_chat_reminder_minutes", "Work Chat reminder interval (0 disables repeats)", 0, 1440, " min")
         startup = self.checkbox(general, "start_with_windows", "Start with Windows")
         startup.setEnabled(sys.platform == "win32")

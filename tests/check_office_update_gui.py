@@ -1,4 +1,4 @@
-"""Exercise Home, background office popups, account recovery and stock import.
+"""Exercise Home, cross-conversation office popups, account recovery and stock import.
 
 Run with the desktop interpreter and optional requirements-server.txt installed.
 Every account, database, workbook and notification watermark is disposable.
@@ -154,6 +154,8 @@ class OfficeUpdateIntegrationTests(unittest.TestCase):
 
         self.check_home_metrics()
         self.check_background_messages(alice, bob, charlie)
+        self.check_visible_cross_conversation_messages(alice, bob, charlie)
+        self.check_notification_gates(alice, bob)
         self.check_inventory_import(bob)
         self.check_recovery_and_forget(alice, alice_code)
         self.check_permanent_account_deletion(bob, charlie)
@@ -202,6 +204,7 @@ class OfficeUpdateIntegrationTests(unittest.TestCase):
         self.choose(bob, charlie_id)
         bob.composer.setPlainText("Keep this unrelated private draft")
         bob.hide()
+
         self.assertFalse(bob.poll_timer.isActive(), "Background delivery must be independent of visible chat polling")
 
         direct = self.send(alice, "Personal popup while Bob is hidden", bob_id)
@@ -257,6 +260,109 @@ class OfficeUpdateIntegrationTests(unittest.TestCase):
         self.assertNotIn(unrelated, service._reminders)
         bob.hide()
 
+    def check_visible_cross_conversation_messages(self, alice, bob, charlie):
+        """BuddyApp must notify for other chats without moving the current one."""
+        buddy, popup, service = self.buddy, self.buddy.work_popup, self.buddy.work_notifications
+        alice_id, bob_id, charlie_id = alice.user["id"], bob.user["id"], charlie.user["id"]
+        self.choose(bob, alice_id)
+        draft = "Alice's unfinished reply stays here\nincluding this second line"
+        bob.composer.setPlainText(draft)
+        service.timer.stop()
+        try:
+            direct_body = "Charlie personal popup while Bob reads Alice: <b>keep literal</b>"
+            direct = self.send(charlie, direct_body, bob_id)
+            bob.raise_()
+            bob.activateWindow()
+            bob.composer.setFocus()
+            APP.processEvents()
+            active_window = APP.activeWindow()
+            self.assertIs(active_window, bob)
+            service.pump()
+            self.receive(direct, direct_body)
+            self.assertEqual(bob._peer_id, alice_id)
+            self.assertEqual(bob.composer.toPlainText(), draft)
+            self.assertNotIn(direct_body, bob.transcript.toPlainText())
+            self.assertTrue(popup.testAttribute(Qt.WA_ShowWithoutActivating))
+            self.assertTrue(popup.windowFlags() & Qt.WindowDoesNotAcceptFocus)
+            # Offscreen/minimal Qt synthesize activation for all shown windows.
+            if APP.platformName() not in ("offscreen", "minimal"):
+                self.assertIs(APP.activeWindow(), active_window, "A popup must not steal the employee's active window")
+            self.assertTrue(bob.isVisible())
+
+            # The incoming Team card waits behind this personal card, then
+            # appears when it is dismissed without selecting another chat.
+            team_body = "Team popup while Bob keeps working in Alice's conversation"
+            team = self.send(charlie, team_body)
+            service.pump()
+            wait_for(lambda: not service._request_pending, "queued cross-conversation Team message")
+            self.assertEqual(popup.identifier, str(direct))
+            self.assertTrue(any(row["id"] == team for row in service._queue))
+            self.assertEqual(bob._peer_id, alice_id)
+            self.assertEqual(bob.composer.toPlainText(), draft)
+            popup.dismiss_button.click()
+            self.assertIn(direct, service._reminders, "Dismissing the card must leave its reminder enabled")
+            service.pump()
+            self.receive(team, team_body)
+            self.assertEqual(popup.heading.text(), "New team room message")
+            self.assertEqual(bob._peer_id, alice_id)
+            self.assertEqual(bob.composer.toPlainText(), draft)
+            popup.open_button.click()
+            wait_for(lambda: bob._peer_id is None and not bob._messages_pending, "explicit Team card Open")
+            self.assertEqual(bob._drafts[alice_id], draft)
+            self.assertIn(team, bob._messages)
+            self.choose(bob, alice_id)
+            self.assertEqual(bob.composer.toPlainText(), draft)
+
+            # The stored DM target must still work when that message returns
+            # as a reminder, independently of the currently selected chat.
+            service._reminders[direct]["_due"] = time.time() - 1
+            service.pump()
+            self.receive(direct, direct_body, reminder=True)
+            self.assertEqual(bob._peer_id, alice_id)
+            popup.open_button.click()
+            wait_for(lambda: bob._peer_id == charlie_id and not bob._messages_pending,
+                     "explicit other-employee DM Open")
+            self.assertEqual(bob._drafts[alice_id], draft)
+            self.assertIn(direct_body, bob.transcript.toPlainText())
+            service.acknowledge(direct)
+            service.acknowledge(team)
+        finally:
+            service.timer.start()
+
+    def check_notification_gates(self, alice, bob):
+        """Visible notebook/shared-folder cards must defer Work Chat delivery."""
+        buddy, popup, service = self.buddy, self.buddy.work_popup, self.buddy.work_notifications
+        service.timer.stop()
+        try:
+            for blocking_popup, source in ((buddy.note_popup, "notebook"), (buddy.team_popup, "shared-folder team")):
+                blocking_popup.show()
+                APP.processEvents()
+                self.assertFalse(buddy.work_can_notify())
+                self.assertFalse(buddy.team_can_notify())
+                self.assertFalse(buddy.note_service.can_notify())
+                body = "Work Chat waits for the " + source + " card"
+                identifier = self.send(alice, body, bob.user["id"])
+                service.pump()
+                wait_for(lambda: not service._request_pending and any(row["id"] == identifier for row in service._queue),
+                         source + " card retaining the Work Chat queue")
+                self.assertFalse(popup.isVisible())
+                self.assertNotIn(identifier, service._reminders, "Deferred cards must not count as presented")
+                blocking_popup.hide()
+                service.pump()
+                self.receive(identifier, body)
+                self.assertFalse(buddy.work_can_notify())
+                self.assertFalse(buddy.team_can_notify())
+                self.assertFalse(buddy.note_service.can_notify())
+                popup.acknowledge_button.click()
+                self.assertNotIn(identifier, service._reminders)
+            self.assertTrue(buddy.work_can_notify())
+            self.assertTrue(buddy.team_can_notify())
+            self.assertTrue(buddy.note_service.can_notify())
+        finally:
+            buddy.note_popup.hide()
+            buddy.team_popup.hide()
+            popup.dismiss()
+            service.timer.start()
     def check_inventory_import(self, bob):
         # InventoryWindow is deliberately exercised through the coordinator so
         # missing navigation/session wiring cannot pass as an isolated UI test.
