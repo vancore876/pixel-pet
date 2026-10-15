@@ -12,6 +12,23 @@ the tiny HUD, and real Windows desktop play remain available.
 See **[Famous Twins workflow](FAMOUS_TWINS.md)** for quotes, customer/vehicle
 details, manual sourcing, pickup summaries, and daily checklist templates.
 
+**Home numbers, office messages, accounts, and stock:** Home now shows larger,
+unclipped counts and balances. Signed-in desktop Work Chat displays personal
+and Team Room popups even when chat is hidden or another conversation is open.
+Configure popups and repeat reminders in Settings. **Forgot password?** uses a
+recovery code; **Account security** can generate a code or permanently delete
+your server account after password and username confirmation. Shared work
+history remains with anonymized authors. **Forget saved login** only removes
+this PC's remembered login and remains a separate option.
+
+Open **Home → Inventory → Import stock list** to review an Excel/CSV parts list
+before saving it to the shared office inventory. Search quantities and shelf/bin
+locations, set restock levels, and optionally let Ask Jeffery use matching saved
+stock records. See **[Inventory setup](INVENTORY.md)**. Update and restart the
+office server and desktop clients together; keep the existing server database.
+
+![Home with readable order counts and balances](preview/home-readable-metrics.png)
+
 ## Start or update
 
 1. Extract the complete ZIP.
@@ -741,9 +758,10 @@ errors. No automatic installation at login occurs unless Start with Windows is e
 
 ## Validation and practical limits
 
-The desktop unit suite passed 621 tests with Python 3.12 and Linux offscreen Qt.
-All 12 GUI workflows passed, including two-PC shared-folder messaging, Enter
-to send, shared customer reminders, and the renewed Home interface. Three
+The desktop unit suite passed 725 tests with Python 3.12 and Linux offscreen Qt.
+All 13 GUI workflows passed, including readable Home counts, background office
+message popups, account recovery and permanent deletion, shared Excel inventory,
+two-PC shared-folder messaging, and customer reminders. Three
 real office-server integration checks passed, and the mobile suite passed 25
 tests plus TypeScript validation. A Linux packaged build and two packaged
 employee profiles also passed startup and actual popup delivery checks.

@@ -102,7 +102,9 @@ class RequestGuard:
         if content_length < 0:
             await reject(400, "Invalid request length.")
             return
-        is_business = scope.get('path', '') == '/api/business' or scope.get('path', '').startswith('/api/business/')
+        path = scope.get('path', '')
+        is_business = any(path == prefix or path.startswith(prefix + '/')
+                          for prefix in ('/api/business', '/api/inventory'))
         request_limit = MAX_BUSINESS_REQUEST_BYTES if is_business else MAX_REQUEST_BYTES
         limit_detail = '256 KiB' if is_business else '16 KiB'
         if content_length > request_limit:
@@ -181,6 +183,24 @@ class NewMessage(BaseModel):
     recipient_id: Annotated[StrictInt, Field(ge=1, le=2**63 - 1)] | None = None
 
 
+class RecoveryCodeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    password: Annotated[StrictStr, Field(min_length=12, max_length=128)]
+
+
+class PasswordRecovery(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    username: Annotated[StrictStr, Field(min_length=3, max_length=32, pattern=r"^[A-Za-z0-9_.-]+$")]
+    recovery_code: Annotated[StrictStr, Field(min_length=43, max_length=43, pattern=r"^[A-Za-z0-9_-]+$")]
+    new_password: Annotated[StrictStr, Field(min_length=12, max_length=128)]
+
+
+class AccountDeletion(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    password: Annotated[StrictStr, Field(min_length=12, max_length=128)]
+    confirm_username: Annotated[StrictStr, Field(min_length=3, max_length=32, pattern=r"^[A-Za-z0-9_.-]+$")]
+
+
 class BusinessRevision(BaseModel):
     model_config = ConfigDict(extra='forbid', strict=True)
     expected_revision: Annotated[StrictInt, Field(ge=0, lt=2**63 - 1)]
@@ -226,6 +246,9 @@ def create_app(database_path="server-data/work-chat.sqlite", *, clock=time.time,
             raise StoreError(401, "Sign in to use work chat.")
         return store.authenticate(parts[1])
 
+    from .inventory import register_inventory_routes
+    register_inventory_routes(app, store, signed_in)
+
     @app.get("/api/health")
     def health():
         return {"status": "ok", "service": "Jeffery Work Chat", "version": 1}
@@ -241,6 +264,25 @@ def create_app(database_path="server-data/work-chat.sqlite", *, clock=time.time,
         auth_limiter.check(request.client.host)
         account_limiter.check(credentials.username.casefold())
         return store.login(credentials.username, credentials.password)
+
+    @app.post("/api/auth/recovery-code")
+    def recovery_code(payload: RecoveryCodeRequest, request: Request, user=Depends(signed_in)):
+        auth_limiter.check(request.client.host)
+        account_limiter.check(user["username"].casefold())
+        return store.generate_recovery_code(user["id"], payload.password)
+
+    @app.post("/api/auth/reset-password")
+    def recover_password(payload: PasswordRecovery, request: Request):
+        auth_limiter.check(request.client.host)
+        account_limiter.check(payload.username.casefold())
+        return store.recover_password(payload.username, payload.recovery_code, payload.new_password)
+
+    @app.delete("/api/account", status_code=204)
+    def delete_account(payload: AccountDeletion, request: Request, user=Depends(signed_in)):
+        auth_limiter.check(request.client.host)
+        account_limiter.check(user["username"].casefold())
+        store.delete_account(user["id"], payload.password, payload.confirm_username)
+        return Response(status_code=204)
 
     @app.post("/api/auth/logout", status_code=204)
     def logout(request: Request, user=Depends(signed_in)):
@@ -260,6 +302,11 @@ def create_app(database_path="server-data/work-chat.sqlite", *, clock=time.time,
                  after_id: Annotated[int | None, Query(ge=0, le=2**63 - 1)] = None,
                  limit: Annotated[int, Query(ge=1, le=100)] = 100, user=Depends(signed_in)):
         return store.messages(user["id"], peer_id=peer_id, after_id=after_id, limit=limit)
+
+    @app.get("/api/notifications")
+    def notifications(after_id: Annotated[int | None, Query(ge=0, le=2**63 - 1)] = None,
+                      limit: Annotated[int, Query(ge=1, le=100)] = 100, user=Depends(signed_in)):
+        return store.notifications(user["id"], after_id=after_id, limit=limit)
 
     @app.post("/api/messages", status_code=201)
     def send_message(message: NewMessage, user=Depends(signed_in)):

@@ -49,6 +49,10 @@ from ai_privacy import is_shared_note, notes_allowed_for_ai
 from team_service import TeamService
 from team_window import TeamWindow
 from team_popup import TeamPopup
+from work_notifications import WorkNotificationService
+from work_notification_popup import WorkNotificationPopup
+from inventory_service import InventoryService
+from inventory_window import InventoryWindow
 
 
 class BuddyApp(QObject):
@@ -70,9 +74,11 @@ class BuddyApp(QObject):
         self.notes_store = NoteStore(self.settings.path.parent / "notes.json")
         self.memory_store = MemoryStore(self.settings.path.parent / "memory.json")
         self.note_service = NoteService(self.notes_store, self.settings,
-            lambda: not self.note_popup.isVisible() and not self.team_popup.isVisible(), self)
+            lambda: not self.note_popup.isVisible() and not self.team_popup.isVisible()
+                and not self.work_popup.isVisible(), self)
         self.note_popup = ReminderPopup(self.settings)
         self.team_popup = TeamPopup(self.settings)
+        self.work_popup = WorkNotificationPopup(self.settings)
         self.notepad = NotepadWindow(self.note_service, self.settings)
         self.team = TeamService(self.note_service, self.settings, parent=self,
             can_notify=self.team_can_notify)
@@ -108,6 +114,22 @@ class BuddyApp(QObject):
         self.chat = ChatWindow(self.settings, self.credentials, self.ai_context, self.run_buddy_action,
             memory_store=self.memory_store, notebook_store=self.notes_store, semantic_service=self.semantic)
         self.work_chat = WorkChatWindow(self.settings)
+        self.work_notifications = WorkNotificationService(self.settings, can_notify=self.work_can_notify, parent=self)
+        self.work_chat.session_changed.connect(self.work_notifications.session_changed)
+        self.work_notifications.notification.connect(self.deliver_work_notification)
+        self.work_notifications.error.connect(lambda message: self.work_chat.status.setText('Desktop notifications: ' + message))
+        self.work_notifications.session_ended.connect(self.work_popup.clear_session)
+        self.work_notifications.auth_expired.connect(self.work_chat._clear_session)
+        self.work_popup.conversation_requested.connect(self.open_work_notification)
+        self.work_popup.acknowledge_requested.connect(lambda identifier: self.work_notifications.acknowledge(int(identifier)))
+        self.work_popup.snooze_requested.connect(lambda identifier, minutes: self.work_notifications.snooze(int(identifier), minutes))
+        self.inventory = InventoryService(self.settings, self.settings.path.parent / 'inventory.sqlite', self)
+        self.inventory_window = InventoryWindow(self.inventory, self.settings)
+        self.inventory_window.home_requested.connect(self.show_home)
+        self.inventory_window.preference_requested.connect(self.apply_inventory_preference)
+        self.work_chat.session_changed.connect(self.inventory_session_changed)
+        self.inventory.auth_expired.connect(self.work_chat._clear_session)
+        self.chat.inventory_context = self.inventory_context
         self.home = HomeWindow(self.note_service, self.settings, self.focus)
         self.home.navigate_requested.connect(self.home_navigate)
         self.home.create_requested.connect(self.new_business_entry)
@@ -248,6 +270,7 @@ class BuddyApp(QObject):
                                ("Orders and Quotes", "orders"), ("Schedule", "schedule")):
             sections.addAction(label, lambda checked=False, value=section: self.show_business_workspace(value))
         sections.addAction("Shared-folder setup", self.show_team)
+        sections.addAction("Stock inventory", self.show_inventory)
         create = notes.addMenu("Create")
         create.addAction("New Writing", lambda: self.new_business_entry("note"))
         create.addAction("New Checklist", lambda: self.new_business_entry("list"))
@@ -392,6 +415,9 @@ class BuddyApp(QObject):
         self.notepad.configure()
         self.note_popup.configure()
         self.team_popup.configure()
+        self.work_popup.configure()
+        self.inventory.configure()
+        self.inventory_window.configure()
         self.team_window.configure()
         self.launcher_window.configure()
         self.chat.configure()
@@ -413,6 +439,9 @@ class BuddyApp(QObject):
         if self.settings["quiet_mode"] or not self.settings["note_reminders"]:
             self.note_popup.hide()
             self.team_popup.dismiss()
+        if self.settings['quiet_mode'] or not self.settings['work_chat_notifications']:
+            self.work_popup.dismiss()
+        self.work_notifications.pump()
         if any(key in changes for key in ("team_sync_enabled", "team_shared_folder", "team_employee_name")):
             self.configure_team()
         self.team.pump()
@@ -524,6 +553,38 @@ class BuddyApp(QObject):
         self.memory_window.show()
         self.memory_window.raise_()
         self.memory_window.activateWindow()
+
+    def show_inventory(self):
+        self.inventory.refresh()
+        self.inventory_window.configure()
+        self.inventory_window.show()
+        self.inventory_window.raise_()
+        self.inventory_window.activateWindow()
+
+    def apply_inventory_preference(self, key, value):
+        if key == 'inventory_shared' and value != self.settings['inventory_shared'] and self.settings['inventory_share_with_ai']:
+            self.chat.cancel_request()
+            self.chat.history.clear()
+        self.apply_ai_preferences({key: value})
+        self.inventory.configure()
+        self.inventory_window.configure()
+
+    def inventory_session_changed(self, origin, token, user):
+        self.inventory.set_session(origin, token, user)
+        # Inventory context from a previous account must not survive sign-out.
+        if self.settings['inventory_share_with_ai']:
+            self.chat.cancel_request()
+            self.chat.history.clear()
+
+    def inventory_context(self, query):
+        if not self.settings['inventory_share_with_ai']:
+            return {}
+        records = self.inventory.context(query, limit=8)
+        if not records:
+            return {}
+        return {'items': records, 'source': 'Shared office inventory' if self.inventory.shared else 'Local inventory',
+                'status': self.inventory.status, 'last_import_at': self.inventory.summary.get('last_import_at'),
+                'live_stock_count': False}
 
     def review_web_source(self, result):
         self.show_notepad()
@@ -702,7 +763,22 @@ class BuddyApp(QObject):
     def team_can_notify(self):
         return (not self.shutting_down and not self.settings['quiet_mode']
                 and self.settings['note_reminders'] and not self.note_popup.isVisible()
-                and not self.team_popup.isVisible())
+                and not self.team_popup.isVisible() and not self.work_popup.isVisible())
+
+    def work_can_notify(self):
+        return (not self.shutting_down and not self.settings['quiet_mode']
+                and self.settings['work_chat_notifications'] and not self.note_popup.isVisible()
+                and not self.team_popup.isVisible() and not self.work_popup.isVisible())
+
+    def deliver_work_notification(self, notification):
+        if self.work_can_notify() and self.work_popup.present(notification, self.pet.geometry().center()):
+            self.work_notifications.mark_notification_presented(notification)
+        else:
+            self.work_notifications.release_notification(notification)
+
+    def open_work_notification(self, notification):
+        self.show_work_chat()
+        self.work_chat.open_notification(notification)
 
     def configure_team(self, employee_id=None):
         self.team_popup.dismiss()
@@ -800,6 +876,7 @@ class BuddyApp(QObject):
             self.show_business_workspace(destination)
             return
         actions = {'home': self.show_home, 'coworkers': self.show_work_chat,
+                   'inventory': self.show_inventory,
                    'assistant': self.show_chat, 'settings': self.show_settings,
                    'monitor': self.show_overlay, 'processes': self.show_processes,
                    'quick_launch': self.show_launcher, 'memory': self.show_memory}
@@ -813,7 +890,8 @@ class BuddyApp(QObject):
             return
         for window in (self.home, self.dialog, self.notepad, self.work_chat, self.chat,
                        self.memory_window, self.process_window, self.launcher_window,
-                       self.note_popup, self.team_popup, self.team_window, self.desktop.panel, self.desktop.text_window):
+                       self.note_popup, self.team_popup, self.team_window, self.work_popup,
+                       self.inventory_window, self.desktop.panel, self.desktop.text_window):
             window.configure()
         for sticky in self.stickies.values():
             sticky.configure()
@@ -1059,6 +1137,10 @@ class BuddyApp(QObject):
         if self.shutting_down:
             return
         self.shutting_down = True
+        self.inventory.stop()
+        self.inventory_window.shutdown()
+        self.work_notifications.stop()
+        self.work_popup.clear_session()
         self.team.stop()
         self.team_popup.shutdown()
         self.team_window.hide()

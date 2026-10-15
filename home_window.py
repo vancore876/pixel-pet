@@ -2,11 +2,11 @@
 from __future__ import annotations
 
 import time
-from PySide6.QtCore import Qt, Signal, QSignalBlocker, QTimer
+from PySide6.QtCore import Qt, Signal, QSignalBlocker, QTimer, QEvent
 from PySide6.QtGui import QPainter, QPixmap
 from PySide6.QtWidgets import (QApplication, QDialog, QFrame, QVBoxLayout, QHBoxLayout,
     QGridLayout, QLabel, QPushButton, QToolButton, QMenu, QScrollArea, QWidget,
-    QLineEdit, QListWidget, QListWidgetItem, QCheckBox)
+    QLineEdit, QListWidget, QListWidgetItem, QCheckBox, QSizePolicy)
 from auto_parts import dashboard_summary, format_money
 from characters import draw_character
 from notepad_window import reminder_time
@@ -34,6 +34,7 @@ class HomeWindow(QDialog):
         self.connected = False
         self._connection_text = 'Connect to your office to share orders and checklists.'
         self._columns = 0
+        self._compact = None
         self.setWindowTitle('Jeffery · Home')
         self.setMinimumSize(760, 560)
         screen = QApplication.primaryScreen().availableGeometry()
@@ -58,6 +59,7 @@ class HomeWindow(QDialog):
         for title, key, icon in (
             ('Home', 'home', 'home'), ('Orders & quotes', 'orders', 'orders'),
             ('Checklists', 'checklists', 'list'), ('Writing', 'writing', 'write'),
+            ('Inventory', 'inventory', 'orders'),
             ('Schedule', 'schedule', 'calendar'), ('Coworkers', 'coworkers', 'team'),
             ('Ask Jeffery', 'assistant', 'spark')):
             button = QPushButton(title.replace('&', '&&'))
@@ -94,6 +96,7 @@ class HomeWindow(QDialog):
         self.scroll.setWidgetResizable(True)
         self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.scroll.viewport().setObjectName('scrollViewport')
+        self.scroll.viewport().installEventFilter(self)
         content = QWidget()
         main = QVBoxLayout(content)
         main.setContentsMargins(0, 4, 4, 4)
@@ -118,6 +121,7 @@ class HomeWindow(QDialog):
         self.create_buttons = {}
         for text, key in (('New order', 'order'), ('New checklist', 'list'), ('Write a note', 'note')):
             button = QPushButton(text)
+            button.setAutoDefault(False)
             button.setObjectName('primary' if key == 'order' else 'secondary')
             button.clicked.connect(lambda checked=False, value=key: self.create_requested.emit(value))
             self.create_buttons[key] = button
@@ -130,25 +134,32 @@ class HomeWindow(QDialog):
 
         self.metrics = {}
         self.metric_labels = {}
+        self.metric_titles = {}
         self.metric_grid = QGridLayout()
         self.metric_grid.setSpacing(10)
         for key, text in (('open_orders', 'Open orders'), ('ready_orders', 'Ready for pickup'),
                           ('urgent_orders', 'Urgent orders'), ('balance_cents', 'Outstanding JMD')):
             button = QPushButton()
+            button.setAutoDefault(False)
             button.setObjectName('metricCard')
-            button.setMinimumHeight(84)
+            # QPushButton's stylesheet min-height overrides setMinimumHeight.
+            # Reserve the complete stacked-label height in the same stylesheet
+            # and let the layout supply the padding only once.
+            button.setStyleSheet('QPushButton#metricCard { min-height: 88px; padding: 0; }')
+            button.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
             button.setAccessibleName(text)
             stack = QVBoxLayout(button)
-            stack.setContentsMargins(14, 12, 14, 12)
+            stack.setContentsMargins(16, 14, 16, 14)
             stack.setSpacing(4)
             value_label = label('0', 'metricValue')
-            if key == 'balance_cents':
-                value_label.setStyleSheet('font-size: 18px; font-weight: 700;')
+            value_label.setStyleSheet('font-size: 28px; font-weight: 700;')
+            value_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Minimum)
             title_label = label(text, 'hint')
             for child in (value_label, title_label):
                 child.setAttribute(Qt.WA_TransparentForMouseEvents)
                 stack.addWidget(child)
             self.metric_labels[key] = value_label
+            self.metric_titles[key] = title_label
             button.clicked.connect(lambda checked=False: self.navigate_requested.emit('overview'))
             self.metrics[key] = (button, text)
         main.addLayout(self.metric_grid)
@@ -220,6 +231,11 @@ class HomeWindow(QDialog):
         main.addStretch()
         self.scroll.setWidget(content)
         outer.addWidget(self.scroll, 1)
+        # Enter in search must open the result only; Qt dialog defaults would
+        # otherwise also click an unrelated navigation or creation button.
+        for button in self.findChildren(QPushButton):
+            button.setAutoDefault(False)
+            button.setDefault(False)
         service.changed.connect(self.refresh)
         focus.changed.connect(self.refresh_focus)
         self.configure()
@@ -239,8 +255,16 @@ class HomeWindow(QDialog):
         self.mascot.setPixmap(pixmap)
         for key, button in self.nav_buttons.items():
             icon = {'checklists': 'list', 'writing': 'write', 'schedule': 'calendar',
-                    'coworkers': 'team', 'assistant': 'spark'}.get(key, key)
+                    'coworkers': 'team', 'assistant': 'spark', 'inventory': 'orders'}.get(key, key)
             button.setIcon(ui_icon(icon, self.settings))
+        for key, value in self.metric_labels.items():
+            for child in (value, self.metric_titles[key]):
+                child.ensurePolished()
+                child.setMinimumHeight(child.fontMetrics().height() + 4)
+            height = max(88, value.minimumHeight() + self.metric_titles[key].minimumHeight() + 32)
+            self.metrics[key][0].setStyleSheet(
+                f'QPushButton#metricCard {{ min-height: {height}px; padding: 0; }}')
+        self._layout_metrics()
         self.refresh_focus()
 
     def set_connection(self, text, connected=False):
@@ -260,7 +284,9 @@ class HomeWindow(QDialog):
         for key, (button, title) in self.metrics.items():
             value = format_money(summary[key]) if key == 'balance_cents' else str(summary[key])
             self.metric_labels[key].setText(value)
+            self.metric_labels[key].setToolTip(value)
             button.setAccessibleName(value + ' ' + title)
+        self._layout_metrics()
         self.refresh_lists()
 
     def refresh_lists(self):
@@ -332,18 +358,39 @@ class HomeWindow(QDialog):
         narrow = self.width() < 990
         self.rail.setFixedWidth(174 if narrow else 210)
         self.mascot.setVisible(not narrow)
-        columns = 2 if narrow else 4
-        if columns != self._columns:
-            while self.metric_grid.count():
-                self.metric_grid.takeAt(0)
-            for index, (button, _) in enumerate(self.metrics.values()):
-                self.metric_grid.addWidget(button, index // columns, index % columns)
+        if narrow != self._compact:
             while self.action_grid.count():
                 self.action_grid.takeAt(0)
             for index, button in enumerate(self.create_buttons.values()):
                 self.action_grid.addWidget(button, index if narrow else 0, 0 if narrow else index)
-            self._columns = columns
+            self._compact = narrow
         super().resizeEvent(event)
+        self._layout_metrics()
+
+    def eventFilter(self, watched, event):
+        if watched is self.scroll.viewport() and event.type() == QEvent.Resize:
+            self._layout_metrics(event.size().width())
+        return super().eventFilter(watched, event)
+
+    def _layout_metrics(self, viewport_width=None):
+        if not getattr(self, 'metrics', None):
+            return
+        available = (self.scroll.viewport().width() if viewport_width is None else viewport_width) - 4
+        # Keep complete balances and large counts at the same readable size.
+        # The cards move to fewer columns before the numbers can be clipped.
+        required = max(max(value.fontMetrics().horizontalAdvance(value.text()),
+                           self.metric_titles[key].fontMetrics().horizontalAdvance(self.metric_titles[key].text()))
+                       + 34 for key, value in self.metric_labels.items())
+        columns = 4 if self.width() >= 990 and available >= 4 * required + 30 else (
+            2 if available >= 2 * required + 10 else 1)
+        if columns != self._columns:
+            while self.metric_grid.count():
+                self.metric_grid.takeAt(0)
+            for index in range(4):
+                self.metric_grid.setColumnStretch(index, 1 if index < columns else 0)
+            for index, (button, _) in enumerate(self.metrics.values()):
+                self.metric_grid.addWidget(button, index // columns, index % columns)
+            self._columns = columns
 
     def showEvent(self, event):
         self.configure()

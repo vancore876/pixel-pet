@@ -7,7 +7,9 @@ messages, and shared business records on the work server. People can use their
 browser for chat, or **Home → Coworkers** in Jeffery opened from the office's
 shared application folder. Each coworker
 creates a different chat username and password. Chat updates approximately
-every two seconds while open. This chat is separate from the existing Groq AI
+every two seconds while open. A separate desktop notification feed runs while
+signed in, including with the chat window hidden or another conversation open.
+This chat is separate from the existing Groq AI
 conversation under **Home → Ask Jeffery**.
 
 The desktop interface renewal adds a central Home, readable sign-in and
@@ -16,6 +18,40 @@ office server, account credentials, private-message checks, shared business
 records, and certificate-free LAN setup continue to work as before. An AI
 key is configured separately in **Ask Jeffery → AI setup**; coworkers do not
 need one for office chat or shared orders/checklists.
+
+## Desktop notifications and account controls
+
+Incoming personal messages and Team Room messages show a passive popup without
+moving keyboard focus. Your own messages and direct messages between other
+employees do not produce popups. Open goes to the correct conversation and
+preserves an unfinished reply elsewhere. Quiet mode defers notifications rather
+than marking unseen messages delivered. Acknowledge and snooze affect your own
+current-session reminders; Settings controls popups and the repeat interval
+(0 disables repeats). Message bodies and passwords are not stored in the local
+notification file. Sign out clears its in-memory message content.
+
+New accounts receive a one-time recovery code. Save it privately. Existing
+signed-in users can open **Account security** and enter their current password
+to generate or replace a code. **Forgot password?** accepts the username,
+recovery code, and a new password; it consumes the old code, provides a replacement,
+and ends all existing sessions. If there is no recovery code, use the existing
+server administrator password-reset procedure below. Knowing a username alone
+cannot reset its password.
+
+**Account security → Delete account permanently…** requires the current password,
+exact username, and explicit final confirmation. It permanently removes the login,
+revokes every session and recovery code, and removes the employee from the active
+directory. Shared messages and work records remain with anonymized authors so
+other employees keep their work history and stock. A new registration with the
+old name is a new identity and does not regain the old account's private messages.
+The server retains only an inactive anonymous author reference for shared history.
+
+**Forget saved login** is different: it signs out and removes only this PC's saved
+server address and username, leaving the server account intact.
+
+The same office server now holds the shared [parts inventory](INVENTORY.md).
+Update and restart the server before using the new desktop controls; the existing
+database migrates without discarding accounts, notes, or messages.
 
 The proposed work server is Windows at **192.168.50.194**. Confirm its IPv4
 address with `ipconfig` on that machine. The simple office setup uses:

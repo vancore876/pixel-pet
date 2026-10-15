@@ -39,7 +39,8 @@ class AppSettings:
                   "cpu_alert": (40, 100), "ram_alert": (40, 100),
                   "alert_duration": (1, 60), "alert_cooldown": (30, 900), "focus_minutes": (1, 120),
                   "note_repeat_minutes": (0, 1440), "hide_seconds": (3, 120),
-                  "ai_interval_seconds": (60, 1800), "team_reminder_minutes": (0, 1440)}
+                  "ai_interval_seconds": (60, 1800), "team_reminder_minutes": (0, 1440),
+                  "work_chat_reminder_minutes": (0, 1440)}
         options = {"theme": ("midnight", "forest", "plum"), "pet_palette": ("mint", "sky", "amber", "rose"),
                    "interface_appearance": ("light", "dark", "system"),
                    "roaming_mode": ("bottom", "free"), "character": ("robot", "cat", "knight"),

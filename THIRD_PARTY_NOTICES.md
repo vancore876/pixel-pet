@@ -10,6 +10,9 @@ copyright notices continue to apply; this file does not replace them.
 | Pillow | HPND and bundled-library notices; [upstream](https://github.com/python-pillow/Pillow) |
 | Trafilatura | Apache-2.0; [upstream](https://github.com/adbar/trafilatura) |
 | RapidFuzz | MIT; [upstream](https://github.com/rapidfuzz/RapidFuzz) |
+| openpyxl and et-xmlfile | MIT; [upstream](https://foss.heptapod.net/openpyxl/openpyxl) |
+| xlrd | BSD-3-Clause; [upstream](https://github.com/python-excel/xlrd) |
+| defusedxml | PSF-2.0; [upstream](https://github.com/tiran/defusedxml) |
 | Tesseract (optional external executable) | Apache-2.0; [upstream](https://github.com/tesseract-ocr/tesseract) |
 | py-spy (optional developer tool) | MIT; [upstream](https://github.com/benfred/py-spy) |
 | Sentence Transformers (optional) | Apache-2.0; [upstream](https://github.com/huggingface/sentence-transformers) |

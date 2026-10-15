@@ -1,5 +1,22 @@
 # Jeffery 6.0 verification
 
+The Home/chat/accounts/inventory update passed all 725 desktop tests and all 13
+Qt GUI workflows on Python 3.12/Linux offscreen Qt. Actual disposable HTTP
+accounts exercised personal and team popups while chat was hidden or another
+conversation was selected, quiet deferral, recovery-code reset, and permanent
+account deletion across two PCs. Deleted logins and recovery codes stopped
+working; shared messages/orders retained anonymous authors and stock remained
+unchanged. Excel review/import, editable column mapping, leading-zero codes,
+shelf lookup, manual restock updates, two-employee shared lookup, stale-edit
+protection, offline-account isolation, and separate inventory AI consent passed.
+The Home card geometry was also checked at 100%, 150%, and 200% scaling.
+The Linux application built and passed packaged startup. A frozen Excel probe
+also passed workbook reading, zero-prefixed part codes, review before writes,
+saved locations, restock calculations, indexed recall, and worker shutdown.
+These checks do not
+establish native Windows deployment, real office SMB behavior, or live stock
+automation. The future automation connector remains separate work.
+
 The shared-folder employee update passed all 621 desktop unit tests and 12 Qt
 GUI workflows on Python 3.12/Linux offscreen Qt. Two independent local profiles
 exercised actual message popups and later reminders, Enter-to-send without

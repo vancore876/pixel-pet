@@ -68,6 +68,8 @@ def filtered_ai_context(context, settings, share_notes=None):
                     continue
                 if lowered == "user_memory" and not _enabled(settings, "ai_share_memory"):
                     continue
+                if lowered in {"inventory", "inventory_references", "inventory_summary"} and not _enabled(settings, "inventory_share_with_ai"):
+                    continue
                 if shared and lowered == "source":
                     continue
                 sanitized = clean(item)
@@ -85,7 +87,8 @@ def filtered_ai_context(context, settings, share_notes=None):
 def sharing_permissions(settings, share_notes=None):
     """Small snapshot used to reject replies after a sharing permission changes."""
     return (_enabled(settings, "ai_share_notes") and (share_notes is None or bool(share_notes)),
-            _enabled(settings, "team_share_notes_with_ai"), _enabled(settings, "ai_share_memory"))
+            _enabled(settings, "team_share_notes_with_ai"), _enabled(settings, "ai_share_memory"),
+            _enabled(settings, "inventory_share_with_ai"))
 
 
 def permissions_withdrawn(previous, current):

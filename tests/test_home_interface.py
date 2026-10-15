@@ -5,11 +5,13 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from PySide6.QtCore import Qt, QCoreApplication, QEvent
 from PySide6.QtWidgets import QApplication
+from PySide6.QtTest import QTest
 from settings import AppSettings
 from notes import NoteService, NoteStore
 from focus import FocusSession
@@ -62,8 +64,9 @@ class HomeInterfaceTests(unittest.TestCase):
         self.window.navigate_requested.connect(navigated.append)
         self.window.create_buttons['order'].click()
         self.window.nav_buttons['coworkers'].click()
+        self.window.nav_buttons['inventory'].click()
         self.assertEqual(created, ['order'])
-        self.assertEqual(navigated, ['coworkers'])
+        self.assertEqual(navigated, ['coworkers', 'inventory'])
         self.assertFalse(self.store.notes)
 
     def test_readable_counts_and_disconnected_state_do_not_claim_live_inventory(self):
@@ -105,6 +108,72 @@ class HomeInterfaceTests(unittest.TestCase):
         self.assertEqual(self.focus.clock.state, 'running')
         self.window.focus_reset.click()
         self.assertEqual(self.focus.clock.state, 'idle')
+
+    def assert_complete_metric_geometry(self):
+        cards = []
+        for key, (button, _) in self.window.metrics.items():
+            cards.append(button.geometry())
+            value, title = self.window.metric_labels[key], self.window.metric_titles[key]
+            for child in (value, title):
+                self.assertGreaterEqual(child.contentsRect().height(), child.fontMetrics().height(), key)
+                self.assertGreaterEqual(child.contentsRect().width(), child.fontMetrics().horizontalAdvance(child.text()), key)
+                self.assertTrue(button.contentsRect().contains(child.geometry()), key)
+            self.assertGreaterEqual(title.y(), value.geometry().bottom() + 4, key)
+            self.assertGreaterEqual(value.font().pixelSize(), 26, key)
+        for index, rectangle in enumerate(cards):
+            for other in cards[index + 1:]:
+                self.assertFalse(rectangle.intersects(other), 'Metric cards must not overlap')
+        self.assertEqual(self.window.scroll.horizontalScrollBar().maximum(), 0)
+
+    def test_metric_values_keep_full_font_height_in_light_dark_and_compact_layouts(self):
+        self.window.show()
+        for appearance in ('light', 'dark'):
+            self.settings.values['interface_appearance'] = appearance
+            self.window.configure()
+            for width, height in ((1140, 790), (800, 600)):
+                with self.subTest(appearance=appearance, width=width):
+                    self.window.resize(width, height)
+                    APP.processEvents()
+                    APP.processEvents()
+                    self.assert_complete_metric_geometry()
+                    self.assertEqual(self.window._columns, 4 if width == 1140 else 2)
+
+    def test_large_exact_balances_and_counts_reflow_before_clipping(self):
+        summary = {'open_orders': 123456789012345, 'ready_orders': 987654321,
+                   'urgent_orders': 234567890, 'balance_cents': 1_999_800_000_000_000_000}
+        self.window.show()
+        with patch('home_window.dashboard_summary', return_value=summary):
+            self.window.refresh()
+            for width, height in ((1140, 790), (800, 600)):
+                with self.subTest(width=width):
+                    self.window.resize(width, height)
+                    APP.processEvents()
+                    APP.processEvents()
+                    self.assert_complete_metric_geometry()
+                    self.assertEqual(self.window.metric_labels['balance_cents'].text(),
+                                     'JMD 19,998,000,000,000,000.00')
+                    self.assertEqual(self.window._columns, 1)
+        self.window.refresh()
+        self.window.resize(1140, 790)
+        APP.processEvents()
+        APP.processEvents()
+        self.assertEqual(self.window._columns, 4)
+        self.assert_complete_metric_geometry()
+
+    def test_enter_in_search_opens_only_the_result(self):
+        note = self.service.save_note(None, 'Counter note', 'Saved writing', 0)
+        navigated, created, opened = [], [], []
+        self.window.navigate_requested.connect(navigated.append)
+        self.window.create_requested.connect(created.append)
+        self.window.record_requested.connect(opened.append)
+        self.window.show()
+        self.window.search.setText('Counter')
+        self.window.search.setFocus()
+        QTest.keyClick(self.window.search, Qt.Key_Return)
+        APP.processEvents()
+        self.assertEqual(opened, [note['id']])
+        self.assertEqual(navigated, [])
+        self.assertEqual(created, [])
 
 
 if __name__ == '__main__':

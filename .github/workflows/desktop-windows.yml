@@ -37,6 +37,10 @@ jobs:
         run: python -m unittest discover -s tests -p "test_work_server.py" -v
       - name: Check shared orders, checklists, revisions, and persistence
         run: python -m unittest discover -s tests -p "test_work_business.py" -v
+      - name: Check notification privacy and password recovery
+        run: python -m unittest discover -s tests -p "test_work_recovery_notifications.py" -v
+      - name: Check shared inventory import transactions
+        run: python -m unittest discover -s tests -p "test_inventory_server.py" -v
       - name: Check the browser chat workflow
         run: python tests/check_work_chat_web.py
   desktop:
@@ -116,6 +120,12 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Server test dependencies failed." }
           & .\.venv\Scripts\python.exe tests/check_shared_business_integration.py
           if ($LASTEXITCODE -ne 0) { throw "Shared office integration failed." }
+          & .\.venv\Scripts\python.exe tests/check_work_notifications_integration.py
+          if ($LASTEXITCODE -ne 0) { throw "Background Work Chat notifications failed." }
+          & .\.venv\Scripts\python.exe -m pip install -r requirements-server.txt
+          if ($LASTEXITCODE -ne 0) { throw "Office GUI test server dependencies failed." }
+          & .\.venv\Scripts\python.exe tests/check_office_update_gui.py
+          if ($LASTEXITCODE -ne 0) { throw "Office Home, account and inventory GUI integration failed." }
 
       - name: Build the Windows executable
         run: |
@@ -138,6 +148,10 @@ jobs:
             "--copy-metadata", "RapidFuzz",
             "--copy-metadata", "Pillow",
             "--copy-metadata", "trafilatura",
+            "--copy-metadata", "openpyxl",
+            "--copy-metadata", "et-xmlfile",
+            "--copy-metadata", "xlrd",
+            "--copy-metadata", "defusedxml",
             "--exclude-module", "sentence_transformers",
             "--exclude-module", "torch",
             "--exclude-module", "transformers",

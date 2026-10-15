@@ -5,6 +5,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -13,7 +14,7 @@ from PySide6.QtCore import QByteArray, QObject, Signal, Qt, QEvent
 from PySide6.QtGui import QKeyEvent
 from PySide6.QtNetwork import QNetworkRequest
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QLineEdit, QPushButton
+from PySide6.QtWidgets import QApplication, QLineEdit, QMessageBox, QPushButton
 
 from settings import AppSettings
 from work_chat import (MAX_RESPONSE_BYTES, MAX_VISIBLE_MESSAGES, WorkChatWindow,
@@ -190,6 +191,333 @@ class ClientTests(unittest.TestCase):
         self.window.authenticate()
         self.assertEqual(self.api.calls[-1]["path"], "/api/auth/register")
         self.assertEqual(self.window.confirm_password.text(), "")
+
+    def prepare_reset(self):
+        self.window.server.setText("192.168.50.194")
+        self.window.username.setText("alice")
+        self.window.toggle_recovery()
+        self.window.password.setText("new-example-password")
+        self.window.confirm_password.setText("new-example-password")
+
+    def test_forgot_password_requires_saved_code_and_matching_new_password(self):
+        self.prepare_reset()
+        self.assertFalse(self.window.recovery_code.isHidden())
+        self.assertIn("administrator", self.window.auth_intro.text())
+        self.window.authenticate()
+        self.assertFalse(self.api.calls)
+        self.assertIn("recovery code", self.window.status.text())
+        self.window.recovery_code.setText("old-example-recovery-code")
+        self.window.confirm_password.setText("another-example-password")
+        self.window.authenticate()
+        self.assertFalse(self.api.calls)
+        self.assertIn("do not match", self.window.status.text())
+
+    def test_reset_uses_code_does_not_sign_in_and_displays_replacement_once(self):
+        self.prepare_reset()
+        self.window.recovery_code.setText("old-example-recovery-code")
+        self.window.authenticate()
+        reset = self.api.pending("/api/auth/reset-password")
+        self.assertEqual(reset["body"], {"username": "alice", "recovery_code": "old-example-recovery-code", "new_password": "new-example-password"})
+        self.assertFalse(reset["token"])
+        self.assertEqual(self.window.password.text(), "")
+        self.assertEqual(self.window.confirm_password.text(), "")
+        self.assertEqual(self.window.recovery_code.text(), "")
+        self.api.finish(reset, {"recovery_code": "replacement-example-code"})
+        self.assertFalse(self.window.token)
+        self.assertFalse(self.window._recovery_mode)
+        self.assertIn("Sign in", self.window.status.text())
+        dialog = self.window.security_dialog
+        self.assertEqual(dialog.code.text(), "replacement-example-code")
+        self.assertFalse(dialog.generate_button.isEnabled())
+        saved = self.settings.path.read_text()
+        for secret in ("old-example-recovery-code", "new-example-password", "replacement-example-code"):
+            self.assertNotIn(secret, saved)
+        dialog.close()
+        self.assertEqual(dialog.code.text(), "")
+
+    def test_failed_reset_preserves_mode_and_clears_secrets(self):
+        self.prepare_reset()
+        self.window.recovery_code.setText("old-example-recovery-code")
+        self.window.authenticate()
+        self.api.finish(self.api.pending("/api/auth/reset-password"), None,
+                        "Username or recovery code is invalid.", 401)
+        self.assertTrue(self.window._recovery_mode)
+        self.assertTrue(self.window.auth_button.isEnabled())
+        self.assertIn("invalid", self.window.status.text())
+        self.assertEqual(self.window.password.text(), "")
+        self.assertEqual(self.window.recovery_code.text(), "")
+        self.assertFalse(self.window.token)
+
+    def test_hide_ignores_late_reset_response(self):
+        self.prepare_reset()
+        self.window.recovery_code.setText("old-example-recovery-code")
+        self.window.authenticate()
+        reset = self.api.pending("/api/auth/reset-password")
+        self.window.hide()
+        self.assertTrue(reset["cancelled"])
+        self.api.finish(reset, {"recovery_code": "late-replacement-code"})
+        self.assertIsNone(self.window.security_dialog)
+        self.assertFalse(self.window.token)
+
+    def test_registration_recovery_code_is_shown_once_without_saving(self):
+        self.window.server.setText("192.168.50.194")
+        self.window.username.setText("alice")
+        self.window.signup.setChecked(True)
+        self.window.password.setText("an-example-password")
+        self.window.confirm_password.setText("an-example-password")
+        self.window.authenticate()
+        self.api.finish(self.api.pending("/api/auth/register"),
+            {"token": "session-one", "user": {"id": 1, "username": "alice"},
+             "recovery_code": "registration-recovery-code"})
+        dialog = self.window.security_dialog
+        self.assertEqual(dialog.code.text(), "registration-recovery-code")
+        dialog.copy_button.click()
+        self.assertEqual(APP.clipboard().text(), "registration-recovery-code")
+        self.assertNotIn("registration-recovery-code", self.settings.path.read_text())
+        dialog.close()
+        self.assertFalse(dialog.code.text())
+
+    def test_account_security_requires_current_password_and_keeps_it_in_memory(self):
+        self.sign_in()
+        self.window.show_account_security()
+        dialog = self.window.security_dialog
+        self.assertEqual(dialog.password.echoMode(), QLineEdit.Password)
+        dialog.generate_code()
+        self.assertIn("current password", dialog.status.text())
+        self.assertFalse(any(call["path"] == "/api/auth/recovery-code" for call in self.api.calls))
+        dialog.password.setText("an-example-password")
+        dialog.generate_code()
+        request = self.api.pending("/api/auth/recovery-code")
+        self.assertEqual(request["body"], {"password": "an-example-password"})
+        self.assertEqual(request["token"], "session-one")
+        self.assertEqual(dialog.password.text(), "")
+        self.assertFalse(dialog.generate_button.isEnabled())
+        self.api.finish(request, {"recovery_code": "rotated-example-recovery-code"})
+        self.assertEqual(dialog.code.text(), "rotated-example-recovery-code")
+        self.assertNotIn("rotated-example-recovery-code", self.settings.path.read_text())
+        self.assertTrue(all(not button.autoDefault() for button in dialog.findChildren(QPushButton)))
+
+    def test_wrong_security_password_does_not_sign_out_current_session(self):
+        self.sign_in()
+        self.window.show_account_security()
+        dialog = self.window.security_dialog
+        dialog.password.setText("wrong-example-password")
+        dialog.generate_code()
+        self.api.finish(self.api.pending("/api/auth/recovery-code"), None, "Incorrect current password.", 401)
+        self.assertEqual(self.window.token, "session-one")
+        self.assertIn("Incorrect", dialog.status.text())
+        self.assertTrue(dialog.generate_button.isEnabled())
+        self.assertFalse(dialog.code.text())
+
+    def test_closed_security_dialog_ignores_late_secret(self):
+        self.sign_in()
+        self.window.show_account_security()
+        dialog = self.window.security_dialog
+        dialog.password.setText("an-example-password")
+        dialog.generate_code()
+        request = self.api.pending("/api/auth/recovery-code")
+        dialog.close()
+        self.assertTrue(request["cancelled"])
+        self.api.finish(request, {"recovery_code": "late-example-recovery-code"})
+        self.assertFalse(dialog.code.text())
+        self.assertFalse(dialog.isVisible())
+
+    def prepare_account_deletion(self):
+        self.sign_in()
+        self.window.show_account_security()
+        dialog = self.window.security_dialog
+        dialog.begin_account_deletion()
+        return dialog
+
+    def test_permanent_deletion_requires_exact_username_and_current_password(self):
+        dialog = self.prepare_account_deletion()
+        dialog.delete_account()
+        self.assertIn("exact", dialog.status.text())
+        dialog.delete_username.setText("Alice")
+        dialog.delete_password.setText("an-example-password")
+        dialog.delete_account()
+        self.assertIn("exact", dialog.status.text())
+        dialog.delete_username.setText("alice")
+        dialog.delete_password.setText("short")
+        dialog.delete_account()
+        self.assertIn("current password", dialog.status.text())
+        self.assertFalse(any(call["method"] == "DELETE" for call in self.api.calls))
+        self.assertEqual(dialog.delete_password.echoMode(), QLineEdit.Password)
+
+    def test_enter_does_not_permanently_delete_account(self):
+        dialog = self.prepare_account_deletion()
+        dialog.delete_username.setText("alice")
+        dialog.delete_password.setText("an-example-password")
+        for field in (dialog.delete_username, dialog.delete_password):
+            field.setFocus()
+            APP.processEvents()
+            QTest.keyClick(field, Qt.Key_Return)
+            QTest.keyClick(field, Qt.Key_Enter)
+        self.assertFalse(any(call["method"] == "DELETE" for call in self.api.calls))
+        self.assertTrue(dialog.isVisible())
+        self.assertTrue(all(not button.autoDefault() and not button.isDefault()
+                            for button in dialog.findChildren(QPushButton)))
+
+    def test_permanent_delete_success_clears_saved_login_and_broadcasts_signout(self):
+        dialog = self.prepare_account_deletion()
+        changes = []
+        self.window.session_changed.connect(lambda *values: changes.append(values))
+        dialog.delete_username.setText("alice")
+        dialog.delete_password.setText("an-example-password")
+        dialog.delete_confirm_button.click()
+        request = self.api.pending("/api/account", "DELETE")
+        self.assertEqual(request["body"], {"password": "an-example-password", "confirm_username": "alice"})
+        self.assertEqual(request["token"], "session-one")
+        self.assertFalse(dialog.delete_password.text())
+        self.assertFalse(dialog.delete_confirm_button.isEnabled())
+        dialog.delete_account()
+        self.assertEqual(sum(call["method"] == "DELETE" for call in self.api.calls), 1)
+        self.api.finish(request, None, status=204)
+        self.assertFalse(self.window.token)
+        self.assertIsNone(self.window.user)
+        self.assertFalse(self.window.server.text())
+        self.assertFalse(self.window.username.text())
+        self.assertFalse(dialog.isVisible())
+        self.assertEqual(changes[-1][1:], ("", None))
+        saved = json.loads(self.settings.path.read_text())
+        self.assertEqual(saved["work_chat_server"], "")
+        self.assertEqual(saved["work_chat_username"], "")
+        self.assertNotIn("an-example-password", self.settings.path.read_text())
+        self.assertIn("permanently deleted", self.window.status.text())
+        self.assertFalse(any(call["path"] == "/api/auth/logout" for call in self.api.calls))
+
+    def test_cancel_permanent_deletion_keeps_account_and_clears_secret_fields(self):
+        dialog = self.prepare_account_deletion()
+        dialog.delete_username.setText("alice")
+        dialog.delete_password.setText("an-example-password")
+        dialog.delete_cancel_button.click()
+        self.assertFalse(dialog.delete_panel.isVisible())
+        self.assertFalse(dialog.delete_password.text())
+        self.assertFalse(dialog.delete_username.text())
+        self.assertTrue(dialog.generate_button.isEnabled())
+        self.assertEqual(self.window.token, "session-one")
+        self.assertFalse(any(call["method"] == "DELETE" for call in self.api.calls))
+
+    def test_failed_permanent_deletion_preserves_account_and_allows_retry(self):
+        dialog = self.prepare_account_deletion()
+        dialog.delete_username.setText("alice")
+        dialog.delete_password.setText("wrong-example-password")
+        dialog.delete_confirm_button.click()
+        self.api.finish(self.api.pending("/api/account", "DELETE"), None, "Incorrect current password.", 401)
+        self.assertEqual(self.window.token, "session-one")
+        self.assertEqual(self.window.user["username"], "alice")
+        self.assertEqual(self.settings.values["work_chat_username"], "alice")
+        self.assertTrue(dialog.delete_confirm_button.isEnabled())
+        self.assertTrue(dialog.delete_cancel_button.isEnabled())
+        self.assertFalse(dialog.delete_password.text())
+        self.assertIn("Incorrect", dialog.status.text())
+
+    def test_unexpected_delete_response_does_not_claim_account_deleted(self):
+        dialog = self.prepare_account_deletion()
+        dialog.delete_username.setText("alice")
+        dialog.delete_password.setText("an-example-password")
+        dialog.delete_confirm_button.click()
+        self.api.finish(self.api.pending("/api/account", "DELETE"), {}, status=200)
+        self.assertEqual(self.window.token, "session-one")
+        self.assertIn("unexpected", dialog.status.text())
+        self.assertTrue(dialog.isVisible())
+
+    def test_late_delete_response_cannot_clear_another_signed_in_account(self):
+        dialog = self.prepare_account_deletion()
+        dialog.delete_username.setText("alice")
+        dialog.delete_password.setText("an-example-password")
+        dialog.delete_confirm_button.click()
+        request = self.api.pending("/api/account", "DELETE")
+        self.window._clear_session()
+        self.window.token = "bob-session"
+        self.window.user = {"id": 2, "username": "bob"}
+        self.settings.save({"work_chat_username": "bob"})
+        self.window.username.setText("bob")
+        self.assertTrue(request["cancelled"])
+        self.api.finish(request, None, status=204)
+        self.assertEqual(self.window.token, "bob-session")
+        self.assertEqual(self.window.user["username"], "bob")
+        self.assertEqual(self.settings.values["work_chat_username"], "bob")
+        self.assertEqual(self.window.username.text(), "bob")
+
+    def test_delete_success_still_signs_out_if_clearing_saved_settings_fails(self):
+        dialog = self.prepare_account_deletion()
+        dialog.delete_username.setText("alice")
+        dialog.delete_password.setText("an-example-password")
+        dialog.delete_confirm_button.click()
+        with patch.object(self.settings, "save", side_effect=OSError("read-only")):
+            self.api.finish(self.api.pending("/api/account", "DELETE"), None, status=204)
+        self.assertFalse(self.window.token)
+        self.assertIn("permanently deleted", self.window.status.text())
+        self.assertIn("could not be cleared", self.window.status.text())
+
+    def test_forget_saved_login_only_clears_this_pc_and_signs_out(self):
+        self.sign_in()
+        self.window.composer.setPlainText("Unsaved private message")
+        with patch("work_chat.QMessageBox.question", return_value=QMessageBox.Yes):
+            self.assertTrue(self.window.forget_saved_login())
+        self.assertFalse(self.window.token)
+        self.assertEqual(self.window.server.text(), "")
+        self.assertEqual(self.window.username.text(), "")
+        self.assertEqual(self.window.composer.toPlainText(), "")
+        saved = json.loads(self.settings.path.read_text())
+        self.assertEqual(saved["work_chat_server"], "")
+        self.assertEqual(saved["work_chat_username"], "")
+        self.assertEqual(self.api.pending("/api/auth/logout")["token"], "session-one")
+        self.assertFalse(any(call["method"] == "DELETE" for call in self.api.calls))
+        self.assertIn("unchanged", self.window.status.text())
+
+    def test_cancel_forget_preserves_saved_login_and_session(self):
+        self.sign_in()
+        before = self.settings.path.read_text()
+        with patch("work_chat.QMessageBox.question", return_value=QMessageBox.No):
+            self.assertFalse(self.window.forget_saved_login())
+        self.assertEqual(self.window.token, "session-one")
+        self.assertEqual(self.settings.path.read_text(), before)
+
+    def test_forget_failed_save_preserves_session_and_reports_error(self):
+        self.sign_in()
+        with patch("work_chat.QMessageBox.question", return_value=QMessageBox.Yes), patch.object(self.settings, "save", side_effect=OSError("read-only")):
+            self.assertFalse(self.window.forget_saved_login())
+        self.assertEqual(self.window.token, "session-one")
+        self.assertIn("Could not clear", self.window.status.text())
+
+    def test_forget_pending_login_ignores_late_authentication(self):
+        self.window.server.setText("192.168.50.194")
+        self.window.username.setText("alice")
+        self.window.password.setText("an-example-password")
+        self.window.authenticate()
+        request = self.api.pending("/api/auth/login")
+        with patch("work_chat.QMessageBox.question", return_value=QMessageBox.Yes):
+            self.window.forget_saved_login()
+        self.api.finish(request, {"token": "late-token", "user": {"id": 1, "username": "alice"}})
+        self.assertFalse(self.window.token)
+        self.assertEqual(self.window.username.text(), "")
+
+    def test_notification_opens_peer_and_team_without_discarding_drafts(self):
+        self.sign_in()
+        self.window.composer.setPlainText("Team draft")
+        self.assertTrue(self.window.open_notification(message(20, recipient=1)))
+        self.assertEqual(self.window._peer_id, 2)
+        self.window.composer.setPlainText("Bob draft")
+        self.assertTrue(self.window.open_notification(message(21)))
+        self.assertIsNone(self.window._peer_id)
+        self.assertEqual(self.window.composer.toPlainText(), "Team draft")
+        self.window.open_notification(message(22, recipient=1))
+        self.assertEqual(self.window.composer.toPlainText(), "Bob draft")
+        self.assertFalse(self.window.open_notification(message(23, recipient=999)))
+
+    def test_notification_waits_for_roster_before_selecting_new_coworker(self):
+        self.sign_in()
+        self.window.composer.setPlainText("Team draft")
+        incoming = message(20, sender=3, recipient=1)
+        incoming["sender_username"] = "charlie"
+        self.assertTrue(self.window.open_notification(incoming))
+        self.api.finish(self.api.pending("/api/users"),
+            {"users": [{"id": 1, "username": "alice"}, {"id": 3, "username": "charlie"}]})
+        self.assertEqual(self.window._peer_id, 3)
+        self.assertEqual(self.window._drafts[None], "Team draft")
+        self.assertEqual(self.window.conversation_title.text(), "Message charlie")
 
     def test_stale_conversation_response_never_enters_new_transcript(self):
         self.sign_in([message(1, "Team message")])

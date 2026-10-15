@@ -14,7 +14,7 @@ from urllib.parse import urlencode, urlsplit, urlunsplit
 from PySide6.QtCore import QByteArray, QObject, QSignalBlocker, Qt, QTimer, QUrl, Signal
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequest
 from PySide6.QtWidgets import (QCheckBox, QDialog, QFormLayout, QFrame, QHBoxLayout, QLayout,
-    QLabel, QLineEdit, QListWidget, QListWidgetItem, QPlainTextEdit, QPushButton,
+    QApplication, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMessageBox, QPlainTextEdit, QPushButton,
     QScrollArea, QSplitter, QStackedWidget, QVBoxLayout, QWidget)
 
 from ui_style import window_style, ui_palette
@@ -202,6 +202,228 @@ def _positive_id(value):
     return isinstance(value, int) and not isinstance(value, bool) and value > 0
 
 
+def _recovery_code(data):
+    value = data.get("recovery_code") if isinstance(data, dict) else None
+    return value if (isinstance(value, str) and 16 <= len(value) <= 256
+                     and value.isascii() and all(33 <= ord(char) <= 126 for char in value)) else None
+
+
+class AccountSecurityDialog(QDialog):
+    """Recovery secrets are displayed once and are never written to settings."""
+
+    def __init__(self, owner):
+        super().__init__(owner)
+        self.owner = owner
+        self._generation = 0
+        self._reply = None
+        self._busy = False
+        self.setWindowTitle("Account security · Jeffery")
+        self.resize(500, 340)
+        layout = QVBoxLayout(self)
+        explanation = QLabel("Keep a recovery code somewhere safe, separate from this computer. It lets you reset a forgotten password. Generating a code replaces your previous code.")
+        explanation.setWordWrap(True)
+        explanation.setTextFormat(Qt.PlainText)
+        layout.addWidget(explanation)
+        self.password = QLineEdit()
+        self.password.setEchoMode(QLineEdit.Password)
+        self.password.setMaxLength(128)
+        self.password.setPlaceholderText("Current password")
+        self.password.setAccessibleName("Current password to replace recovery code")
+        layout.addWidget(self.password)
+        self.generate_button = QPushButton("Generate / replace recovery code")
+        self.generate_button.clicked.connect(self.generate_code)
+        self.password.returnPressed.connect(self.generate_code)
+        layout.addWidget(self.generate_button)
+        self.code = QLineEdit()
+        self.code.setReadOnly(True)
+        self.code.setAccessibleName("One-time account recovery code")
+        self.code.setPlaceholderText("Your recovery code will appear here once")
+        layout.addWidget(self.code)
+        self.copy_button = QPushButton("Copy recovery code")
+        self.copy_button.setEnabled(False)
+        self.copy_button.clicked.connect(lambda: QApplication.clipboard().setText(self.code.text()))
+        layout.addWidget(self.copy_button)
+        self.status = QLabel("Existing accounts: sign in to generate a code. Without a saved code, ask your office server administrator to reset your password locally.")
+        self.status.setWordWrap(True)
+        self.status.setTextFormat(Qt.PlainText)
+        layout.addWidget(self.status)
+        self.forget_button = QPushButton("Forget saved login on this PC…")
+        self.forget_button.clicked.connect(owner.forget_saved_login)
+        layout.addWidget(self.forget_button)
+        self.delete_button = QPushButton("Delete account permanently…")
+        self.delete_button.setVisible(bool(owner.token and owner.user))
+        self.delete_button.clicked.connect(self.begin_account_deletion)
+        layout.addWidget(self.delete_button)
+        self.delete_panel = QFrame()
+        delete_layout = QVBoxLayout(self.delete_panel)
+        delete_layout.setContentsMargins(0, 10, 0, 0)
+        warning = QLabel("Permanently delete this office account? This cannot be undone. "
+            "You will be signed out on every PC and your login and recovery code will stop working. "
+            "Company orders, inventory and message history will be kept with your author details anonymized. "
+            "To confirm, type your exact username and current password, then click the delete button.")
+        warning.setWordWrap(True)
+        warning.setTextFormat(Qt.PlainText)
+        delete_layout.addWidget(warning)
+        self.delete_username = QLineEdit()
+        self.delete_username.setMaxLength(32)
+        self.delete_username.setPlaceholderText("Type your exact username")
+        self.delete_username.setAccessibleName("Exact username to permanently delete")
+        delete_layout.addWidget(self.delete_username)
+        self.delete_password = QLineEdit()
+        self.delete_password.setMaxLength(128)
+        self.delete_password.setEchoMode(QLineEdit.Password)
+        self.delete_password.setPlaceholderText("Current password")
+        self.delete_password.setAccessibleName("Current password to permanently delete account")
+        delete_layout.addWidget(self.delete_password)
+        deletion_actions = QHBoxLayout()
+        self.delete_cancel_button = QPushButton("Keep my account")
+        self.delete_cancel_button.clicked.connect(self.cancel_account_deletion)
+        deletion_actions.addWidget(self.delete_cancel_button)
+        self.delete_confirm_button = QPushButton("Permanently delete my account")
+        self.delete_confirm_button.clicked.connect(self.delete_account)
+        deletion_actions.addWidget(self.delete_confirm_button)
+        delete_layout.addLayout(deletion_actions)
+        layout.addWidget(self.delete_panel)
+        self.delete_panel.hide()
+        close = QPushButton("Close")
+        close.clicked.connect(self.close)
+        layout.addWidget(close)
+        for button in self.findChildren(QPushButton):
+            button.setAutoDefault(False)
+            button.setDefault(False)
+
+    def begin_account_deletion(self):
+        if self._busy or not self.owner.token or not self.owner.user:
+            return
+        self.password.clear()
+        self.code.clear()
+        self.copy_button.setEnabled(False)
+        self.password.setEnabled(False)
+        self.generate_button.setEnabled(False)
+        self.forget_button.setEnabled(False)
+        self.delete_button.setEnabled(False)
+        self.delete_username.clear()
+        self.delete_password.clear()
+        self.delete_panel.show()
+        self.delete_username.setFocus()
+        self.status.setText("Confirm permanent deletion below. Pressing Enter will not delete your account.")
+
+    def cancel_account_deletion(self):
+        if self._busy:
+            return
+        self.delete_panel.hide()
+        self.delete_username.clear()
+        self.delete_password.clear()
+        self.password.setEnabled(bool(self.owner.token))
+        self.generate_button.setEnabled(bool(self.owner.token))
+        self.forget_button.setEnabled(True)
+        self.delete_button.setEnabled(bool(self.owner.token))
+        self.status.setText("Account deletion cancelled. Your account is unchanged.")
+
+    def delete_account(self):
+        if (self._busy or not self.owner.token or not self.owner.user
+                or not self.delete_panel.isVisible() or self.owner._shutting_down):
+            return
+        username = self.owner.user.get("username", "")
+        confirmation = self.delete_username.text()
+        password = self.delete_password.text()
+        if confirmation != username:
+            self.status.setText("Type your exact signed-in username to confirm permanent deletion.")
+            self.delete_username.setFocus()
+            return
+        if not 12 <= len(password) <= 128:
+            self.status.setText("Enter your current password (12–128 characters) to delete this account.")
+            self.delete_password.setFocus()
+            return
+        self._busy = True
+        self.delete_password.clear()
+        for widget in (self.delete_username, self.delete_password,
+                       self.delete_confirm_button, self.delete_cancel_button):
+            widget.setEnabled(False)
+        generation, session = self._generation, self.owner._session_generation
+        self.status.setText("Permanently deleting your office account…")
+
+        def received(data, error, status):
+            if (generation != self._generation or session != self.owner._session_generation
+                    or self.owner._shutting_down):
+                return
+            self._busy = False
+            self._reply = None
+            for widget in (self.delete_username, self.delete_password,
+                           self.delete_confirm_button, self.delete_cancel_button):
+                widget.setEnabled(True)
+            if error:
+                self.status.setText(error)
+                return
+            if status != 204:
+                self.status.setText("The server returned an unexpected deletion response. Sign in again to check your account before retrying.")
+                return
+            self.owner.complete_account_deletion()
+
+        self._reply = self.owner.api.request("DELETE", "/api/account",
+            {"password": password, "confirm_username": confirmation}, received, self.owner.token)
+
+    def show_code(self, code):
+        self.code.setText(code)
+        self.copy_button.setEnabled(True)
+        self.status.setText("Save this code now. Jeffery will not save or show it again after you close this window. Using it resets your password and replaces the code.")
+        self.password.setEnabled(bool(self.owner.token))
+        self.generate_button.setEnabled(bool(self.owner.token))
+
+    def generate_code(self):
+        if (self._busy or not self.owner.token or self.owner._shutting_down
+                or self.delete_panel.isVisible()):
+            return
+        password = self.password.text()
+        if not 12 <= len(password) <= 128:
+            self.status.setText("Enter your current password (12–128 characters).")
+            return
+        self._busy = True
+        self.password.clear()
+        self.password.setEnabled(False)
+        self.generate_button.setEnabled(False)
+        self.delete_button.setEnabled(False)
+        generation, session = self._generation, self.owner._session_generation
+        self.status.setText("Replacing your recovery code…")
+
+        def received(data, error, status):
+            if (generation != self._generation or session != self.owner._session_generation
+                    or self.owner._shutting_down):
+                return
+            self._busy = False
+            self._reply = None
+            self.password.setEnabled(True)
+            self.generate_button.setEnabled(True)
+            self.delete_button.setEnabled(True)
+            if status == 401:
+                # This endpoint also uses 401 for a wrong current password.
+                self.status.setText(error or "Check your current password and try again.")
+                return
+            if error:
+                self.status.setText(error)
+                return
+            code = _recovery_code(data)
+            if code is None:
+                self.status.setText("The server returned an invalid recovery code. Ask your administrator to update the office server.")
+                return
+            self.show_code(code)
+
+        self._reply = self.owner.api.request("POST", "/api/auth/recovery-code",
+            {"password": password}, received, self.owner.token)
+
+    def hideEvent(self, event):
+        self._generation += 1
+        self.owner.api.cancel(self._reply)
+        self._reply = None
+        self._busy = False
+        self.password.clear()
+        self.delete_password.clear()
+        self.delete_username.clear()
+        self.code.clear()
+        self.copy_button.setEnabled(False)
+        super().hideEvent(event)
+
+
 class WorkChatWindow(QDialog):
     """Sign in to the office server, then use Team Room or direct messages."""
 
@@ -217,6 +439,10 @@ class WorkChatWindow(QDialog):
         self._session_generation = 0
         self._conversation_generation = 0
         self._auth_busy = False
+        self._recovery_mode = False
+        self._pending_notification_peer = _CURRENT_CONVERSATION
+        self._pending_notification_name = ""
+        self.security_dialog = None
         self._users_pending = False
         self._messages_pending = False
         self._send_pending = False
@@ -314,6 +540,16 @@ class WorkChatWindow(QDialog):
             widget.setMinimumHeight(34)
             label.setBuddy(widget)
             form.addRow(label, widget)
+            if widget is self.password:
+                self.password_label = label
+        self.recovery_code = QLineEdit()
+        self.recovery_code.setMaxLength(256)
+        self.recovery_code.setEchoMode(QLineEdit.Password)
+        self.recovery_code.setPlaceholderText("Your saved recovery code")
+        self.recovery_code.setAccessibleName("Saved account recovery code")
+        self.recovery_label = QLabel("Recovery code")
+        self.recovery_label.setBuddy(self.recovery_code)
+        form.insertRow(2, self.recovery_label, self.recovery_code)
         self.confirm_label = QLabel("Confirm password")
         self.confirm_label.setMinimumHeight(18)
         self.confirm_password.setMinimumHeight(34)
@@ -333,6 +569,14 @@ class WorkChatWindow(QDialog):
         self.password.returnPressed.connect(self.authenticate)
         self.confirm_password.returnPressed.connect(self.authenticate)
         card_layout.addWidget(self.auth_button)
+        account_actions = QHBoxLayout()
+        self.forgot_button = QPushButton("Forgot password?")
+        self.forgot_button.clicked.connect(self.toggle_recovery)
+        account_actions.addWidget(self.forgot_button)
+        self.forget_button = QPushButton("Forget saved login…")
+        self.forget_button.clicked.connect(self.forget_saved_login)
+        account_actions.addWidget(self.forget_button)
+        card_layout.addLayout(account_actions)
         privacy = QLabel("Your own login · Shared team room · Private direct messages")
         privacy.setObjectName("hint")
         privacy.setWordWrap(True)
@@ -360,6 +604,9 @@ class WorkChatWindow(QDialog):
         self.refresh_button.setToolTip("Refresh coworkers and load the latest 50 messages in this conversation")
         self.refresh_button.clicked.connect(self.load_latest)
         top.addWidget(self.refresh_button)
+        self.security_button = QPushButton("Account security")
+        self.security_button.clicked.connect(self.show_account_security)
+        top.addWidget(self.security_button)
         self.signout_button = QPushButton("Sign out")
         self.signout_button.clicked.connect(self.sign_out)
         top.addWidget(self.signout_button)
@@ -448,17 +695,36 @@ class WorkChatWindow(QDialog):
             self.username.setText(values.get("work_chat_username", ""))
 
     def _set_signup(self, enabled):
+        if enabled:
+            self._recovery_mode = False
+        self.recovery_code.setVisible(self._recovery_mode)
+        self.recovery_label.setVisible(self._recovery_mode)
+        self.recovery_code.clear()
+        self.password_label.setText("New password" if self._recovery_mode else "Password")
+        self.forgot_button.setText("Back to sign in" if self._recovery_mode else "Forgot password?")
+        self.signup.setVisible(not self._recovery_mode)
+        enabled = enabled or self._recovery_mode
         self.confirm_password.setVisible(enabled)
         self.confirm_label.setVisible(enabled)
         self.confirm_password.clear()
-        self.auth_button.setText("Create Account" if enabled else "Sign In")
-        self.auth_heading.setText("Create your account" if enabled else "Welcome to your team")
-        self.auth_intro.setText("Choose a unique username and a password of at least 12 characters." if enabled else "Sign in with your own account. First time here? Create an account below.")
+        self.auth_button.setText("Reset password" if self._recovery_mode else "Create Account" if enabled else "Sign In")
+        self.auth_heading.setText("Reset your password" if self._recovery_mode else "Create your account" if enabled else "Welcome to your team")
+        self.auth_intro.setText("Enter your saved recovery code and a new password. Without a recovery code, ask your office server administrator to reset your password locally." if self._recovery_mode else "Choose a unique username and a password of at least 12 characters." if enabled else "Sign in with your own account. First time here? Create an account below.")
+
+    def toggle_recovery(self):
+        if self._auth_busy or self.token:
+            return
+        self._recovery_mode = not self._recovery_mode
+        with QSignalBlocker(self.signup):
+            self.signup.setChecked(False)
+        self.password.clear()
+        self._set_signup(False)
+        (self.recovery_code if self._recovery_mode else self.password).setFocus()
 
     def _set_auth_busy(self, busy):
         self._auth_busy = busy
         for widget in (self.server, self.username, self.password, self.confirm_password,
-                       self.signup, self.auth_button):
+                       self.recovery_code, self.signup, self.auth_button, self.forgot_button):
             widget.setEnabled(not busy)
 
     def authenticate(self):
@@ -479,9 +745,14 @@ class WorkChatWindow(QDialog):
             self.status.setText("Use a password between 12 and 128 characters.")
             self.password.setFocus()
             return
-        if self.signup.isChecked() and password != self.confirm_password.text():
+        if (self.signup.isChecked() or self._recovery_mode) and password != self.confirm_password.text():
             self.status.setText("The passwords do not match.")
             self.confirm_password.setFocus()
+            return
+        recovery_code = self.recovery_code.text().strip()
+        if self._recovery_mode and not recovery_code:
+            self.status.setText("Enter the recovery code you saved earlier, or ask your office server administrator for a password reset.")
+            self.recovery_code.setFocus()
             return
         try:
             self.settings.save({"work_chat_server": server, "work_chat_username": username})
@@ -495,8 +766,9 @@ class WorkChatWindow(QDialog):
         self.api.cancel_all()
         self.api.base_url = server
         self._set_auth_busy(True)
-        self.status.setText("Creating your account…" if self.signup.isChecked() else "Signing in…")
-        path = "/api/auth/register" if self.signup.isChecked() else "/api/auth/login"
+        resetting = self._recovery_mode
+        self.status.setText("Resetting your password…" if resetting else "Creating your account…" if self.signup.isChecked() else "Signing in…")
+        path = "/api/auth/reset-password" if resetting else "/api/auth/register" if self.signup.isChecked() else "/api/auth/login"
 
         def received(data, error, status):
             if generation != self._session_generation or self._shutting_down:
@@ -504,9 +776,20 @@ class WorkChatWindow(QDialog):
             self._set_auth_busy(False)
             self.password.clear()
             self.confirm_password.clear()
+            self.recovery_code.clear()
             if error:
                 self.status.setText(error)
                 self.password.setFocus()
+                return
+            if resetting:
+                code = _recovery_code(data)
+                self._recovery_mode = False
+                self._set_signup(False)
+                self.status.setText("Password reset. Sign in with your new password. All previous sessions have ended.")
+                if code is None:
+                    self.status.setText("Password reset. Sign in with your new password, then generate a recovery code in Account security.")
+                else:
+                    self.show_account_security(code)
                 return
             token = data.get("token") if isinstance(data, dict) else None
             user = data.get("user") if isinstance(data, dict) else None
@@ -518,7 +801,12 @@ class WorkChatWindow(QDialog):
                 self.status.setText("The server returned an invalid sign-in response.")
                 return
             self.token, self.user = token, user
-            self.session_changed.emit(self.api.base_url, token, user)
+            session_user = dict(user)
+            notification_cursor = data.get("notification_cursor")
+            if (isinstance(notification_cursor, int) and not isinstance(notification_cursor, bool)
+                    and notification_cursor >= 0):
+                session_user["notification_cursor"] = notification_cursor
+            self.session_changed.emit(self.api.base_url, token, session_user)
             self.account_label.setText(f"Signed in as {user['username']}")
             self.pages.setCurrentIndex(1)
             self._peer_id = None
@@ -531,10 +819,108 @@ class WorkChatWindow(QDialog):
                 self.poll_timer.start()
                 self.refresh_users()
                 self.refresh_messages()
+            code = _recovery_code(data)
+            if code:
+                self.show_account_security(code)
 
-        self.api.request("POST", path, {"username": username, "password": password}, received)
+        body = ({"username": username, "recovery_code": recovery_code, "new_password": password}
+                if resetting else {"username": username, "password": password})
+        self.api.request("POST", path, body, received)
         self.password.clear()
         self.confirm_password.clear()
+        self.recovery_code.clear()
+
+    def show_account_security(self, code=None):
+        if self._shutting_down:
+            return
+        if self.security_dialog is not None:
+            self.security_dialog.close()
+            self.security_dialog.deleteLater()
+        self.security_dialog = AccountSecurityDialog(self)
+        self.security_dialog.setStyleSheet(window_style(self.settings))
+        if isinstance(code, str):
+            self.security_dialog.show_code(code)
+        elif not self.token:
+            return
+        self.security_dialog.show()
+        self.security_dialog.raise_()
+
+    def forget_saved_login(self):
+        answer = QMessageBox.question(self, "Forget saved login on this PC?",
+            "This clears the saved office server and username and signs you out on this PC. "
+            "Your account and messages on the office server will stay available.",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        if answer != QMessageBox.Yes:
+            return False
+        try:
+            self.settings.save({"work_chat_server": "", "work_chat_username": ""})
+        except OSError:
+            self.status.setText("Could not clear the saved login. Check that your settings folder is writable.")
+            return False
+        self.sign_out()
+        self.server.clear()
+        self.username.clear()
+        self.api.base_url = ""
+        self.status.setText("Saved login removed from this PC. Your office account and server messages are unchanged.")
+        return True
+
+    def complete_account_deletion(self):
+        """Clear this PC after a confirmed authenticated server deletion."""
+        self._clear_session()
+        self.server.clear()
+        self.username.clear()
+        self.api.base_url = ""
+        try:
+            self.settings.save({"work_chat_server": "", "work_chat_username": ""})
+        except OSError:
+            self.status.setText("Your office account was permanently deleted. Company history is kept anonymously. The saved login on this PC could not be cleared; check your settings folder permissions.")
+            return
+        self.status.setText("Your office account was permanently deleted and all PC sessions have ended. Company history is kept anonymously.")
+
+    def open_notification(self, message):
+        """Open a received popup's conversation without losing another draft."""
+        if not self.token or not self.user or not isinstance(message, dict):
+            return False
+        recipient, sender = message.get("recipient_id"), message.get("sender_id")
+        if not _positive_id(sender):
+            return False
+        if recipient is None:
+            peer = None
+        elif recipient == self.user["id"] and sender != self.user["id"]:
+            peer = sender
+        elif sender == self.user["id"] and _positive_id(recipient):
+            peer = recipient
+        else:
+            return False
+        username = message.get("sender_username", "")
+        return self.open_conversation(peer, username if isinstance(username, str) else "")
+
+    def open_conversation(self, peer_id=None, username=""):
+        if not self.token or (peer_id is not None and not _positive_id(peer_id)):
+            return False
+        self._pending_notification_peer = peer_id
+        self._pending_notification_name = username
+        self.show()
+        self.raise_()
+        self.activateWindow()
+        self.people_search.clear()
+        self._select_pending_notification()
+        if self._pending_notification_peer is not _CURRENT_CONVERSATION:
+            self.refresh_users()
+        return True
+
+    def _select_pending_notification(self):
+        peer = self._pending_notification_peer
+        if peer is _CURRENT_CONVERSATION:
+            return
+        for index in range(self.conversations.count()):
+            item = self.conversations.item(index)
+            if item.data(Qt.UserRole) == peer:
+                self._pending_notification_peer = _CURRENT_CONVERSATION
+                self._pending_notification_name = ""
+                self.conversations.setCurrentItem(item)
+                self.composer.setFocus()
+                return
 
     def _session_error(self, error, status):
         if status == 401:
@@ -590,6 +976,7 @@ class WorkChatWindow(QDialog):
         self._filter_people(self.people_search.text())
         if selected.data(Qt.UserRole) != self._peer_id:
             self._conversation_changed(selected, None)
+        self._select_pending_notification()
 
     def _filter_people(self, text):
         query = text.strip().casefold()
@@ -783,6 +1170,8 @@ class WorkChatWindow(QDialog):
         self._conversation_generation += 1
         self.poll_timer.stop()
         self.api.cancel_all()
+        if self.security_dialog is not None:
+            self.security_dialog.close()
         self.token = ""
         self.user = None
         self.session_changed.emit(self.api.base_url, "", None)
@@ -794,6 +1183,13 @@ class WorkChatWindow(QDialog):
         self.composer.clear()
         self.password.clear()
         self.confirm_password.clear()
+        self.recovery_code.clear()
+        self._pending_notification_peer = _CURRENT_CONVERSATION
+        self._pending_notification_name = ""
+        self._recovery_mode = False
+        with QSignalBlocker(self.signup):
+            self.signup.setChecked(False)
+        self._set_signup(False)
         self.account_label.clear()
         self.people_search.clear()
         with QSignalBlocker(self.conversations):
@@ -831,6 +1227,9 @@ class WorkChatWindow(QDialog):
         self._message_reply = None
         self.password.clear()
         self.confirm_password.clear()
+        self.recovery_code.clear()
+        if self.security_dialog is not None:
+            self.security_dialog.close()
         self._set_auth_busy(False)
         self._update_send()
         super().hideEvent(event)
