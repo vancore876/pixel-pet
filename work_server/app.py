@@ -248,6 +248,9 @@ def create_app(database_path="server-data/work-chat.sqlite", *, clock=time.time,
 
     from .inventory import register_inventory_routes
     register_inventory_routes(app, store, signed_in)
+    from .admin import register_admin_routes
+    register_admin_routes(app, store, rate_limiter=RateLimiter, is_loopback=is_loopback_address,
+                          rate_window_seconds=rate_window_seconds)
 
     @app.get("/api/health")
     def health():

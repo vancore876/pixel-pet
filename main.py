@@ -30,6 +30,7 @@ from launcher import QuickLauncher, LauncherWindow, start_app
 from credentials import CredentialStore
 from ai_chat import ChatWindow
 from work_chat import WorkChatWindow
+from it_window import ITWindow
 from shared_business import SharedBusinessController
 from home_window import HomeWindow
 from ui_style import apply_window_style
@@ -114,6 +115,7 @@ class BuddyApp(QObject):
         self.chat = ChatWindow(self.settings, self.credentials, self.ai_context, self.run_buddy_action,
             memory_store=self.memory_store, notebook_store=self.notes_store, semantic_service=self.semantic)
         self.work_chat = WorkChatWindow(self.settings)
+        self.it_window = ITWindow(self.settings)
         self.work_notifications = WorkNotificationService(self.settings, can_notify=self.work_can_notify, parent=self)
         self.work_chat.session_changed.connect(self.work_notifications.session_changed)
         self.work_notifications.notification.connect(self.deliver_work_notification)
@@ -135,7 +137,7 @@ class BuddyApp(QObject):
         self.home.create_requested.connect(self.new_business_entry)
         self.home.record_requested.connect(self.open_note)
         self.home.preference_requested.connect(lambda key, value: self.apply_settings({key: value}))
-        for window in (self.notepad, self.chat, self.work_chat, self.dialog,
+        for window in (self.notepad, self.chat, self.work_chat, self.it_window, self.dialog,
                        self.memory_window, self.process_window, self.launcher_window, self.team_window):
             if hasattr(window, 'home_requested'):
                 window.home_requested.connect(self.show_home)
@@ -263,6 +265,7 @@ class BuddyApp(QObject):
         chat.addAction("Work Chat · Coworkers", self.show_work_chat)
         chat.addAction("Shared-folder messages", self.show_team)
         chat.addAction("Talk to Jeffery · Groq", self.show_chat)
+        menu.addAction("IT administration", self.show_it)
         notes = menu.addMenu("Famous Twins")
         notes.addAction("Business Overview", lambda: self.show_business_workspace("overview"))
         sections = notes.addMenu("Workspace")
@@ -426,6 +429,7 @@ class BuddyApp(QObject):
         self.launcher_window.configure()
         self.chat.configure()
         self.work_chat.configure()
+        self.it_window.configure()
         self.home.configure()
         apply_window_style(self.menu, self.settings)
         self.configure_semantic_memory(changes)
@@ -880,6 +884,7 @@ class BuddyApp(QObject):
             self.show_business_workspace(destination)
             return
         actions = {'home': self.show_home, 'coworkers': self.show_work_chat,
+                   'it': self.show_it,
                    'inventory': self.show_inventory,
                    'assistant': self.show_chat, 'settings': self.show_settings,
                    'monitor': self.show_overlay, 'processes': self.show_processes,
@@ -892,7 +897,7 @@ class BuddyApp(QObject):
     def interface_scheme_changed(self, *_):
         if self.settings['interface_appearance'] != 'system' or self.shutting_down:
             return
-        for window in (self.home, self.dialog, self.notepad, self.work_chat, self.chat,
+        for window in (self.home, self.dialog, self.notepad, self.work_chat, self.it_window, self.chat,
                        self.memory_window, self.process_window, self.launcher_window,
                        self.note_popup, self.team_popup, self.team_window, self.work_popup,
                        self.inventory_window, self.desktop.panel, self.desktop.text_window):
@@ -1075,6 +1080,12 @@ class BuddyApp(QObject):
         self.launcher_window.raise_()
         self.launcher_window.activateWindow()
 
+    def show_it(self):
+        self.it_window.configure()
+        self.it_window.show()
+        self.it_window.raise_()
+        self.it_window.activateWindow()
+
     def show_work_chat(self):
         self.work_chat.show()
         self.work_chat.raise_()
@@ -1156,6 +1167,7 @@ class BuddyApp(QObject):
         self.chat.shutdown()
         self.business_sync.shutdown()
         self.work_chat.shutdown()
+        self.it_window.shutdown()
         self.memory_learner.stop()
         self.memory_window.hide()
         self.pet.timer.stop()

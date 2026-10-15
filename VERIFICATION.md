@@ -1,5 +1,28 @@
 # Jeffery 6.0 verification
 
+The IT administration update passed all **810 unit tests**, all **14 Qt GUI
+workflows**, and isolated desktop startup on Python 3.12/Linux offscreen Qt.
+Nineteen new server tests cover separate admin/employee identities and tokens,
+loopback-only initial setup, forced password rotation, hashing, expiry, rate
+limits, local recovery, atomic audit entries, and concurrent revocation checks.
+Fourteen new UI tests cover session lifecycle, inactivity lock, stale replies,
+address changes, validation, explicit confirmations, and secret clearing.
+
+The real BuddyApp HTTP workflow exercised initial setup, employee password
+reset, invalidation of two employee sessions and an old recovery code, remote
+sign-out, unchanged message history, and an ordinary employee named `admin`
+remaining outside IT access. It also delayed a login response until after the
+window closed and verified that its newly issued token was revoked. Home/menu
+navigation, light/dark presentation, compact layouts, and native window-control
+flags passed; the IT dashboard preview was visually inspected. Existing
+work-chat, inventory, recovery, deletion, shared-folder, and companion checks
+remain green. CI includes the new server and real HTTP GUI checks.
+
+No dependencies changed. Update/restart both server and clients while retaining
+the existing server database. Windows installation/titlebar rendering and the
+real office network remain unverified in this Linux cloud. No new Windows
+executable was built here. Older feature-specific validation follows.
+
 The companion and desktop-play update passed all 777 desktop unit tests and
 all 13 Qt GUI workflows on Python 3.12/Linux offscreen Qt. The real BuddyApp
 workflow selected all seven characters through the menu, played all ten new

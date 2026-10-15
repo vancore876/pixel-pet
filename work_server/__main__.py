@@ -17,6 +17,24 @@ def loopback_host(value):
 
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
+    if argv and argv[0] == "reset-it-password":
+        parser = argparse.ArgumentParser(description="Reset the IT administrator password on the office server.")
+        parser.add_argument("--database", default="server-data/work-chat.sqlite")
+        arguments = parser.parse_args(argv[1:])
+        if not Path(arguments.database).is_file():
+            parser.error("Database does not exist. Use the same --database path as the server.")
+        from .store import ChatStore, StoreError
+        from .admin_store import ITAdminStore
+        password = getpass.getpass("New IT password (12–128 characters): ")
+        confirmation = getpass.getpass("Confirm new IT password: ")
+        if password != confirmation:
+            parser.error("Passwords did not match.")
+        try:
+            ITAdminStore(ChatStore(arguments.database)).reset_local_password(password)
+        except StoreError as error:
+            parser.error(error.detail)
+        print("IT password updated. All IT sessions have been signed out.")
+        return
     if argv and argv[0] == "reset-password":
         parser = argparse.ArgumentParser(description="Stop the server, then reset a user's password on this machine.")
         parser.add_argument("username")

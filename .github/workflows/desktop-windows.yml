@@ -41,6 +41,8 @@ jobs:
         run: python -m unittest discover -s tests -p "test_work_recovery_notifications.py" -v
       - name: Check shared inventory import transactions
         run: python -m unittest discover -s tests -p "test_inventory_server.py" -v
+      - name: Check IT administration authentication and account management
+        run: python -m unittest discover -s tests -p "test_it_admin_server.py" -v
       - name: Check the browser chat workflow
         run: python tests/check_work_chat_web.py
   desktop:
@@ -126,6 +128,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Office GUI test server dependencies failed." }
           & .\.venv\Scripts\python.exe tests/check_office_update_gui.py
           if ($LASTEXITCODE -ne 0) { throw "Office Home, account and inventory GUI integration failed." }
+          & .\.venv\Scripts\python.exe tests/check_it_admin_gui.py
+          if ($LASTEXITCODE -ne 0) { throw "IT login, password rotation and employee management failed." }
 
       - name: Build the Windows executable
         run: |

@@ -279,8 +279,10 @@ Test-NetConnection 192.168.50.194 -Port 8765
   current token. Passwords and tokens are never saved in desktop settings or
   browser local/session storage. Refreshing the browser requires signing in.
 - Anyone on the allowed office network can create an account. The directory
-  has a 1,000-account limit. There is no administrator dashboard, account
-  approval, self-service password recovery, or account deletion interface yet.
+  has a 1,000-account limit. The desktop IT section manages password resets and
+  session revocation. Desktop account controls provide recovery-code password
+  resets and permanent self-service deletion. Account approval and different
+  staff permission levels are not included yet.
 - Direct messages are visible through the API only to their sender and
   recipient; Team Room messages are visible to every signed-in user. Message
   history is stored in the server database. Administrators with database access
@@ -302,7 +304,7 @@ Test-NetConnection 192.168.50.194 -Port 8765
   below the client's 1 MiB cap. Request bodies must finish within ten seconds.
   FastAPI telemetry is disabled.
 
-To reset a forgotten password, stop the server and run the following on the
+To reset a forgotten password without an IT login or recovery code, stop the server and run the following on the
 server itself. The command prompts for the new password without echoing it and
 revokes all sessions for that account. Restart the server afterward.
 
@@ -321,6 +323,59 @@ chat, shared orders/checklists, revisions, deletion markers, and TLS private
 keys if HTTPS is configured; limit access accordingly. Desktop notebook exports
 do not replace this server backup.
 Restore while the server is stopped.
+
+## IT administration
+
+Update and restart both the office server and Jeffery desktop clients, keeping
+the existing server database. Open **Home → IT administration** (also available
+from Jeffery's right-click menu).
+
+1. On the **server PC**, set the IT server address to **127.0.0.1:8765**. If your
+   server uses another port or HTTPS, use its matching local address and a
+   trusted certificate that covers that address.
+2. Sign in with username **admin** and initial password **admin123**.
+3. Enter that current password again and choose/confirm a private password of
+   **12–128 characters**. The initial login cannot manage employees or read the
+   dashboard. Initial setup is accepted only from the server's loopback
+   connection; other office PCs cannot claim the starter account.
+4. After changing the password, IT can sign in from office PCs using the normal
+   office server address. The starter password stops working and is never
+   restored automatically when the server restarts.
+
+IT shows employee accounts, active session counts (not a live PC-presence list),
+message and inventory totals, and recent administrative actions. Select an
+employee to **reset their password** or **sign out all their PCs**; confirm their
+username and re-enter the IT password. Resets revoke all of that employee's
+sessions and previous recovery code. Give the new password to that employee
+privately; they can then generate a fresh recovery code in Account security.
+Messages and shared records are preserved. IT does not display direct-message
+bodies, employee passwords, or personal notebooks.
+
+The IT identity is separate from employee Work Chat accounts. An existing
+employee named `admin` keeps their normal employee access and gains no IT
+privileges. Employee sessions cannot call IT APIs, and IT sessions cannot read
+employee chat APIs. IT passwords are hashed and tokens remain in memory only.
+Closing the IT window signs it out; leaving it idle locks it after 15 minutes,
+and the server expires an ordinary IT session after one hour. Initial setup
+sessions expire after ten minutes. Changing the IT password revokes older IT
+sessions. Locking clears this PC immediately; server sign-out is best effort
+when the network is unavailable, with server expiry as the fallback. The
+recent-actions view is limited to the latest 100 entries.
+
+If IT forgets its changed password, stop the server and run this **on the server
+PC**, under the Windows account that runs the server:
+
+```powershell
+.\.server-venv\Scripts\python.exe -m work_server reset-it-password --database "$env:LOCALAPPDATA\PixelSystemBuddy\work-server\work-chat.sqlite"
+```
+
+The command prompts privately for a new password and confirmation. It revokes
+IT sessions without changing employee passwords; restart the server afterward.
+For certificate-enabled servers whose certificates do not include loopback,
+this command can also set the initial private IT password locally before the
+first network sign-in. The browser chat page does not include the IT console.
+Office HTTP remains unencrypted; use the documented HTTPS setup to protect
+administrative credentials in transit between PCs.
 
 ## Optional HTTPS later
 

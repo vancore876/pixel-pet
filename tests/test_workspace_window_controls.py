@@ -107,6 +107,7 @@ class WorkspaceWindowIntegrationTests(unittest.TestCase):
         cls.buddy.pet.hide()
         cls.windows = {"Home": cls.buddy.home, "Notepad": cls.buddy.notepad,
             "AI Chat": cls.buddy.chat, "Work Chat": cls.buddy.work_chat,
+            "IT administration": cls.buddy.it_window,
             "Inventory": cls.buddy.inventory_window, "Settings": cls.buddy.dialog,
             "Memory": cls.buddy.memory_window, "PC activity": cls.buddy.process_window,
             "Launcher": cls.buddy.launcher_window, "Team messages": cls.buddy.team_window,

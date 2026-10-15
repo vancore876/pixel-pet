@@ -27,6 +27,16 @@ your server account after password and username confirmation. Shared work
 history remains with anonymized authors. **Forget saved login** only removes
 this PC's remembered login and remains a separate option.
 
+**IT administration:** Open **Home → IT administration** to manage employee
+passwords, sign an employee out on every PC, and check account/session/stock
+counts and recent IT actions. First setup uses **admin / admin123** on the
+server PC at **127.0.0.1:8765**. Change the starter password to a private
+12–128-character password before using IT from other PCs. IT access is separate
+from employee accounts, and closing its window locks it. See
+**[IT setup and recovery](WORK_CHAT.md#it-administration)**.
+
+![IT administration with employee accounts and recent actions](preview/it-administration.png)
+
 Open **Home → Inventory → Import stock list** to review an Excel/CSV parts list
 before saving it to the shared office inventory. Search quantities and shelf/bin
 locations, set restock levels, and optionally let Ask Jeffery use matching saved
@@ -785,11 +795,12 @@ errors. No automatic installation at login occurs unless Start with Windows is e
 
 ## Validation and practical limits
 
-The desktop unit suite passed 777 tests with Python 3.12 and Linux offscreen Qt.
-All 13 GUI workflows passed, including readable Home counts, background office
+The desktop unit suite passed 810 tests with Python 3.12 and Linux offscreen Qt.
+All 14 GUI workflows passed, including IT setup, employee password resets and
+remote sign-out, readable Home counts, background office
 message popups, account recovery and permanent deletion, shared Excel inventory,
 two-PC shared-folder messaging, and customer reminders. Compact/expanded cards
-and native window-control flags were checked across twelve workspaces, including
+and native window-control flags were checked across thirteen workspaces, including
 draft preservation. Two real background-feed cases also passed with hidden chat
 and another conversation open. Native Windows focus and titlebar rendering still
 need checking on a work PC. Three

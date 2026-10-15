@@ -75,6 +75,11 @@ class HomeWindow(QDialog):
         self.quiet.setToolTip('Keep Jeffery visible while hiding speech and focus notifications.')
         self.quiet.toggled.connect(lambda value: self.preference_requested.emit('quiet_mode', value))
         rail.addWidget(self.quiet)
+        self.it_button = QPushButton('IT administration')
+        self.it_button.setObjectName('navButton')
+        self.it_button.setIcon(ui_icon('settings', settings))
+        self.it_button.clicked.connect(lambda: self.navigate_requested.emit('it'))
+        rail.addWidget(self.it_button)
         settings_button = QPushButton('Settings')
         settings_button.setObjectName('navButton')
         settings_button.setIcon(ui_icon('settings', settings))
@@ -243,6 +248,7 @@ class HomeWindow(QDialog):
 
     def configure(self):
         apply_window_style(self, self.settings)
+        self.it_button.setIcon(ui_icon('settings', self.settings))
         self.business_name.setText(self.settings['business_name'])
         with QSignalBlocker(self.quiet):
             self.quiet.setChecked(self.settings['quiet_mode'])

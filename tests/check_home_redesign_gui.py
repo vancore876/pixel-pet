@@ -40,6 +40,12 @@ with tempfile.TemporaryDirectory(prefix='jeffery-home-integration-') as director
             buddy.note_service.stop()
             buddy.menu.actions()[0].trigger()
             assert buddy.home.isVisible()
+            buddy.home.it_button.click()
+            assert buddy.it_window.isVisible()
+            assert not buddy.it_window.token
+            buddy.it_window.home_requested.emit()
+            assert buddy.home.isVisible()
+            buddy.it_window.close()
             buddy.home.create_buttons['note'].click()
             window = buddy.notepad
             assert window.isVisible() and window.kind.currentData() == 'note'
