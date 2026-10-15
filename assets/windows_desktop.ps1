@@ -94,10 +94,11 @@ function Emit($value) {
   [Console]::WriteLine(($value | ConvertTo-Json -Depth 12 -Compress))
   [Console]::Out.Flush()
 }
-function Elements($root, [int]$limit=650, [bool]$documents=$false) {
+function Elements($root, [int]$limit=650, [bool]$documents=$false, $clock=$null) {
   $queue = [Collections.Generic.Queue[object]]::new()
   $queue.Enqueue(@($root,0)); $seen=0
   while($queue.Count -gt 0 -and $seen -lt $limit) {
+    if($null -ne $clock -and $clock.ElapsedMilliseconds -ge 6500) { break }
     $pair=$queue.Dequeue(); $element=$pair[0]; $depth=[int]$pair[1]; $seen++
     try {
       if($element.Current.IsOffscreen) { continue }
@@ -105,6 +106,7 @@ function Elements($root, [int]$limit=650, [bool]$documents=$false) {
       if($depth -ge 14 -or (!$documents -and $element.Current.ControlType -eq [System.Windows.Automation.ControlType]::Document)) { continue }
       $child=$Walker.GetFirstChild($element)
       while($null -ne $child -and $queue.Count -lt $limit) {
+        if($null -ne $clock -and $clock.ElapsedMilliseconds -ge 6500) { break }
         $queue.Enqueue(@($child,$depth+1)); $child=$Walker.GetNextSibling($child)
       }
     } catch { }
@@ -115,16 +117,38 @@ function Rectangle($element) {
   $r=$element.Current.BoundingRectangle
   return @([int]$r.X,[int]$r.Y,[int]$r.Width,[int]$r.Height)
 }
-function FolderMap($folder) {
-  $map=@{}
+function AddItemAlias($map, [string]$name, $entry) {
+  if([string]::IsNullOrWhiteSpace($name)) { return }
+  if(!$map.ContainsKey($name)) { $map[$name]=$entry }
+  elseif($null -ne $map[$name] -and ($map[$name].path -cne $entry.path -or $map[$name].kind -ne $entry.kind)) {
+    # Hidden extensions (and multiple Explorer tabs sharing a HWND) can make
+    # two items look identical. Keep an ambiguity marker rather than guessing.
+    $map[$name]=$null
+  }
+}
+function ItemMap($folder, $clock, $map=@{}) {
   $count=0
   try {
     foreach($item in $folder.Items()) {
-      $count++; if($count -gt 512) { break }
-      if($item.IsFolder -and $item.IsFileSystem) { $map[[string]$item.Name]=[string]$item.Path }
-      elseif($item.IsLink) {
-        try { $target=$item.GetLink.Target; if($target.IsFolder -and $target.IsFileSystem) { $map[[string]$item.Name]=[string]$target.Path } } catch {}
-      }
+      $count++; if($count -gt 512 -or $clock.ElapsedMilliseconds -ge 6500) { break }
+      try {
+        $kind=''; $path=''
+        if($item.IsFolder -and $item.IsFileSystem) { $kind='folder';$path=[string]$item.Path }
+        elseif($item.IsLink) {
+          # Preserve folder-shortcut play. File shortcuts remain file icons;
+          # they are never invoked and their document contents are not read.
+          try { $target=$item.GetLink.Target; if($target.IsFolder -and $target.IsFileSystem) { $kind='folder';$path=[string]$target.Path } } catch {}
+        }
+        if(!$kind -and $item.IsFileSystem) { $kind='file';$path=[string]$item.Path }
+        if(!$kind -or !$path) { continue }
+        $entry=@{kind=$kind;path=$path}
+        AddItemAlias $map ([string]$item.Name) $entry
+        # Shell display metadata follows the user's extension-visibility setting.
+        # Do not strip extensions ourselves: Report.pdf and Report.xlsx may
+        # otherwise both be mislabeled as the same visible Report icon.
+        try { AddItemAlias $map ([string]$folder.GetDetailsOf($item,0)) $entry } catch {}
+        AddItemAlias $map ([IO.Path]::GetFileName([string]$item.Path)) $entry
+      } catch { }
     }
   } catch {}
   return $map
@@ -138,35 +162,59 @@ function VisiblePoint($rect, $windows, [int]$before) {
   return $true
 }
 function Scan {
+  # This cooperative budget returns partial results; the parent process also
+  # enforces a 10-second hard timeout if an individual UIA/COM provider hangs.
+  $clock=[Diagnostics.Stopwatch]::StartNew()
   $windows=@([BuddyWin]::Windows($OwnerPid)); $targets=[Collections.Generic.List[object]]::new()
   $shell=New-Object -ComObject Shell.Application
   $maps=@{}
-  try { foreach($window in $shell.Windows()) { $maps[[string]$window.HWND]=FolderMap $window.Document.Folder } } catch {}
+  $explorers=@{}
+  foreach($w in ($windows | Select-Object -First 12)) { if($w.cls -eq 'CabinetWClass') { $explorers[[string]$w.hwnd]=$true } }
+  $shellCount=0
+  try {
+    foreach($window in $shell.Windows()) {
+      $shellCount++; if($shellCount -gt 48 -or $clock.ElapsedMilliseconds -ge 6500) { break }
+      try {
+        $key=[string]$window.HWND
+        if(!$explorers.ContainsKey($key)) { continue }
+        if(!$maps.ContainsKey($key)) { $maps[$key]=@{} }
+        $maps[$key]=ItemMap $window.Document.Folder $clock $maps[$key]
+      } catch { }
+    }
+  } catch {}
   $desktop=[BuddyWin]::Desktop()
-  if($desktop -ne [IntPtr]::Zero) {
+  if($desktop -ne [IntPtr]::Zero -and $clock.ElapsedMilliseconds -lt 6500) {
     try {
-      $map=FolderMap $shell.NameSpace(0)
-      foreach($e in (Elements ([System.Windows.Automation.AutomationElement]::FromHandle($desktop)) 420)) {
+      $map=ItemMap $shell.NameSpace(0) $clock
+      foreach($e in (Elements ([System.Windows.Automation.AutomationElement]::FromHandle($desktop)) 420 $false $clock)) {
+        # Reserve capacity for Explorer items, browser tabs, and window edges.
+        if($targets.Count -ge 40 -or $clock.ElapsedMilliseconds -ge 6500) { break }
         if($e.Current.ControlType -ne [System.Windows.Automation.ControlType]::ListItem) { continue }
         $name=[string]$e.Current.Name; $r=Rectangle $e
-        if($map.ContainsKey($name) -and $r[2] -gt 0 -and (VisiblePoint $r $windows $windows.Count)) {
+        $entry=$map[$name]
+        if($null -ne $entry -and $r[2] -gt 0 -and $r[3] -gt 0 -and (VisiblePoint $r $windows $windows.Count)) {
           $rid=Runtime $e
-          $targets.Add(@{id="f-$($desktop.ToInt64())-$rid";kind='folder';name=$name;path=$map[$name];rect=$r;hwnd=$desktop.ToInt64();pid=$e.Current.ProcessId;runtime=$rid})
+          $targets.Add(@{id="$($entry.kind)-$($desktop.ToInt64())-$rid";kind=$entry.kind;name=$name;path=$entry.path;rect=$r;hwnd=$desktop.ToInt64();pid=$e.Current.ProcessId;runtime=$rid})
         }
       }
     } catch {}
   }
   for($index=0;$index -lt [Math]::Min(12,$windows.Count);$index++) {
+    if($targets.Count -ge 100 -or $clock.ElapsedMilliseconds -ge 6500) { break }
     $w=$windows[$index]
     if(VisiblePoint $w.rect $windows $index) { $targets.Add(@{id="w-$($w.hwnd)";kind='window';name=$w.name;rect=$w.rect;window_rect=$w.rect;hwnd=$w.hwnd;pid=$w.pid;runtime=''}) }
     if($w.cls -notin @('CabinetWClass','Chrome_WidgetWin_1','MozillaWindowClass')) { continue }
     try {
       $map=$maps[[string]$w.hwnd]
-      foreach($e in (Elements ([System.Windows.Automation.AutomationElement]::FromHandle([IntPtr]$w.hwnd)))) {
+      foreach($e in (Elements ([System.Windows.Automation.AutomationElement]::FromHandle([IntPtr]$w.hwnd)) 650 $false $clock)) {
+        if($targets.Count -ge 100 -or $clock.ElapsedMilliseconds -ge 6500) { break }
         $type=$e.Current.ControlType; $name=[string]$e.Current.Name
         $kind=''; $path=''
         if($type -eq [System.Windows.Automation.ControlType]::TabItem) { $kind='tab' }
-        elseif($null -ne $map -and $type -in @([System.Windows.Automation.ControlType]::ListItem,[System.Windows.Automation.ControlType]::DataItem) -and $map.ContainsKey($name)) { $kind='folder';$path=$map[$name] }
+        elseif($null -ne $map -and $type -in @([System.Windows.Automation.ControlType]::ListItem,[System.Windows.Automation.ControlType]::DataItem)) {
+          $entry=$map[$name]
+          if($null -ne $entry) { $kind=$entry.kind;$path=$entry.path }
+        }
         if(!$kind) { continue }
         $r=Rectangle $e
         if($r[2] -le 0 -or $r[3] -le 0 -or !(VisiblePoint $r $windows $index)) { continue }

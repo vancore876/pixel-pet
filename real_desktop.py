@@ -8,12 +8,28 @@ import unicodedata
 from PySide6.QtCore import Qt, QTimer, QObject, Signal, QAbstractNativeEventFilter, QSize, QRectF
 from PySide6.QtGui import QPainter, QKeySequence, QShortcut
 from PySide6.QtWidgets import (QApplication, QWidget, QDialog, QVBoxLayout, QHBoxLayout,
-    QLabel, QPushButton, QListWidget, QListWidgetItem, QAbstractItemView)
+    QLabel, QPushButton, QListWidget, QListWidgetItem, QAbstractItemView, QComboBox)
 from characters import draw_character
 from desktop_bridge import DesktopBridge, checked_rect
 from config import clamp_position
 from notepad_window import notes_style
 from ui_style import ui_palette, apply_workspace_window_controls
+
+
+# The first action preserves the original visit behavior for each target kind.
+# These activities only draw the buddy around a visible control or icon.
+DESKTOP_INTERACTIONS = {
+    'folder': (('hide', 'Hide and peek'), ('knock', 'Knock and listen'), ('inspect', 'Inspect folder icon')),
+    'file': (('inspect', 'Inspect file icon'), ('dust', 'Dust file icon')),
+    'tab': (('ride', 'Ride tab'), ('perch', 'Perch on tab'), ('peek', 'Peek over tab')),
+    'window': (('hang', 'Hang from window'), ('perch', 'Perch on window edge'), ('dust', 'Dust window edge')),
+}
+INTERACTION_STATES = {
+    'knock': ('KNOCK', 'LISTEN', 'HEAD_TILT'),
+    'inspect': ('INSPECT', 'HEAD_TILT', 'SNIFF'),
+    'dust': ('DUST', 'INSPECT', 'CELEBRATE'),
+    'ride': ('BALANCE',), 'hang': ('HANG',), 'perch': ('PERCH',), 'peek': ('PEEK',),
+}
 
 
 def graphemes(text):
@@ -231,21 +247,35 @@ class DesktopPanel(QDialog):
         super().__init__()
         self.desktop = desktop
         self.setWindowTitle('Jeffery · Real desktop')
-        self.resize(610, 460)
+        self.resize(650, 510)
         layout = QVBoxLayout(self)
         heading = QLabel('Places Jeffery can reach')
         heading.setStyleSheet('font-size: 20px; font-weight: 600;')
         layout.addWidget(heading)
-        hint = QLabel('Keep a folder icon or tab visible. Jeffery follows its position when the window moves.')
+        hint = QLabel('Choose a visible file, folder, tab or window, or drag Jeffery onto it. He follows its position when it moves. Icon play does not open or change your files.')
         hint.setWordWrap(True)
         layout.addWidget(hint)
         self.targets = QListWidget()
+        self.targets.currentItemChanged.connect(self.refresh_actions)
         layout.addWidget(self.targets, 1)
+        action_row = QHBoxLayout()
+        action_row.addWidget(QLabel('Activity'))
+        self.interactions = QComboBox()
+        self.interactions.setAccessibleName('Desktop activity')
+        action_row.addWidget(self.interactions, 1)
+        self.visit_button = QPushButton('Go and play')
+        self.visit_button.setObjectName('primary')
+        self.visit_button.clicked.connect(self.visit)
+        action_row.addWidget(self.visit_button)
+        layout.addLayout(action_row)
         row = QHBoxLayout()
-        for label, action in (('Refresh', desktop.bridge.scan), ('Jump / ride', self.visit), ('Select tab', self.select_tab), ('Come out', desktop.emerge)):
+        for label, action in (('Refresh', desktop.bridge.scan), ('Select tab', self.select_tab), ('Come out', desktop.emerge)):
             button = QPushButton(label)
             button.clicked.connect(action)
             row.addWidget(button)
+            if label == 'Select tab':
+                self.select_tab_button = button
+                button.setToolTip('Activate the selected tab in its app. Playing on a tab does not select it.')
         layout.addLayout(row)
         text = QPushButton('Capture selected text in 3 seconds · Ctrl+Alt+J')
         text.clicked.connect(desktop.capture_countdown)
@@ -257,14 +287,17 @@ class DesktopPanel(QDialog):
         desktop.bridge.changed.connect(self.refresh)
         desktop.bridge.status_changed.connect(self.status.setText)
         self.configure()
+        self.refresh_actions()
 
     def configure(self):
         apply_workspace_window_controls(self)
         self.setStyleSheet(notes_style(self.desktop.settings))
+        self.refresh_actions()
 
     def refresh(self):
         selected = self.targets.currentItem()
         identifier = selected.data(Qt.UserRole) if selected else ''
+        interaction = self.interactions.currentData()
         self.targets.clear()
         for target in self.desktop.bridge.targets:
             item = QListWidgetItem(f"{target['kind'].capitalize()} · {target['name']}")
@@ -274,11 +307,33 @@ class DesktopPanel(QDialog):
                 self.targets.setCurrentItem(item)
         if self.targets.currentRow() < 0 and self.targets.count():
             self.targets.setCurrentRow(0)
+        if self.targets.currentItem() and self.targets.currentItem().data(Qt.UserRole) == identifier:
+            index = self.interactions.findData(interaction)
+            if index >= 0:
+                self.interactions.setCurrentIndex(index)
+        self.refresh_actions(preserve=True)
+
+    def refresh_actions(self, *args, preserve=False):
+        if not hasattr(self, 'interactions') or not hasattr(self, 'select_tab_button'):
+            return
+        previous = self.interactions.currentData() if preserve else None
+        item = self.targets.currentItem()
+        target = self.desktop.bridge.target(item.data(Qt.UserRole)) if item else None
+        self.interactions.clear()
+        for identifier, label in DESKTOP_INTERACTIONS.get(target['kind'] if target else '', ()):
+            self.interactions.addItem(label, identifier)
+        index = self.interactions.findData(previous)
+        if index >= 0:
+            self.interactions.setCurrentIndex(index)
+        enabled = bool(target and self.desktop.settings['desktop_enabled'] and self.desktop.settings['pet_enabled'])
+        self.interactions.setEnabled(enabled)
+        self.visit_button.setEnabled(enabled and self.interactions.count() > 0)
+        self.select_tab_button.setEnabled(bool(target and target['kind'] == 'tab' and self.desktop.settings['desktop_enabled']))
 
     def visit(self):
         item = self.targets.currentItem()
         if item:
-            self.status.setText(self.desktop.visit(item.data(Qt.UserRole)))
+            self.status.setText(self.desktop.visit(item.data(Qt.UserRole), self.interactions.currentData()))
 
     def select_tab(self):
         item = self.targets.currentItem()
@@ -292,6 +347,7 @@ class RealDesktopPlay(QObject):
         self.pet, self.settings = pet, settings
         self.bridge = bridge or DesktopBridge(settings, self)
         self.active_id, self.pending_id = '', ''
+        self.interaction, self.phase, self.automatic = '', 0, False
         self.activity_blocked = lambda: False
         self.leave_other = lambda: None
         self.anchor, self.origin = None, None
@@ -301,6 +357,9 @@ class RealDesktopPlay(QObject):
         self.return_timer = QTimer(self)
         self.return_timer.setSingleShot(True)
         self.return_timer.timeout.connect(self.emerge)
+        self.action_timer = QTimer(self)
+        self.action_timer.setSingleShot(True)
+        self.action_timer.timeout.connect(self.advance_interaction)
         self.peek_timer = QTimer(self)
         self.peek_timer.setInterval(2600)
         self.peek_timer.timeout.connect(self.toggle_peek)
@@ -325,8 +384,16 @@ class RealDesktopPlay(QObject):
         self.panel.configure()
         self.text_window.configure()
         self.peek_sprite.update()
+        self.follow_timer.setInterval(900 if self.settings['low_power'] else 300)
+        self.peek_sprite.timer.setInterval(400 if self.settings['low_power'] else 200)
         if not self.settings['desktop_enabled'] or not self.settings['pet_enabled']:
             self.emerge(silent=True)
+        elif self.automatic and self.automatic_blocked():
+            self.emerge(silent=True)
+
+    def automatic_blocked(self):
+        return bool(self.settings['quiet_mode'] or self.settings['low_power']
+                    or self.pet.paused or self.activity_blocked())
 
     def show_panel(self):
         self.panel.refresh()
@@ -334,21 +401,33 @@ class RealDesktopPlay(QObject):
         self.panel.raise_()
         self.bridge.scan()
 
-    def visit(self, identifier):
+    def visit(self, identifier, interaction=None):
         target = self.bridge.target(identifier)
         if not target:
             return 'That desktop target is no longer visible. Refresh the list.'
         if not self.settings['desktop_enabled'] or not self.settings['pet_enabled']:
             return 'Enable the buddy and real desktop play in Settings first.'
+        choices = DESKTOP_INTERACTIONS.get(target['kind'], ())
+        interaction = interaction or (choices[0][0] if choices else '')
+        if interaction not in dict(choices):
+            return 'Choose an activity for this type of desktop target.'
         self.leave_other()
         self.emerge(silent=True)
         self.origin = [self.pet.x(), self.pet.y()]
         self.anchor = dict(target)
         self.pending_id = identifier
+        self.interaction, self.phase = interaction, 0
+        self.pet.hop_to(self.target_position(target), 'desktop:' + identifier)
+        self.follow_timer.start()
+        return dict(choices)[interaction] + ' · ' + target['name'] + '.'
+
+    def target_position(self, target):
         rect = self.bridge.rect(target)
-        y = rect.center().y() - self.pet.height() // 2 if target['kind'] == 'folder' else rect.top() - self.pet.height() + 22
-        self.pet.hop_to([rect.center().x() - self.pet.width() // 2, y], 'desktop:' + identifier)
-        return ('Hiding at ' if target['kind'] == 'folder' else 'Jumping onto ') + target['name'] + '.'
+        if self.interaction == 'hide':
+            y = rect.center().y() - self.pet.height() // 2
+        else:
+            y = rect.top() - self.pet.height() + 22
+        return [rect.center().x() - self.pet.width() // 2, y]
 
     def arrived(self, identifier):
         if identifier == 'screen-text':
@@ -356,22 +435,44 @@ class RealDesktopPlay(QObject):
             return
         if not identifier.startswith('desktop:') or identifier[8:] != self.pending_id:
             return
+        if self.automatic and self.automatic_blocked():
+            self.emerge(silent=True)
+            return
         target = self.bridge.target(self.pending_id)
         self.active_id, self.pending_id = self.pending_id, ''
         if not target:
             self.emerge(silent=True)
             return
-        if target['kind'] == 'folder':
+        if self.interaction == 'hide':
             self.pet.hide_in('desktop:' + self.active_id)
             self.peek_timer.start()
         else:
-            self.pet.perform('BALANCE' if target['kind'] == 'tab' else 'HANG', self.settings['hide_seconds'] + 1)
+            self.advance_interaction()
         self.return_timer.start(self.settings['hide_seconds'] * 1000)
+        self.follow_target()
         if sys.platform == 'win32':
-            self.follow_timer.start()
+            self.follow_window()
+
+    def advance_interaction(self):
+        if not self.active_id or self.interaction == 'hide':
+            return
+        if not self.bridge.target(self.active_id) or (self.automatic and self.automatic_blocked()):
+            self.emerge(silent=True)
+            return
+        states = INTERACTION_STATES[self.interaction]
+        state = states[min(self.phase, len(states) - 1)]
+        self.pet.perform(state, self.settings['hide_seconds'] + 1)
+        self.phase += 1
+        if self.phase < len(states):
+            self.action_timer.start(max(600, min(2200, self.settings['hide_seconds'] * 1000 // len(states))))
 
     def follow_window(self):
-        if not self.active_id or not self.anchor or 'window_rect' not in self.anchor:
+        if self.automatic and self.automatic_blocked():
+            self.emerge(silent=True)
+            return
+        if sys.platform != 'win32':
+            return
+        if not (self.active_id or self.pending_id) or not self.anchor or 'window_rect' not in self.anchor:
             return
         from ctypes import wintypes
         user32 = ctypes.windll.user32
@@ -392,21 +493,28 @@ class RealDesktopPlay(QObject):
         self.follow_target(moved)
 
     def follow_target(self, moved=None):
-        if not self.active_id:
+        identifier = self.active_id or self.pending_id
+        if not identifier:
             return
-        target = moved or self.bridge.target(self.active_id)
+        target = moved or self.bridge.target(identifier)
         if not target:
             self.emerge(silent=True)
             return
         if moved is None:
             self.anchor = dict(target)
+        if self.pending_id:
+            # Retarget the existing arc without restarting it as the window moves.
+            if self.pet.hop_motion:
+                point = clamp_position(self.target_position(target), self.pet.width(), self.pet.height(), QApplication.screens())
+                self.pet.hop_motion.end_x, self.pet.hop_motion.end_y = point.x(), point.y()
+            return
         rect = self.bridge.rect(target)
-        if target['kind'] == 'folder':
+        if self.interaction == 'hide':
             size = max(48, min(72, self.settings['pet_size']))
             self.peek_sprite.resize(size, size)
             self.peek_sprite.move(clamp_position([rect.center().x() - size // 2, rect.top() - size // 3], size, size, QApplication.screens()))
         elif not self.pet.drag_offset:
-            point = clamp_position([rect.center().x() - self.pet.width() // 2, rect.top() - self.pet.height() + 22], self.pet.width(), self.pet.height(), QApplication.screens())
+            point = clamp_position(self.target_position(target), self.pet.width(), self.pet.height(), QApplication.screens())
             self.pet.move(point)
             self.pet.real_x, self.pet.real_y = float(point.x()), float(point.y())
             self.pet.position_bubble()
@@ -419,18 +527,21 @@ class RealDesktopPlay(QObject):
     def peek(self):
         if self.active_id and self.pet.hidden_in.startswith('desktop:'):
             self.follow_target()
-            self.peek_sprite.show()
-            return 'Peeking out of the real folder icon.'
+            if self.active_id:
+                self.peek_sprite.show()
+                return 'Peeking out of the real folder icon.'
         return 'Jeffery is already out here.'
 
     def emerge(self, silent=False):
         self.return_timer.stop()
+        self.action_timer.stop()
         self.peek_timer.stop()
         self.follow_timer.stop()
         self.peek_sprite.hide()
         was_hidden = self.pet.hidden_in.startswith('desktop:')
         active = bool(self.active_id or self.pending_id)
         self.active_id, self.pending_id = '', ''
+        self.interaction, self.phase, self.automatic = '', 0, False
         if was_hidden:
             self.pet.come_out([self.pet.x(), self.pet.y()])
             if not silent:
@@ -438,34 +549,48 @@ class RealDesktopPlay(QObject):
         elif active:
             self.pet.cancel_hop()
             self.pet.action_state = None
+            self.pet.queued_action = None
             if not silent:
                 self.pet.begin_drop()
-        self.anchor = None
+        self.anchor, self.origin = None, None
         return 'Back on the desktop.'
 
     def drop_on_target(self, position):
         x, y = position
-        target = next((t for t in self.bridge.targets if self.bridge.rect(t).adjusted(-14, -14, 14, 14).contains(x, y)), None)
+        candidates = [t for t in self.bridge.targets if self.bridge.rect(t).adjusted(-14, -14, 14, 14).contains(x, y)]
+        # A folder/file/tab sits inside its parent window. Prefer the actual
+        # small control under the pointer to the window returned earlier by UIA.
+        target = min(candidates, key=lambda t: (t['kind'] == 'window',
+                     not self.bridge.rect(t).contains(x, y),
+                     self.bridge.rect(t).width() * self.bridge.rect(t).height()), default=None)
         if target:
             self.visit(target['id'])
 
-    def jump_path(self, path, position=None):
+    def jump_path(self, path, position=None, interaction=None):
         from pathlib import Path
-        target = next((t for t in self.bridge.targets if t['kind'] == 'folder' and str(Path(t['path'])).casefold() == str(Path(path)).casefold()), None)
+        # Path comparison only: importing, opening and reading files are separate
+        # explicit workflows elsewhere in the app.
+        target = next((t for t in self.bridge.targets if t['kind'] in ('folder', 'file') and t.get('path') and str(Path(t['path'])).casefold() == str(Path(path)).casefold()), None)
         if target:
-            return self.visit(target['id'])
+            return self.visit(target['id'], interaction)
         self.bridge.scan()
-        self.pet.say('Keep that folder icon visible, then choose it in Real desktop.')
+        self.pet.say('Keep that file or folder icon visible, then choose it in Real desktop.')
         self.show_panel()
-        return 'Bring the real folder icon into view and refresh.'
+        return 'Bring the real file or folder icon into view and refresh.'
 
     def random_visit(self):
         if not (self.settings['desktop_random'] and self.settings['playful'] and self.settings['desktop_enabled'] and self.settings['pet_enabled']):
             return
-        if self.activity_blocked() or self.pet.paused or self.pet.hidden_in or self.pet.hop_motion or self.pet.drop_motion or self.pet.drag_offset or self.pet.action_state:
+        if self.automatic_blocked():
+            return
+        if self.pet.hidden_in or self.pet.hop_motion or self.pet.drop_motion or self.pet.drag_offset or self.pet.action_state:
             return
         if self.bridge.targets and random.random() < 0.55:
-            self.visit(random.choice(self.bridge.targets)['id'])
+            target = random.choice(self.bridge.targets)
+            choices = DESKTOP_INTERACTIONS.get(target['kind'], ())
+            if choices:
+                self.visit(target['id'], random.choice(choices)[0])
+                self.automatic = bool(self.pending_id)
 
     def select_tab(self, identifier):
         target = self.bridge.target(identifier)

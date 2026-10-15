@@ -18,13 +18,13 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QImage, QPainter
 from PySide6.QtWidgets import QApplication
 
-from characters import ANIMATION_STATES, BUSINESS_ANIMATIONS, draw_character
+from characters import ANIMATION_STATES, draw_character
 
 FRAME_SIZE = 96
 FRAME_COUNT = 8
-# The phone renderer has a fixed 49-row contract; business poses are desktop-only.
-MOBILE_STATES = tuple(state for state in ANIMATION_STATES
-                      if state not in {key for _, key in BUSINESS_ANIMATIONS})
+# The phone renderer has a fixed 49-row contract. Appended desktop poses must
+# never silently change the row count or the phone's animation coordinates.
+MOBILE_STATES = ANIMATION_STATES[:49]
 
 
 def export_sheets(destination: Path) -> None:

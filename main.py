@@ -39,7 +39,7 @@ from real_desktop import RealDesktopPlay
 from ai_brain import AutonomousBrain
 from smart_notes import SmartNoteAssistant
 from business_voice import BusinessVoice
-from characters import ANIMATION_STATES, BUSINESS_ANIMATIONS
+from characters import ANIMATION_STATES, BUSINESS_ANIMATIONS, CHARACTER_CHOICES, COMPANION_ANIMATIONS
 from auto_parts import dashboard_summary
 from memory import MemoryStore
 from memory_window import MemoryWindow
@@ -294,7 +294,7 @@ class BuddyApp(QObject):
         self.refresh_quick_menu()
         menu.addSeparator()
         play = menu.addMenu("Desktop Play")
-        play.addAction("Real Folders, Tabs and Windows", self.desktop.show_panel)
+        play.addAction("Real Files, Folders, Tabs and Windows", self.desktop.show_panel)
         play.addAction("Jump into a Real Folder", lambda: self.run_buddy_action({"action": "hide"}))
         play.addAction("Ride a Real Tab", lambda: self.run_buddy_action({"action": "ride_tab"}))
         play.addAction("Selected Letters · Ctrl+Alt+J", self.desktop.capture_countdown)
@@ -320,11 +320,15 @@ class BuddyApp(QObject):
         business_states = {state for _, state in BUSINESS_ANIMATIONS}
         for label, state in BUSINESS_ANIMATIONS:
             business_moves.addAction(label, lambda checked=False, value=state: self.pet.interact(value))
+        companion_moves = interact_menu.addMenu("Companion Moves")
+        companion_states = {state for _, state in COMPANION_ANIMATIONS}
+        for label, state in COMPANION_ANIMATIONS:
+            self.interact_actions[state] = companion_moves.addAction(label, lambda checked=False, value=state: self.pet.interact(value))
         expressions = tricks.addMenu("Expressions")
         props = tricks.addMenu("Props and Tricks")
         movement = tricks.addMenu("Movement")
         for state in ANIMATION_STATES[25:]:
-            if state in business_states:
+            if state in business_states or state in companion_states:
                 continue
             group = expressions if state in {"SNEEZE", "SCARED", "LAUGH", "GROOM", "SALUTE", "FACEPALM"} else props if state in {"MAGIC", "UMBRELLA", "JUGGLE"} else movement
             group.addAction(state.replace('_', ' ').title(), lambda checked=False, s=state: self.run_buddy_action({'action': 'animate', 'animation': s}))
@@ -337,7 +341,7 @@ class BuddyApp(QObject):
         self.free_action.triggered.connect(lambda checked: self.apply_settings({"roaming_mode": "free" if checked else "bottom"}))
         characters = buddy.addMenu("Choose Character")
         self.character_actions = {}
-        for label, character in (("Robot", "robot"), ("Cat", "cat"), ("Knight", "knight")):
+        for label, character in CHARACTER_CHOICES:
             action = characters.addAction(label)
             action.setCheckable(True)
             action.setChecked(self.settings["character"] == character)
@@ -680,13 +684,13 @@ class BuddyApp(QObject):
         if kind == "come_out":
             self.emerge_all(silent=False)
             return 'Back on the desktop.'
-        if kind in ('ride_tab', 'window_edge', 'select_tab'):
-            desired = 'window' if kind == 'window_edge' else 'tab'
+        if kind in ('ride_tab', 'window_edge', 'select_tab', 'inspect_file'):
+            desired = {'window_edge': 'window', 'inspect_file': 'file'}.get(kind, 'tab')
             name = action.get('target_name', '').casefold()
             matches = [t for t in self.desktop.bridge.targets if t['kind'] == desired and (not name or name in t['name'].casefold())]
             if name and len(matches) != 1 and not action.get('target_id'):
                 self.desktop.show_panel()
-                return 'Choose the matching tab or window in Real desktop.'
+                return 'Choose the matching ' + desired + ' in Real desktop.'
             identifier = action.get('target_id') or (matches[0]['id'] if matches else None)
             if not identifier:
                 self.desktop.show_panel()

@@ -8,6 +8,7 @@ from pathlib import Path
 import json
 import sys
 from settings import AppSettings
+from characters import CHARACTER_CHOICES
 from ui_style import apply_window_style
 
 class SettingsWindow(QDialog):
@@ -110,7 +111,7 @@ class SettingsWindow(QDialog):
         name.setMaxLength(20)
         self.controls["pet_name"] = name
         pet.addRow("Buddy name", name)
-        self.combobox(pet, "character", "Character", [("Robot", "robot"), ("Cat", "cat"), ("Knight", "knight")])
+        self.combobox(pet, "character", "Character", CHARACTER_CHOICES)
         self.combobox(pet, "pet_palette", "Character color", [("Mint", "mint"), ("Sky", "sky"), ("Amber", "amber"), ("Rose", "rose")])
         self.combobox(pet, "roaming_mode", "Walking area", [("Bottom of screen", "bottom"), ("Free Buddy: whole screen", "free")])
         self.spinbox(pet, "pet_size", "Buddy size", 48, 160, " px", 24)
@@ -124,12 +125,12 @@ class SettingsWindow(QDialog):
         self.checkbox(pet, "playful", "Play animations during breaks")
         self.combobox(pet, "mouse_mode", "Mouse play", [("Off", "off"), ("Watch and greet", "watch"), ("Chase the cursor", "chase"), ("Shy: run away", "shy")])
         self.section(pet, "Desktop interactions")
-        self.checkbox(pet, "desktop_enabled", "Explore visible folders, tabs and text")
-        self.checkbox(pet, "desktop_random", "Visit folders and tab edges during breaks")
+        self.checkbox(pet, "desktop_enabled", "Explore visible files, folders, tabs and text")
+        self.checkbox(pet, "desktop_random", "Visit visible icons and tab edges during breaks")
         self.checkbox(pet, "folder_play", "Allow optional folder portal toys")
         self.checkbox(pet, "portal_toys", "Show the separate folder portal toys")
         self.spinbox(pet, "hide_seconds", "Hide-and-seek duration", 3, 120, " sec")
-        self.hint(pet, "Parachuting lands at the bottom in either walking mode. Turn it off to keep a dragged height in Free Buddy mode. Click Jeffery to pet him; use his menu to feed or play.")
+        self.hint(pet, "Click Jeffery to pet him; use Play with Jeffery for companion moves. Drag him onto a visible icon or tab to visit it. Smooth movement slows in Low power mode. Parachuting lands at the bottom; turn it off to keep a dragged height in Free Buddy mode.")
         look = self.tab("Appearance", "Choose a comfortable look for your workspace and desktop companion.")
         self.combobox(look, "interface_appearance", "Workspace appearance", [("Light", "light"), ("Dark", "dark"), ("Follow Windows", "system")])
         self.hint(look, "Home, notebook, chat and settings use this appearance. Follow Windows uses your computer's current light or dark preference.")

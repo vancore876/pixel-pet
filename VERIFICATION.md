@@ -1,5 +1,31 @@
 # Jeffery 6.0 verification
 
+The companion and desktop-play update passed all 777 desktop unit tests and
+all 13 Qt GUI workflows on Python 3.12/Linux offscreen Qt. The real BuddyApp
+workflow selected all seven characters through the menu, played all ten new
+companion poses, saved/reloaded the selection, and routed a visible file icon
+through the coordinator to an inspection animation. Render checks exercised
+fractional frames and gaze, all 65 states on every character, distinctive
+silhouettes, lit surfaces, both directions, small/large sizes, parachutes, and
+the tiny tray footprint. New gallery and animation previews were inspected.
+
+Motion checks verified equal travel speed and animation duration at smooth and
+Low power cadences, resting/hidden timer behavior, and custom PNG playback.
+Desktop interaction checks covered overlapping icons, moving targets, closure
+during a hop, minimization, activity sequences, quiet/paused/busy deferral, and
+cleanup. File-icon play performs no file operation or automatic tab selection.
+File paths stay local; file names enter AI context only when name sharing is
+enabled. File contents are never part of icon play.
+
+Ten file-target checks included four executed PowerShell metadata tests for
+hidden extensions, ambiguous labels, shortcuts, provider failures, bounds and
+occlusion. They used mocked Shell objects in checksum-verified upstream
+PowerShell 7.4.13 on Linux. Actual Windows Shell/UI Automation discovery, native
+desktop coordinates and work-PC deployment still need validation on Windows.
+Source startup smoke passed. Existing desktop dependencies suffice; the extra
+PowerShell runtime is optional cloud test tooling. Mobile sprite ordering stays
+at its existing 49 rows; mobile assets and behavior were not changed.
+
 The compact notification and window controls update passed all 741 desktop
 unit tests and all 13 Qt GUI workflows on Python 3.12/Linux offscreen Qt.
 Two real HTTP background-notification cases and the full BuddyApp office workflow

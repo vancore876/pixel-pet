@@ -17,15 +17,15 @@ from ai_privacy import (filtered_ai_context, note_allowed_for_ai, notes_allowed_
 ENDPOINT = "https://api.groq.com/openai/v1/chat/completions"
 ACTIONS = ("pet", "feed", "wave", "dance", "jump", "nap", "hide", "peek", "come_out",
            "follow_mouse", "shy_mouse", "watch_mouse", "stop_mouse", "letters", "draft_note", "open_notepad",
-           "ride_tab", "select_tab", "window_edge", "selected_text", "animate")
+           "ride_tab", "select_tab", "window_edge", "inspect_file", "selected_text", "animate")
 TOOL = {"type": "function", "function": {"name": "buddy_action",
-    "description": "Perform play only when the user explicitly asks. hide uses a visible real folder; ride_tab perches on a real tab; select_tab selects it only on request. selected_text starts a countdown to capture the user's selection, with a drag-letter preview and explicit Apply. letters is the optional toy. Never call play tools when answering an unrelated question.",
+    "description": "Perform play only when the user explicitly asks. hide uses a visible real folder; ride_tab perches on a real tab; select_tab selects it only on request. inspect_file plays a visual inspection beside a visible file icon without reading, opening or changing its contents. selected_text starts a countdown to capture the user's selection, with a drag-letter preview and explicit Apply. letters is the optional toy. Never call play tools when answering an unrelated question.",
     "parameters": {"type": "object", "properties": {
         "action": {"type": "string", "enum": list(ACTIONS)},
         "text": {"type": "string", "description": "Text for letter play, up to 48 characters."},
         "folder_name": {"type": "string", "description": "Optional name from the registered hideouts in context."},
         "target_id": {"type": "string", "description": "A visible real desktop target ID from context."},
-        "target_name": {"type": "string", "description": "A folder, tab or window name supplied by the user, matched locally."},
+        "target_name": {"type": "string", "description": "A file icon, folder, tab or window name supplied by the user, matched locally."},
         "animation": {"type": "string", "description": "An animation state listed in context."},
         "title": {"type": "string"}, "body": {"type": "string"},
         "repeat_minutes": {"type": "integer", "minimum": 0, "maximum": 1440}},
@@ -35,8 +35,10 @@ TOOL = {"type": "function", "function": {"name": "buddy_action",
 def play_requested(text):
     """Ordinary questions do not offer animation tools to the model."""
     text = text.casefold().strip()
-    if re.match(r'^(?:what|why|how|when|where|explain|tell me about)\b', text) or re.search(r"\b(?:don't|do not)\s+(?:wave|dance|hide|jump|play|animate)\b", text):
+    if re.match(r'^(?:what|why|how|when|where|explain|tell me about)\b', text) or re.search(r"\b(?:don't|do not)\s+(?:wave|dance|hide|jump|play|animate|inspect|dust|perch|sniff|flap)\b", text):
         return False
+    if re.search(r'\b(?:inspect|dust|perch on)\s+(?:(?:this|that|the|my|a)\s+)?(?:file|[\w .-]{1,100})\s+icon\b', text):
+        return True
     return bool(re.search(r'\b(?:wave|dance|hide|peek|come out|chase|pet you|feed you|take a nap|follow (?:my|the) mouse|shy|stop play|jump|ride (?:a|the|my)|(?:select|switch to) (?:a |the |my )?(?:tab|.+ tab)|play with|animate|do a|open (?:your |the )?notepad|draft (?:a |me a )?note)\b', text))
 
 

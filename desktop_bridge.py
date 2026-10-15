@@ -4,7 +4,7 @@ import json
 import os
 import sys
 import ctypes
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from PySide6.QtCore import QObject, QTimer, QProcess, QRect, Signal
 from PySide6.QtWidgets import QApplication
 from config import ROOT
@@ -24,15 +24,22 @@ def validate_targets(payload):
     targets, seen = [], set()
     for raw in payload["targets"][:100]:
         try:
-            if not isinstance(raw, dict) or raw.get("kind") not in ("folder", "tab", "window"):
+            if not isinstance(raw, dict) or raw.get("kind") not in ("folder", "file", "tab", "window"):
                 continue
             identifier = raw["id"]
             if not isinstance(identifier, str) or not identifier or len(identifier) > 160 or identifier in seen:
                 continue
             if type(raw["hwnd"]) is not int or raw["hwnd"] <= 0 or type(raw["pid"]) is not int or raw["pid"] <= 0:
                 continue
+            path = raw.get("path", "")
+            if not isinstance(path, str) or len(path) > 1000 or "\x00" in path:
+                continue
+            if raw["kind"] == "file" and not PureWindowsPath(path).is_absolute():
+                # Native file targets carry the Shell's exact filesystem path,
+                # never a guessed label, virtual item, or a truncated path.
+                continue
             target = {"id": identifier, "kind": raw["kind"], "rect": checked_rect(raw["rect"]),
-                      "name": str(raw.get("name", ""))[:300], "path": str(raw.get("path", ""))[:1000],
+                      "name": str(raw.get("name", ""))[:300], "path": path,
                       "hwnd": raw["hwnd"], "pid": raw["pid"], "runtime": str(raw.get("runtime", ""))[:160]}
             if raw.get('window_rect') is not None:
                 target['window_rect'] = checked_rect(raw['window_rect'])
@@ -189,7 +196,7 @@ class DesktopBridge(QObject):
         try:
             self.targets = validate_targets(result)
             self.monitors = result.get("monitors", [])[:16]
-            self.set_status(f"{len(self.targets)} visible targets · folders, tabs, and window edges")
+            self.set_status(f"{len(self.targets)} visible targets · files, folders, tabs, and window edges")
         except (ValueError, TypeError):
             self.targets = []
             self.set_status("Windows returned an incomplete desktop scan.")

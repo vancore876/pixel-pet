@@ -111,8 +111,8 @@ class BusinessAnimationTests(unittest.TestCase):
     def test_original_state_order_and_unique_new_states(self):
         self.assertEqual(MOBILE_STATES, LEGACY_STATES)
         self.assertEqual(ANIMATION_STATES[:49], LEGACY_STATES)
-        self.assertEqual(ANIMATION_STATES[49:], tuple(state for _, state in BUSINESS_ANIMATIONS))
-        self.assertEqual(len(set(ANIMATION_STATES)), 55)
+        self.assertEqual(ANIMATION_STATES[49:55], tuple(state for _, state in BUSINESS_ANIMATIONS))
+        self.assertEqual(len(set(ANIMATION_STATES)), 65)
 
     def test_every_pose_has_visible_animation_and_fits_all_characters_and_sizes(self):
         for character in ('robot', 'cat', 'knight'):
@@ -124,15 +124,13 @@ class BusinessAnimationTests(unittest.TestCase):
                         self.assertNotEqual(pixels(frames[0]), idle)
                         # Props occupy the right/front of each pose, away from the
                         # antenna and eyes whose motion is shared by legacy poses.
-                        unit = max(1, size // 32)
-                        offset = (size - unit * 32) // 2
+                        unit = size / 32
                         region = {'CHECK_STOCK': (20, 16, 11, 15), 'SCAN_PART': (16, 18, 15, 13),
                                   'PACK_ORDER': (10, 21, 14, 10), 'WRENCH': (20, 16, 11, 15),
                                   'HIGH_FIVE': (24, 9, 7, 12), 'COFFEE': (20, 17, 11, 14)}[state]
                         x, y, width, height = region
-                        y_offset = size - unit * 32
-                        crops = {pixels(image.copy(offset + x * unit, y_offset + y * unit,
-                                                   width * unit, height * unit)) for image in frames}
+                        crops = {pixels(image.copy(round(x * unit), round(y * unit),
+                                                   round(width * unit), round(height * unit))) for image in frames}
                         self.assertGreater(len(crops), 1, 'The business prop did not animate')
                         for direction in (-1, 1):
                             image = rendered(character, state, size, 9, direction, padding=4)
@@ -153,7 +151,7 @@ class BusinessAnimationTests(unittest.TestCase):
             pet.interact(state)
             self.assertEqual(pet.action_state, state)
             self.assertEqual(pet.frame, 0)
-            self.assertEqual(pet.timer.interval(), 100)
+            self.assertEqual(pet.timer.interval(), 33)
         self.assertIn('part number', said[1])
         self.assertIn('Famous Twins', said[4])
         self.assertFalse(any('I checked' in text or 'in stock' in text for text in said))

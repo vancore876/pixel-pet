@@ -232,19 +232,31 @@ to work with this interface. See [Famous Twins workflow](FAMOUS_TWINS.md) and
 
 ## A more lifelike virtual buddy
 
-The built-in robot, cat, and knight use rounded forms, material shading, soft
-highlights, expressive eyes, and gentle breathing. A subtle cyan ground light
-keeps their virtual companion feel. The original 49 animation states, palette
-choices, and desktop interactions remain available, plus six desktop business
-poses for 55 desktop states. The mobile app uses the original
-character renderer and adds a quiet halo around its pet stage.
+Choose **Robot, Cat, Knight, Dog, Fox, Owl, or Dragon** in **Settings → Your buddy →
+Character**, or **Buddy Controls → Choose Character**. Rounded bodies, shaded
+fur/feathers/scales, expressive eyes, breathing, ear movement, tails, and wings
+give each companion its own shape and personality. The animals keep their
+natural coats; the palette also supplies their accessory colors.
 
-![Original and updated virtual companions](preview/virtual-pets.png)
+Active desktop movement now updates about 30 times a second with time-based
+animation and smooth eye tracking. Low power keeps movement speed consistent
+while reducing updates; resting characters update more slowly and hidden pets
+stop their animation timer.
+
+**Play with Jeffery → Companion Moves** adds head tilting, sniffing, listening,
+knocking, dusting, inspecting, perching, fluttering, fetching, and curling up.
+All seven characters support the 65 desktop animation states, including the
+existing six business poses. The mobile app retains its existing three-character,
+49-state sprite layout.
+
+![Seven desktop companions inspecting icons and curling up](preview/companion-characters.png)
+
+![Companion flutter and stretch animations](preview/companion-moves.gif)
 
 After changing `characters.py`, regenerate the mobile animation sheets with
 `python tools/export_pet_sprites.py` from an environment with the desktop
 dependencies installed. The exporter keeps the eight-frame, 49-state layout
-used by the phone app, excluding the six desktop business poses. Local notebook
+used by the phone app, excluding the desktop business and companion poses. Local notebook
 data, credentials, installed dependencies,
 and generated build outputs are excluded from Git.
 
@@ -287,7 +299,8 @@ the Windows desktop app. The mobile companion keeps its existing workflow.
 | Tiny HUD, 224 pixels wide | On by default; Settings → PC monitor → Use the small 224-pixel monitor |
 | 49 animation states, including 24 new moves | Random play; Play with Jeffery → More Moves |
 | Six desktop business animations | Play with Jeffery → At the Parts Counter; stock check, part scan, packing, wrench, high five, coffee |
-| Actual visible folder icons | Desktop Play → Real Folders, Tabs and Windows |
+| Visible files, folders, tabs and windows | Desktop Play → Real Files, Folders, Tabs and Windows → choose an Activity → Go and play |
+| Seven characters and ten companion moves | Settings → Your buddy → Character; Play with Jeffery → Companion Moves |
 | Actual browser or Explorer tab controls | Choose a tab → Jump / ride, or Select tab |
 | Selected letters from an editor | Select text → Ctrl+Alt+J → drag letters → Apply to editor |
 | Groq chooses occasional actions and remarks | Ask Jeffery → AI setup → Show preferences and privacy → Let Groq choose occasional moves |
@@ -521,25 +534,32 @@ to the larger detailed layout. The old Compact
 layout option controls that larger view. Graphs, opacity, metrics, refresh rate,
 click-through, and visibility are still configurable.
 
-## Real folders, tabs, and windows
+## Real files, folders, tabs, and windows
 
-Open **Desktop Play → Real Folders, Tabs and Windows**. The list comes from
+Open **Desktop Play → Real Files, Folders, Tabs and Windows**. The list comes from
 Windows Shell and UI Automation; it contains visible real controls.
 
 - Keep a folder icon visible on the desktop or in File Explorer. Select it in
-  the list and click **Jump / ride**. Jeffery hops to its screen position, hides,
-  peeks, and returns after the configured hide duration.
-- Drag Jeffery onto a detected folder or tab and release to visit it.
-- Select a real tab and click **Jump / ride** to perch and balance on its edge.
+  the list, choose **Hide and peek**, and click **Go and play**. Jeffery hops to
+  its screen position, hides, peeks, and returns after the configured duration.
+  **Knock and listen** and **Inspect folder icon** are available too.
+- Select a file icon and choose **Inspect file icon** or **Dust file icon**.
+  Jeffery uses a magnifying glass or duster beside it, then reacts and returns.
+- Drag Jeffery onto a detected file, folder, or tab and release to visit it.
+  You can also drag a visible file or folder onto Jeffery. Smaller icons take
+  priority over their containing window.
+- Select a real tab and choose **Ride tab**, **Perch on tab**, or **Peek over tab**.
   **Select tab** is a separate requested operation that actually selects the
   tab through Windows.
-- Select a window to let Jeffery hang from its top edge.
+- Select a window to let Jeffery hang, perch, or dust along its top edge.
 - When an active target moves, Jeffery follows it. When it closes or becomes
   unavailable, he comes out. Note reminders also bring him out.
 - Choose **Come Out / Stop Play** to stop the current visit.
 
-Folders are matched to their real Shell items. Hiding is an animation positioned
-at the actual icon; it does not rename, move, delete, or open the directory.
+Files and folders are matched to their real Shell items, including hidden file
+extensions and folder shortcuts. Ambiguous labels are left out of the scan.
+These interactions animate at the icon; they do not read file contents, rename,
+move, delete, or open the item. PDF/Excel imports remain separate workflows.
 The peek sprite is a small transparent overlay aligned with the icon.
 
 Windows automation support varies by application. Explorer and compatible
@@ -550,9 +570,10 @@ General scans run about every eight seconds; an active window gets lightweight
 position updates every 300 milliseconds. Low power slows the general scan.
 Tree depth, target count, request size, queue length, and response time are bounded.
 
-**Randomly visit visible folders and tab edges** is enabled by default in Buddy
-Settings. Switch it off to keep random tricks without desktop visits.
-**Interact with real Windows folders, tabs and text** disables all native play.
+**Visit visible icons and tab edges during breaks** is enabled by default in
+**Settings → Your buddy**. Quiet mode, Low power, Pause Buddy, and busy activities
+defer these automatic visits. Switch the option off to keep random tricks without
+desktop visits. **Explore visible files, folders, tabs and text** controls native play.
 The native helper uses the Windows PowerShell and UI Automation components
 already on Windows; there are no new Python dependencies.
 
@@ -651,7 +672,7 @@ Local slash commands work without Groq:
 
 ## More life and mouse play
 
-Choose Robot, Cat, or Knight and Mint, Sky, Amber, or Rose. New poses include
+Choose any of the seven companions and Mint, Sky, Amber, or Rose accents. Poses include
 stretching, spinning, flipping, rolling, sneezing, surprise, laughing, sitting,
 balancing, tiptoeing, running, climbing, sliding, skating, bouncing, magic,
 an umbrella, juggling, grooming, saluting, facepalming, leaning, hanging, and sneaking.
@@ -764,7 +785,7 @@ errors. No automatic installation at login occurs unless Start with Windows is e
 
 ## Validation and practical limits
 
-The desktop unit suite passed 741 tests with Python 3.12 and Linux offscreen Qt.
+The desktop unit suite passed 777 tests with Python 3.12 and Linux offscreen Qt.
 All 13 GUI workflows passed, including readable Home counts, background office
 message popups, account recovery and permanent deletion, shared Excel inventory,
 two-PC shared-folder messaging, and customer reminders. Compact/expanded cards

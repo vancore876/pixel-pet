@@ -15,6 +15,7 @@ from desktop_bridge import DesktopBridge
 from ai_brain import AutonomousBrain
 from credentials import CredentialStore
 from ai_chat import ChatWindow
+from characters import CHARACTER_CHOICES, COMPANION_ANIMATIONS
 
 
 qInstallMessageHandler(lambda kind, context, text: print(text, file=sys.stderr) if 'This plugin does not support' not in text else None)
@@ -28,7 +29,8 @@ preview.mkdir(parents=True, exist_ok=True)
 errors, state = [], {}
 targets = [{'id': 'real-folder', 'kind': 'folder', 'name': 'Projects', 'path': str(root), 'rect': [160, 170, 92, 92], 'hwnd': 2048, 'pid': 10, 'runtime': '42,10'},
            {'id': 'real-tab', 'kind': 'tab', 'name': 'Project notes — Browser', 'rect': [420, 150, 180, 34], 'hwnd': 3072, 'pid': 20, 'runtime': '42,20'},
-           {'id': 'real-window', 'kind': 'window', 'name': 'JefferyNotes.txt — Notepad', 'rect': [120, 340, 460, 380], 'hwnd': 4096, 'pid': 30, 'runtime': ''}]
+           {'id': 'real-window', 'kind': 'window', 'name': 'JefferyNotes.txt — Notepad', 'rect': [120, 340, 460, 380], 'hwnd': 4096, 'pid': 30, 'runtime': ''},
+           {'id': 'real-file', 'kind': 'file', 'name': 'Private stock list.xlsx', 'path': r'C:\Parts\Private stock list.xlsx', 'rect': [350, 340, 70, 80], 'hwnd': 2048, 'pid': 10, 'runtime': '42,40'}]
 native_calls = []
 
 
@@ -83,6 +85,7 @@ def begin():
         buddy.desktop.bridge.scanned({'targets': targets, 'monitors': []}, '')
         context = json.dumps(buddy.ai_context(False, False))
         assert 'real-folder' in context and 'Projects' not in context and str(root) not in context
+        assert 'real-file' in context and 'Private stock list' not in context and 'C:\\Parts' not in context
         buddy.settings.values['ai_share_desktop_names'] = True
         assert 'Projects' in json.dumps(buddy.ai_context(False, False))
         buddy.settings.values['ai_share_desktop_names'] = False
@@ -125,6 +128,39 @@ def tab_checks():
         assert native_calls[-1][0] == 'select_tab' and native_calls[-1][1]['hwnd'] == 3072
         buddy.desktop.bridge.scanned({'targets': [targets[0]], 'monitors': []}, '')
         assert not buddy.desktop.active_id and not buddy.desktop.return_timer.isActive(), 'Closing a target stranded the pet'
+        buddy.desktop.bridge.scanned({'targets': targets, 'monitors': []}, '')
+        buddy.character_actions['fox'].trigger()
+        result = buddy.run_buddy_action({'action': 'inspect_file', 'target_id': 'real-file'})
+        assert 'Inspect file icon' in result and buddy.pet.hop_target == 'desktop:real-file'
+        state['file_native_calls'] = len(native_calls)
+        QTimer.singleShot(1300, file_checks)
+    except Exception as exc:
+        errors.append(repr(exc)); app.quit()
+
+
+def file_checks():
+    try:
+        assert buddy.desktop.active_id == 'real-file' and buddy.pet.action_state == 'INSPECT'
+        assert all(action == 'scan' for action, _ in native_calls[state['file_native_calls']:]), 'Icon play invoked a native operation'
+        buddy.desktop.panel.refresh()
+        for row in range(buddy.desktop.panel.targets.count()):
+            if buddy.desktop.panel.targets.item(row).text().startswith('File'):
+                buddy.desktop.panel.targets.setCurrentRow(row)
+                break
+        assert buddy.desktop.panel.interactions.findData('dust') >= 0
+        assert not buddy.desktop.panel.select_tab_button.isEnabled()
+        buddy.desktop.panel.show()
+        buddy.desktop.panel.grab().save(str(preview / 'file-icon-activities.png'))
+        buddy.desktop.panel.hide()
+        buddy.desktop.emerge(silent=True)
+        for _, character in CHARACTER_CHOICES:
+            buddy.character_actions[character].trigger()
+            assert buddy.pet.loaded_character == character and buddy.character_actions[character].isChecked()
+            for _, pose in COMPANION_ANIMATIONS:
+                buddy.interact_actions[pose].trigger()
+                assert buddy.pet.action_state == pose
+                assert not buddy.pet.grab().isNull()
+        assert AppSettings(buddy.settings.path)['character'] == 'dragon'
         state['selection'] = {'text': 'HELLO', 'rects': [[200, 350, 65, 22]], 'hwnd': 4096, 'pid': 30, 'runtime': '42,30', 'capture_id': 'selection-test-1', 'editable': True, 'app': 'notepad'}
         buddy.desktop.captured(state['selection'], '')
         editor = buddy.desktop.text_window
@@ -229,4 +265,4 @@ if 'brain' in state: state['brain'].stop()
 if 'chat' in state: state['chat'].close()
 temp.cleanup()
 if errors: raise AssertionError('; '.join(errors))
-print('PASS: sliding lines, tiny HUD, real-target hop/hide/peek/follow, target closure, reminder recovery, requested tab selection, selected-letter reorder/apply, read-only guard, Groq-driven pose, context privacy, 401 pause, cleanup. Native and Groq responses were scripted.')
+print('PASS: seven character menus, ten companion moves, file-icon inspection, sliding lines, tiny HUD, real-target hop/hide/peek/follow, target closure, reminder recovery, requested tab selection, selected-letter reorder/apply, read-only guard, Groq-driven pose, context privacy, 401 pause, cleanup. Native and Groq responses were scripted.')

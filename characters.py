@@ -12,7 +12,17 @@ ANIMATION_STATES = ("IDLE", "WALK_LEFT", "WALK_RIGHT", "SLEEP", "EXCITED", "DRAG
                     "SIT", "BALANCE", "TIPTOE", "RUN", "CLIMB", "SLIDE", "SKATE",
                     "BOUNCE", "MAGIC", "UMBRELLA", "JUGGLE", "GROOM", "SALUTE",
                     "FACEPALM", "LEAN", "HANG", "SNEAK",
-                    "CHECK_STOCK", "SCAN_PART", "PACK_ORDER", "WRENCH", "HIGH_FIVE", "COFFEE")
+                    "CHECK_STOCK", "SCAN_PART", "PACK_ORDER", "WRENCH", "HIGH_FIVE", "COFFEE",
+                    "HEAD_TILT", "SNIFF", "LISTEN", "KNOCK", "DUST", "INSPECT",
+                    "PERCH", "WING_FLAP", "FETCH", "CURL_UP")
+
+CHARACTER_CHOICES = (("Robot", "robot"), ("Cat", "cat"), ("Knight", "knight"),
+                     ("Dog", "dog"), ("Fox", "fox"), ("Owl", "owl"), ("Dragon", "dragon"))
+
+COMPANION_ANIMATIONS = (("Tilt head", "HEAD_TILT"), ("Sniff around", "SNIFF"),
+                        ("Listen", "LISTEN"), ("Knock", "KNOCK"), ("Dust off", "DUST"),
+                        ("Inspect", "INSPECT"), ("Perch", "PERCH"),
+                        ("Flutter", "WING_FLAP"), ("Fetch", "FETCH"), ("Curl up", "CURL_UP"))
 
 # These desktop poses are drawn locally, so every character can use them even
 # when a sprite folder only contains the original animation states.
@@ -25,14 +35,17 @@ def draw_character(p: QPainter, size: int, height=None, frame=0, state="IDLE", d
                    skin="mint", character="robot", gaze=(0, 0)):
     """Keep the original 32-unit footprint and extra parachute space at every size."""
     height = height or size
-    unit = max(1, size // 32)
+    # Fractional scale keeps curves and details clear at every desktop/DPI size.
+    # Tiny tray icons need half a physical pixel for antialiasing at the edge.
+    inset = 0.5 if size < 32 else 0
+    unit = max(1, size - inset * 2) / 32
     p.save()
     p.setRenderHint(QPainter.Antialiasing, False)
-    p.translate((size - unit * 32) // 2, height - unit * 32)
+    p.translate(inset, height - inset - unit * 32)
     p.scale(unit, unit)
     base = PET_PALETTES.get(skin, PET_PALETTES["mint"])
     dark, light, highlight, middle, limbs = base[:5]
-    gx, gy = (max(-1, min(1, int(v))) for v in gaze)
+    gx, gy = (max(-1, min(1, float(v))) for v in gaze)
     def block(x, y, w, h, color):
         p.fillRect(round(x), round(y), w, h, QColor(color))
     def tint(color, alpha):
@@ -52,6 +65,23 @@ def draw_character(p: QPainter, size: int, height=None, frame=0, state="IDLE", d
         p.setPen(Qt.NoPen)
         p.setBrush(color if isinstance(color, QColor) else QColor(color))
         p.drawEllipse(QRectF(x, y, w, h))
+    def soft_oval(x, y, w, h, top, center, bottom, outline=None):
+        material = QRadialGradient(QPointF(x + w * 0.35, y + h * 0.22), max(w, h) * 0.85)
+        material.setColorAt(0, QColor(top))
+        material.setColorAt(0.55, QColor(center))
+        material.setColorAt(1, QColor(bottom))
+        p.setBrush(material)
+        p.setPen(QPen(QColor(outline), 0.35) if outline else Qt.NoPen)
+        p.drawEllipse(QRectF(x, y, w, h))
+    def shape(path, top, center, bottom, outline=None):
+        bounds = path.boundingRect()
+        material = QLinearGradient(bounds.topLeft(), bounds.bottomRight())
+        material.setColorAt(0, QColor(top))
+        material.setColorAt(0.5, QColor(center))
+        material.setColorAt(1, QColor(bottom))
+        p.setPen(QPen(QColor(outline), 0.4) if outline else Qt.NoPen)
+        p.setBrush(material)
+        p.drawPath(path)
     def glow(x, y, radius, color, alpha=100):
         halo = QRadialGradient(QPointF(x, y), radius)
         halo.setColorAt(0, tint(color, alpha))
@@ -71,7 +101,7 @@ def draw_character(p: QPainter, size: int, height=None, frame=0, state="IDLE", d
         path = QPainterPath(QPointF(x1, y1))
         path.quadTo(cx, cy, x2, y2)
         stroke(path, color, width)
-    def eyes(y, closed, organic=False):
+    def eyes(y, closed, organic=False, iris="#50a88f", slit=True):
         """Glass eyes remain readable at the smallest supported pet size."""
         for x in (9.3, 14.7):
             x += gx * 0.65
@@ -81,8 +111,9 @@ def draw_character(p: QPainter, size: int, height=None, frame=0, state="IDLE", d
                       x + 0.8, eye_y + 0.5, dark if organic else "#a0f7ed", 0.6)
             elif organic:
                 oval(x - 1.05, eye_y - 0.3, 2.1, 2.6, "#f0fff5")
-                oval(x - 0.85, eye_y + 0.05, 1.7, 2.05, "#50a88f")
-                oval(x - 0.35, eye_y + 0.05, 0.7, 1.9, "#122a32")
+                oval(x - 0.85, eye_y + 0.05, 1.7, 2.05, iris)
+                oval(x - (0.35 if slit else 0.6), eye_y + 0.05,
+                     0.7 if slit else 1.2, 1.9, "#122a32")
                 oval(x - 0.45, eye_y, 0.48, 0.6, "#ffffff")
             else:
                 glow(x, eye_y + 0.8, 2, "#74edff", 100)
@@ -96,18 +127,18 @@ def draw_character(p: QPainter, size: int, height=None, frame=0, state="IDLE", d
         block(x + 1, y + 3, 3, 1, "#f4a4c7")
         block(x + 2, y + 4, 1, 1, "#f4a4c7")
     if state == "PARACHUTE":
-        top = -(height - size) // unit + 2
-        sway = (frame // 2) % 3 - 1
+        top = -(height - size) / unit + 2
+        sway = math.sin(frame * 0.3) * 0.65
         for x, y, w in ((8, 0, 16), (4, 2, 24), (2, 4, 28), (1, 6, 30), (1, 8, 30)):
             block(x + sway, top + y, w, 2, dark)
         for x, color in ((3, "#ffbd76"), (9, light), (15, "#8bc8f5"), (21, "#e9a9df")):
             block(x + sway, top + 6, 6, 5, color)
         block(8 + sway, top + 2, 16, 2, highlight)
         p.setPen(QPen(QColor("#d8e5ed"), 1))
-        p.drawLine(3 + sway, top + 11, 9, 22)
-        p.drawLine(28 + sway, top + 11, 23, 22)
-        p.drawLine(10 + sway, top + 11, 11, 22)
-        p.drawLine(22 + sway, top + 11, 21, 22)
+        p.drawLine(QPointF(3 + sway, top + 11), QPointF(9, 22))
+        p.drawLine(QPointF(28 + sway, top + 11), QPointF(23, 22))
+        p.drawLine(QPointF(10 + sway, top + 11), QPointF(11, 22))
+        p.drawLine(QPointF(22 + sway, top + 11), QPointF(21, 22))
     elif state in ("PET", "CELEBRATE"):
         heart(4, 3 - frame % 2)
         heart(23, 2 + frame % 2)
@@ -170,10 +201,10 @@ def draw_character(p: QPainter, size: int, height=None, frame=0, state="IDLE", d
         p.setBrush(Qt.NoBrush)
         p.drawEllipse(QRectF(7.5, 29.9, 17, 1.4))
     p.save()
-    jump = -round(abs(math.sin(frame * math.pi / 10)) * 6) if state in ("JUMP", "HOP", "BOUNCE", "FLIP") else 0
-    bob = -(frame % 2) if state in ("EXCITED", "DANCE", "CELEBRATE") else -abs(math.sin(frame * 0.4)) * 0.8 if state == "HIGH_FIVE" else 0
-    p.translate(4 + ((frame // 2) % 3 - 1 if state == "DANCE" else 0), 8 + jump + bob)
-    if state in ("IDLE", "LOOK", "THINK", "TALK", "PET", "READ", "SLEEP", "CHECK_STOCK", "COFFEE"):
+    jump = -abs(math.sin(frame * math.pi / 10)) * 6 if state in ("JUMP", "HOP", "BOUNCE", "FLIP") else 0
+    bob = -abs(math.sin(frame * math.pi / 2)) if state in ("EXCITED", "DANCE", "CELEBRATE") else -abs(math.sin(frame * 0.4)) * 0.8 if state == "HIGH_FIVE" else 0
+    p.translate(4 + (math.sin(frame * 0.6) if state == "DANCE" else 0), 8 + jump + bob)
+    if state in ("IDLE", "LOOK", "THINK", "TALK", "PET", "READ", "SLEEP", "CHECK_STOCK", "COFFEE", "HEAD_TILT", "LISTEN", "CURL_UP", "PERCH", "INSPECT"):
         # Fractional motion gives a quiet breathing rhythm without moving the feet.
         breath = math.sin(frame * math.tau / 24) * 0.012
         p.translate(12, 22)
@@ -202,15 +233,74 @@ def draw_character(p: QPainter, size: int, height=None, frame=0, state="IDLE", d
     elif state == "SNEEZE":
         p.translate(math.sin(frame * 2) * 1.2, (frame % 8 > 4) * 2)
     elif state == "SCARED":
-        p.translate((-1 if frame % 2 else 1), -1)
+        p.translate(math.sin(frame * math.pi) * 0.8, -1)
+    elif state in ("HEAD_TILT", "LISTEN", "SNIFF", "KNOCK"):
+        p.translate(12, 20)
+        tilt = {"HEAD_TILT": 8, "LISTEN": -6, "SNIFF": 7, "KNOCK": 3}[state]
+        p.rotate(tilt * (0.55 + math.sin(frame * 0.3) * 0.45))
+        p.translate(-12, -20)
+        if state == "SNIFF":
+            p.translate(math.sin(frame * 0.75) * 0.4, 1.2)
+            p.scale(1, 0.94)
+    elif state == "PERCH":
+        p.translate(0, -1.2 + math.sin(frame * 0.28) * 0.2)
+        p.scale(1, 0.92)
+    elif state == "FETCH":
+        p.translate(math.sin(frame * 0.5) * 0.5, -abs(math.sin(frame * 0.55)) * 0.8)
+    elif state == "WING_FLAP":
+        p.translate(0, -abs(math.sin(frame * 0.4)) * 1.5)
     if direction < 0:
         p.translate(24, 0)
         p.scale(-1, 1)
     if state == "LANDING":
-        squish = 0.8 if frame % 2 == 0 else 0.9
+        squish = 0.85 - math.cos(frame * math.pi) * 0.05
         p.translate(0, 23 * (1 - squish))
         p.scale(1, squish)
-    if state == "SLEEP":
+    organic = character in ("cat", "dog", "fox", "owl", "dragon")
+    coats = {"cat": (highlight, light, middle),
+             "dog": ("#e7c497", "#c39463", "#765238"),
+             "fox": ("#ffd59e", "#e7954e", "#a84f29"),
+             "owl": ("#e2ccab", "#ac8966", "#675040"),
+             "dragon": ("#b6dfc1", "#71b59a", "#366b68")}
+    coat = coats.get(character, (highlight, light, middle))
+    if state in ("SLEEP", "CURL_UP") and organic:
+        # Curled spines, folded limbs and a rising flank keep sleeping animals
+        # recognisable instead of turning every species into a sleeping box.
+        soft_oval(4.2, 12.4, 16.6, 9.5, *coat, outline=dark)
+        soft_oval(5.2, 14.8, 9, 6.7, *coat)
+        if character == "owl":
+            soft_oval(12, 13.8, 7.3, 6.7, coat[0], coat[1], coat[2])
+            for i in range(3):
+                curve(14 + i, 15, 16 + i, 17, 14 + i, 19.5, tint(coat[2], 155), 0.4)
+            soft_oval(5.4, 15.2, 7.7, 5.6, "#fff0d7", "#e5d0ac", coat[1])
+            oval(8.7, 18.8, 1.4, 1.5, "#c68d47")
+        else:
+            ear = QPainterPath(QPointF(5.7, 16.2))
+            ear.quadTo(4.8, 12.2 if character != "dog" else 15.1, 7.8, 14)
+            ear.lineTo(9, 16.3)
+            ear.closeSubpath()
+            shape(ear, *coat, outline=dark)
+            if character == "dog":
+                soft_oval(4.1, 15.2, 3.2, 5.7, coat[1], coat[2], "#594334")
+            if character == "dragon":
+                curve(12, 13.7, 12, 10.4, 13.3, 11.7, "#ede0ab", 1.2)
+                curve(14, 14.2, 17, 11.2, 19.5, 16, coat[2], 1)
+            soft_oval(7, 18.1, 6.4, 2.6, "#fff0d6", "#e5cfad", coat[1])
+            oval(8.2, 18.4, 1.8, 1.1, "#775148" if character == "cat" else "#343b39")
+            tail = QPainterPath(QPointF(18, 16))
+            tail.cubicTo(24, 18, 21, 23, 11, 21)
+            stroke(tail, coat[2], 3.1 if character == "fox" else 2)
+            stroke(tail, coat[0], 2.1 if character == "fox" else 1)
+        curve(6.7, 17.8, 7.5, 18.4, 8.3, 17.8, "#473f38", 0.5)
+        curve(10.4, 17.8, 11.2, 18.4, 12, 17.8, "#473f38", 0.5)
+        oval(9, 20.7, 3, 1, tint(coat[0], 220))
+        drift = math.sin(frame * 0.25) * 0.7
+        curve(18, 8 + drift, 20, 7.5 + drift, 20.5, 9 + drift, "#afa2e3", 0.65)
+        curve(20.5, 9 + drift, 20, 10 + drift, 18.5, 11 + drift, "#afa2e3", 0.65)
+        curve(18.5, 11 + drift, 20, 11.2 + drift, 21, 10.7 + drift, "#afa2e3", 0.65)
+        if state == "CURL_UP":
+            curve(5, 11.7, 8 + math.sin(frame * 0.3), 10.7, 11, 11.5, tint(coat[0], 180), 0.5)
+    elif state in ("SLEEP", "CURL_UP"):
         panel(3.8, 15.8, 16.4, 6, highlight if character != "knight" else "#e4f2ff",
               light if character != "knight" else "#b3c2d8",
               middle if character != "knight" else "#647789", 2.7)
@@ -228,17 +318,18 @@ def draw_character(p: QPainter, size: int, height=None, frame=0, state="IDLE", d
         block(20, 9 - frame % 2, 1, 1, "#b29aff")
         block(18, 10 - frame % 2, 3, 1, "#b29aff")
     else:
-        moving = state.startswith("WALK") or state in ("EXCITED", "DANCE", "CELEBRATE", "DRAG", "CHASE", "SHY", "PUSH", "RUN", "TIPTOE", "SKATE", "CLIMB", "GROOM", "SNEAK")
-        swing = 1 if frame % 2 else -1
+        moving = state.startswith("WALK") or state in ("EXCITED", "DANCE", "CELEBRATE", "DRAG", "CHASE", "SHY", "PUSH", "RUN", "TIPTOE", "SKATE", "CLIMB", "GROOM", "SNEAK", "FETCH")
+        swing = math.sin(frame * math.pi / 2)
         blink = state in ("IDLE", "PET", "YAWN", "LAUGH", "SNEEZE") and frame % (4 if state == "LAUGH" else 20) < 2
         if character == "cat":
             # A curved tail, tapered ears and soft cheek/muzzle shapes suggest fur.
             tail_y = math.sin(frame * 0.45) * (1 if moving else 0.35)
             curve(7, 18.6, 0.8, 21 + tail_y, 3, 12.8 + tail_y, dark, 2.4)
             curve(7, 18.3, 1.4, 20.5 + tail_y, 3, 12.8 + tail_y, middle, 1.7)
-            panel(7, 14, 10, 6.7, highlight, light, middle, 3)
-            oval(9.2, 15.7, 5.5, 4.3, tint(highlight, 210))
+            soft_oval(6.8, 12.5, 10.4, 8.5, highlight, light, middle, dark)
+            soft_oval(9.2, 15, 5.5, 5.5, highlight, light, middle)
             for x, lean in ((5.7, -0.5), (15.2, 0.5)):
+                lean += math.sin(frame * 0.26 + x) * (0.45 if state == "LISTEN" else 0.12)
                 ear = QPainterPath(QPointF(x, 8))
                 ear.lineTo(x + lean, 2.3)
                 ear.quadTo(x + 0.4, 1.5, x + 4, 6)
@@ -253,7 +344,11 @@ def draw_character(p: QPainter, size: int, height=None, frame=0, state="IDLE", d
                 p.setPen(Qt.NoPen)
                 p.setBrush(QColor("#e9a9bf"))
                 p.drawPath(inner)
-            panel(5, 5.7, 14, 10, highlight, light, middle, 4)
+            head = QPainterPath(QPointF(5.5, 8))
+            head.cubicTo(5, 3.7, 18.5, 3.7, 18.6, 8.3)
+            head.cubicTo(20, 11.2, 18.3, 15.5, 12, 15.9)
+            head.cubicTo(6.3, 15.7, 4.2, 11.8, 5.5, 8)
+            shape(head, highlight, light, middle, dark)
             oval(7.5, 11.8, 9, 3.3, tint(highlight, 225))
             eyes(9, blink or state == "PET", organic=True)
             # Short forehead markings and whiskers add detail without visual noise.
@@ -274,6 +369,125 @@ def draw_character(p: QPainter, size: int, height=None, frame=0, state="IDLE", d
             panel(9, 15.6, 6, 1, "#c5fbff", "#69c9ce", "#399ca8", 0.4)
             glow(12, 17.2, 1.7, "#81eff7", 70)
             oval(11.35, 16.4, 1.3, 1.3, "#a6f9ff")
+        elif character in ("dog", "fox"):
+            fox = character == "fox"
+            # Weight-bearing haunches and a curved muzzle make both animals read
+            # as animals even with a folder or a work prop in their front paws.
+            tail = QPainterPath(QPointF(16.2, 18.2))
+            wag = math.sin(frame * (0.7 if state in ("EXCITED", "FETCH") else 0.3))
+            tail.cubicTo(22, 21, 25.5, 14 + wag, 21, 11.5 + wag)
+            stroke(tail, coat[2], 3.3 if fox else 1.8)
+            stroke(tail, coat[1], 2.5 if fox else 1.1)
+            curve(23, 15.3 + wag, 23.4, 12.7 + wag, 21, 11.5 + wag,
+                  "#fff0d3" if fox else coat[0], 2 if fox else 0.9)
+            soft_oval(6.7, 12.6, 10.8, 8.7, *coat, outline=coat[2])
+            soft_oval(8.3, 14.5, 6.8, 6.6, "#fff1dc", "#e5cdad", coat[1])
+            ear_wag = math.sin(frame * 0.35) * (0.6 if state == "LISTEN" else 0.25)
+            if fox:
+                for left in (True, False):
+                    x = 5.6 if left else 15.1
+                    tip = x - 0.7 - ear_wag if left else x + 3.9 + ear_wag
+                    ear = QPainterPath(QPointF(x, 8))
+                    ear.quadTo(tip - 0.2, 0, tip + 0.5, 1)
+                    ear.lineTo(x + 4, 6.5)
+                    ear.closeSubpath()
+                    shape(ear, *coat, outline=coat[2])
+                    curve(x + 1.2, 6.3, tip + 0.8, 2.9, tip + 0.5, 2.3, "#6b453e", 1)
+            else:
+                for x, angle in ((4.5, -1), (16.1, 1)):
+                    p.save()
+                    p.translate(x + 1.8, 6)
+                    p.rotate(angle * (8 + ear_wag * 8))
+                    soft_oval(-1.8, -1, 4.3, 10.7, coat[1], coat[2], "#523a2b", coat[2])
+                    curve(-0.5, 1, -0.8, 5, 0.2, 7.2, tint(coat[0], 110), 0.45)
+                    p.restore()
+            head = QPainterPath(QPointF(5.8, 8.2))
+            head.cubicTo(5.4, 2.7, 18.6, 2.7, 18.2, 8.5)
+            head.cubicTo(20.4, 11.2, 16.1, 14.5, 12, 16)
+            head.cubicTo(7.9, 14.5, 3.6, 11.2, 5.8, 8.2)
+            shape(head, *coat, outline=coat[2])
+            if fox:
+                cheeks = QPainterPath(QPointF(5.5, 10.7))
+                cheeks.cubicTo(8, 10.4, 10.4, 12.3, 12, 12.7)
+                cheeks.cubicTo(13.6, 12.3, 16, 10.4, 18.5, 10.7)
+                cheeks.quadTo(17, 14.6, 12, 16)
+                cheeks.quadTo(7, 14.6, 5.5, 10.7)
+                shape(cheeks, "#fff6e1", "#f6dfbb", "#c3a886")
+            else:
+                soft_oval(6, 6.4, 4.8, 6.1, coat[0], "#a4734b", coat[2])
+            eyes(8.1, blink or state == "PET", True,
+                 "#7b5a31" if fox else "#784d2d", slit=fox)
+            soft_oval(8.5, 11.1, 7, 4.4, "#fff3df", "#e8ccaa", "#b58e69")
+            soft_oval(10.5 + gx * 0.3, 11.5, 3, 1.9, "#76817a", "#303d3c", "#1d2929")
+            curve(12, 13.1, 11.5, 14.2, 10.2, 13.7, "#725445", 0.35)
+            curve(12, 13.1, 12.5, 14.2, 13.8, 13.7, "#725445", 0.35)
+            if not fox and state in ("EXCITED", "FETCH", "PET", "WAVE"):
+                soft_oval(11.2, 13.8, 1.6, 2.3, "#fac4bc", "#d98f8b", "#b16e74")
+            curve(8, 15.3, 12, 16.9, 16, 15.3, middle, 1)
+            soft_oval(11.4, 16.1, 1.3, 1.5, "#fff0b8", "#edc870", "#ae7d39")
+        elif character == "owl":
+            # A compact feathered pear silhouette, facial discs and folded wings.
+            soft_oval(5.5, 5.1, 13, 16.4, *coat, outline=coat[2])
+            soft_oval(7.2, 12, 9.5, 9, "#fff2d8", "#d9bd92", coat[1])
+            for x in (8.4, 11.3, 14.2):
+                for y in (15.2, 17.6):
+                    curve(x, y, x + 0.6, y + 1.2, x + 1.2, y, "#aa855f", 0.5)
+            for side in (-1, 1):
+                tuft = QPainterPath(QPointF(12 + side * 2.8, 6.3))
+                tuft.quadTo(12 + side * 5.4, 2.8, 12 + side * 6.3, 2.6)
+                tuft.lineTo(12 + side * 6.1, 8)
+                tuft.closeSubpath()
+                shape(tuft, *coat, outline=coat[2])
+            soft_oval(5.8, 5.8, 6.4, 9.3, "#fff3d8", "#ebd4ae", "#b69774")
+            soft_oval(11.8, 5.8, 6.4, 9.3, "#fff3d8", "#ebd4ae", "#b69774")
+            for x in (9.1, 14.9):
+                soft_oval(x - 2, 7.5, 4, 4.9, "#846340", "#5c4939", "#332d2a")
+                if blink or state == "PET":
+                    curve(x - 1.1, 10, x, 10.8, x + 1.1, 10, "#e9c57f", 0.6)
+                else:
+                    soft_oval(x - 1.55 + gx * 0.3, 8.1 + gy * 0.2, 3.1, 3.7,
+                              "#f5da8f", "#ce9a3f", "#885728")
+                    oval(x - 0.8 + gx * 0.45, 8.5 + gy * 0.2, 1.6, 2.8, "#1d282a")
+                    oval(x - 0.7 + gx * 0.45, 8.6 + gy * 0.2, 0.65, 0.8, "#ffffff")
+            beak = QPainterPath(QPointF(11, 12))
+            beak.quadTo(12, 10.8, 13, 12)
+            beak.quadTo(12.7, 13.8, 12, 14.4)
+            beak.closeSubpath()
+            shape(beak, "#f6d18a", "#c78d42", "#87562e")
+        elif character == "dragon":
+            # Membrane wings, a long counterbalancing tail and soft belly plates.
+            tail = QPainterPath(QPointF(16, 18.6))
+            tail.cubicTo(23, 24, 26, 17, 22, 13.1 + math.sin(frame * 0.35))
+            stroke(tail, coat[2], 2.4)
+            stroke(tail, coat[1], 1.5)
+            for side in (-1, 1):
+                flap = math.sin(frame * (0.7 if state == "WING_FLAP" else 0.25))
+                tip_x = 12 + side * (10.5 + (0.7 * flap if state == "WING_FLAP" else 0))
+                tip_y = 6 + (flap * 3 if state == "WING_FLAP" else flap * 0.4)
+                wing = QPainterPath(QPointF(12 + side * 4, 17))
+                wing.quadTo(12 + side * 9, 7, tip_x, tip_y)
+                wing.quadTo(tip_x - side, 12, 12 + side * 10, 16)
+                wing.quadTo(12 + side * 7, 13.3, 12 + side * 4, 17)
+                shape(wing, "#d9c3ab", "#ad8a80", "#705d62", coat[2])
+                curve(12 + side * 4, 17, 12 + side * 8, 11, tip_x, tip_y, coat[2], 0.55)
+            soft_oval(6.9, 12, 10.2, 9.1, *coat, outline=coat[2])
+            soft_oval(9.1, 13.6, 5.8, 7.2, "#eee3b4", "#d1c895", "#929c75")
+            for y in (15.3, 17.3, 19.3):
+                curve(9.6, y, 12, y + 0.7, 14.4, y, "#a3ad81", 0.4)
+            for x, side in ((7, -1), (17, 1)):
+                horn = QPainterPath(QPointF(x - 1, 6))
+                horn.quadTo(x + side * 1.2, 3, x + side * 1.3, 1.7)
+                horn.quadTo(x - side * 1.3, 3, x + 1, 6)
+                horn.closeSubpath()
+                shape(horn, "#fff4d3", "#daceaa", "#9b946e", coat[2])
+            soft_oval(5, 4.5, 14, 10.7, *coat, outline=coat[2])
+            for x in (10.2, 12, 13.8):
+                soft_oval(x - 0.5, 5.3, 1, 1.8, coat[0], coat[1], coat[2])
+            eyes(8.2, blink or state == "PET", True, "#d5a74e")
+            soft_oval(7.5, 11.2, 9, 4.3, "#c9e3bd", "#92c4a0", "#618c7e")
+            for x in (9.8, 14.2):
+                oval(x - 0.4, 12.1, 0.8, 0.5, "#3b6d63")
+            curve(9.5, 13.6, 12, 14.9, 14.5, 13.6, "#436b63", 0.4)
         elif character == "knight":
             # Cool metal highlights, visor recess and small rivets retain the knight.
             panel(7.2, 14, 9.6, 6.5, "#deebf5", "#a0b1c3", "#536b81", 1.7, "#455c71")
@@ -309,14 +523,53 @@ def draw_character(p: QPainter, size: int, height=None, frame=0, state="IDLE", d
             for x in (10.5, 11.5, 12.5):
                 curve(x, 17.3, x, 17.9, x, 18.4, "#fff5d6", 0.35)
             oval(15, 17.8, 0.7, 0.7, "#a6ffef")
-        raised = state in ("WAVE", "DANCE", "CELEBRATE", "PARACHUTE", "DRAG", "HOP", "PEEK", "PUSH", "STRETCH", "JUGGLE", "MAGIC", "HANG", "SCARED", "SALUTE", "UMBRELLA", "HIGH_FIVE", "WRENCH", "SCAN_PART", "CHECK_STOCK")
+        raised = state in ("WAVE", "DANCE", "CELEBRATE", "PARACHUTE", "DRAG", "HOP", "PEEK", "PUSH", "STRETCH", "JUGGLE", "MAGIC", "HANG", "SCARED", "SALUTE", "UMBRELLA", "HIGH_FIVE", "WRENCH", "SCAN_PART", "CHECK_STOCK", "KNOCK", "DUST", "INSPECT", "WING_FLAP", "LISTEN")
         for x, y in ((4, 12 if raised else 16 + (swing if moving else 0)),
-                     (18, 9 + frame % 3 if raised else 16 - (swing if moving else 0))):
-            panel(x, y, 2.2, 3.8, highlight, limbs, middle, 1)
-            oval(x + 0.45, y + 0.65, 0.8, 0.8, tint(highlight, 155))
+                     (18, 10 + math.sin(frame * 0.65) if raised else 16 - (swing if moving else 0))):
+            if character == "owl":
+                side = -1 if x < 12 else 1
+                extent = 9 + math.sin(frame * 0.7) * 1.3 if state == "WING_FLAP" else 7
+                tip_y = 11.5 + math.sin(frame * 0.7) * 3.5 if state == "WING_FLAP" else y + 4
+                wing = QPainterPath(QPointF(12 + side * 4.5, 11.5))
+                if state == "WING_FLAP":
+                    wing.quadTo(12 + side * 7, tip_y - 2.5, 12 + side * 11.2, tip_y)
+                    wing.quadTo(12 + side * 10.9, tip_y + 2, 12 + side * 9.8, tip_y + 2.6)
+                    wing.lineTo(12 + side * 10.2, tip_y + 3.3)
+                    wing.quadTo(12 + side * 8.7, tip_y + 4.6, 12 + side * 7.7, tip_y + 4.6)
+                    wing.quadTo(12 + side * 6.2, 20, 12 + side * 3.8, 19)
+                else:
+                    wing.quadTo(12 + side * (extent + 1), 12, 12 + side * extent, tip_y)
+                    wing.quadTo(12 + side * 6.2, 21, 12 + side * 3.8, 19)
+                wing.closeSubpath()
+                shape(wing, *coat, outline=coat[2])
+                for i in (0, 1):
+                    curve(12 + side * (5.5 + i * 0.8), 13.8,
+                          12 + side * (6.8 + i * 0.8), tip_y,
+                          12 + side * (5.7 + i * 0.6), 18.7, tint(coat[0], 150), 0.45)
+            elif organic:
+                paw_y = y - (math.sin(frame * 0.7) * 2 if state == "WING_FLAP" else 0)
+                arm = QPainterPath(QPointF(x + (3 if x < 12 else -1.3), 15.1))
+                arm.quadTo(x + 0.4, paw_y - 0.4, x + 0.1, paw_y + 2.5)
+                arm.quadTo(x + 1.6, paw_y + 5, x + 3, paw_y + 2)
+                arm.quadTo(x + 2.4, 17, x + (3 if x < 12 else -1.3), 15.1)
+                shape(arm, *coat, outline=coat[2])
+                curve(x + 0.9, paw_y + 2.1, x + 1, paw_y + 2.6, x + 1.1, paw_y + 3,
+                      tint(coat[2], 170), 0.3)
+            else:
+                y -= math.sin(frame * 0.7) * 2 if state == "WING_FLAP" else 0
+                soft_oval(x - 0.3, y - 0.5, 2.8, 2.8, highlight, middle, dark, dark)
+                panel(x, y, 2.2, 3.8, highlight, limbs, middle, 1)
+                oval(x + 0.45, y + 0.65, 0.8, 0.8, tint(highlight, 155))
         for x in (8 - (swing if moving else 0), 14 + (swing if moving else 0)):
-            panel(x - 0.1, 19.8, 3.2, 2.1, middle, dark, dark, 0.8)
-            curve(x + 0.55, 20.4, x + 1.5, 20.1, x + 2.4, 20.4, tint(highlight, 150), 0.3)
+            if organic:
+                soft_oval(x - 0.4, 19.4, 3.8, 2.6, *coat, outline=coat[2])
+                for toe in (0.8, 1.8):
+                    curve(x + toe, 20.4, x + toe, 21.2, x + toe - 0.1, 21.5,
+                          "#d1af6b" if character == "owl" else tint(coat[2], 180),
+                          0.6 if character == "owl" else 0.3)
+            else:
+                panel(x - 0.1, 19.8, 3.2, 2.1, middle, dark, dark, 0.8)
+                curve(x + 0.55, 20.4, x + 1.5, 20.1, x + 2.4, 20.4, tint(highlight, 150), 0.3)
         if state == "LAUGH":
             block(10, 13, 5, 2, "#243647")
             block(11, 14, 3, 1, "#f4a4c7")
@@ -455,5 +708,79 @@ def draw_character(p: QPainter, size: int, height=None, frame=0, state="IDLE", d
                 curve(18.6 + i * 2, 13.8, 17.9 + i * 2 + drift, 12.4,
                       18.8 + i * 2 + drift, 10.9, tint("#fff1d9", 150), 0.45)
             p.restore()
+        elif state == "HEAD_TILT":
+            drift = math.sin(frame * 0.3) * 0.5
+            curve(21.2, 4.5 + drift, 24, 2.2 + drift, 23.2, 5.1 + drift, "#e4c889", 0.7)
+            curve(23.2, 5.1 + drift, 22.1, 5.8 + drift, 22.2, 6.5 + drift, "#e4c889", 0.7)
+            oval(21.9, 7.8 + drift, 0.7, 0.7, "#e4c889")
+        elif state == "SNIFF":
+            for i in range(3):
+                drift = math.sin(frame * 0.6 + i) * 0.8
+                curve(19.3 + i * 1.8, 13 - i * 1.2,
+                      20.1 + i * 1.8 + drift, 11.8 - i * 1.2,
+                      19.5 + i * 1.8, 10.3 - i * 1.2, tint("#bddec6", 190 - i * 35), 0.5)
+        elif state == "LISTEN":
+            for i in range(2):
+                pulse = math.sin(frame * 0.5 + i) * 0.4
+                curve(22 + i * 1.8, 7 - i * 1.3,
+                      24 + i * 1.4 + pulse, 10, 22 + i * 1.8, 13 + i * 1.3,
+                      tint("#8bc9e2", 190 - i * 50), 0.6)
+        elif state == "KNOCK":
+            # A tiny pane and tapping knuckle suit a window edge interaction.
+            panel(23.3, 5.7, 2.1, 15.6, "#d2e6f1", "#8fb2c4", "#537b92", 0.6)
+            tap = max(0, math.sin(frame * 0.8)) * 1.2
+            curve(18.9, 13.5, 20.2 + tap, 11.8, 22 + tap, 11.5,
+                  coat[1] if organic else limbs, 1.8)
+            soft_oval(20.8 + tap, 10.7, 1.8, 1.9, *coat)
+            if math.sin(frame * 0.8) > 0:
+                curve(24.8, 8.3, 25.5, 7.9, 25.8, 7.7, "#f5d596", 0.5)
+                curve(25.5, 11.6, 26.1, 11.6, 26.5, 11.6, "#f5d596", 0.5)
+        elif state == "DUST":
+            p.save()
+            p.translate(19.8, 17.5)
+            p.rotate(math.sin(frame * 0.5) * 22)
+            curve(0, 0, 1, -4, 1.5, -7.3, "#b98e62", 1)
+            for i in range(4):
+                curve(1.5, -6.8, -1.5 + i * 1.8, -8.5,
+                      -0.8 + i * 1.6, -10, "#e5d8c4" if i % 2 else "#a4bbbd", 1.1)
+            p.restore()
+            for i in range(3):
+                drift = (frame * 0.2 + i * 0.6) % 2
+                oval(22 + i * 1.1, 17.2 - drift * 1.4 - i,
+                     0.55, 0.55, tint("#e1d4b9", round(180 - drift * 60)))
+        elif state == "INSPECT":
+            # The glass sweeps naturally as the character examines a target.
+            glass_x = 19.2 + math.sin(frame * 0.3) * 0.8
+            glass_y = 10.6 + math.sin(frame * 0.45) * 0.5
+            curve(glass_x - 1.8, glass_y + 2, glass_x - 3, glass_y + 4,
+                  glass_x - 4, glass_y + 5.7, "#aa805a", 1.3)
+            soft_oval(glass_x - 3, glass_y - 3, 6, 6,
+                      "#c9f1ef", "#85b9c4", "#658696", "#d7c48a")
+            oval(glass_x - 2.35, glass_y - 2.35, 4.7, 4.7, tint("#d2f2ef", 95))
+            curve(glass_x - 1.7, glass_y - 0.4, glass_x - 1.3, glass_y - 1.8,
+                  glass_x + 0.3, glass_y - 1.9, tint("#ffffff", 210), 0.55)
+        elif state == "PERCH":
+            curve(4, 23, 12, 22.7, 21, 23.5, "#705447", 1.5)
+            curve(5, 22.6, 13, 22.3, 20.8, 23, "#b99770", 0.55)
+            curve(18, 23, 20.6, 21.8, 22.1, 20.2, "#80634f", 0.65)
+            leaf_y = math.sin(frame * 0.4) * 0.35
+            soft_oval(20.6, 19.3 + leaf_y, 3.1, 1.6, "#bad79c", "#86b082", "#54795e")
+        elif state == "WING_FLAP":
+            for side in (-1, 1):
+                drift = math.sin(frame * 0.7) * 0.5
+                curve(12 + side * 9, 20 + drift, 12 + side * 11, 19.4 + drift,
+                      12 + side * 11.7, 18.4 + drift, tint("#b4dbe3", 150), 0.4)
+        elif state == "FETCH":
+            bob = math.sin(frame * 0.55) * 0.4
+            panel(8.4, 15.2 + bob, 4.5, 2, "#ffe3a3", "#dfb76e", "#b78347", 0.5)
+            panel(7.4, 16.2 + bob, 10.6, 5.1, "#ffe7b4", "#e4c287", "#ba8e56", 0.7)
+            curve(8.7, 17.3 + bob, 12.7, 17 + bob, 16.7, 17.3 + bob, "#fff0cf", 0.4)
+            soft_oval(6.7, 16.6 + bob, 2.7, 2.3, *coat)
+            soft_oval(16.1, 16.6 + bob, 2.7, 2.3, *coat)
+    if state == "CURL_UP" and not organic:
+        # A softly pulsing night light distinguishes curl-up from ordinary sleep.
+        glow(22.5, 10, 2.3, "#c8c2ed", 70 + round(math.sin(frame * 0.3) * 25))
+        oval(21, 8.5, 2.6, 2.6, "#d6cbea")
+        oval(22, 8.1, 2.1, 2.1, dark)
     p.restore()
     p.restore()

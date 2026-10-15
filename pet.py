@@ -1,9 +1,8 @@
-"""Jeffery: three characters, interactions, walking, and parachuting."""
+"""Jeffery's animated companions, desktop movement, and direct interactions."""
 from __future__ import annotations
 import random
 import time
 import math
-from pathlib import Path
 from PySide6.QtCore import Qt, QTimer, Signal, QRectF
 from PySide6.QtGui import QColor, QPainter, QPen, QFont, QPixmap, QCursor, QTransform
 from PySide6.QtWidgets import QApplication, QWidget
@@ -93,7 +92,17 @@ class PixelPet(QWidget):
         self.real_x, self.real_y = float(self.x()), float(self.y())
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.animate)
-        self.timer.setInterval(200 if settings["low_power"] else 100)
+        self.timer.setInterval(self.animation_interval())
+
+    def animation_interval(self):
+        """Smooth active movement with a slower cadence for resting and low power."""
+        if self.drop_motion or self.hop_motion:
+            return 160 if self.settings["low_power"] else 33
+        if self.paused and not self.action_state:
+            return 1000
+        if not self.action_state and self.state in ("IDLE", "SLEEP", "CURL_UP"):
+            return 400 if self.settings["low_power"] else (200 if self.state != "IDLE" else 100)
+        return 200 if self.settings["low_power"] else 33
 
     def load_sprites(self):
         base = ASSETS / self.settings["character"]
@@ -121,7 +130,7 @@ class PixelPet(QWidget):
             self.sprites = self.load_sprites()
             self.loaded_character = self.settings["character"]
         if hasattr(self, "timer"):
-            self.timer.setInterval(200 if self.settings["low_power"] else 100)
+            self.timer.setInterval(self.animation_interval())
         if visible:
             self.show()
         if not self.settings["speech"] or self.settings["quiet_mode"]:
@@ -168,9 +177,10 @@ class PixelPet(QWidget):
             self.queued_action = (state, seconds)
             return
         self.action_state, self.state = state, state
-        self.action_until = time.monotonic() + seconds
+        self.last_tick = time.monotonic()
+        self.action_until = self.last_tick + seconds
         self.frame = 0
-        self.timer.setInterval(200 if self.settings["low_power"] else 100)
+        self.timer.setInterval(self.animation_interval())
         self.update()
 
     def cancel_hop(self):
@@ -185,7 +195,7 @@ class PixelPet(QWidget):
         self.hop_motion = HopMotion(self.x(), self.y(), target.x(), target.y())
         self.hop_target, self.state = identifier, "HOP"
         self.last_tick = time.monotonic()
-        self.timer.setInterval(160 if self.settings["low_power"] else 80)
+        self.timer.setInterval(self.animation_interval())
         self.update()
 
     def hide_in(self, identifier):
@@ -214,8 +224,13 @@ class PixelPet(QWidget):
                     "PACK_ORDER": "Count the parts, check the order and label the parcel.",
                     "WRENCH": "A tiny tune-up! Verify the fitment with your parts catalogue.",
                     "HIGH_FIVE": f"High five, {business} team! One careful step at a time.",
-                    "COFFEE": "A quick coffee break. Save your work before stepping away."}
-        self.perform(action, 8 if action == "SLEEP" else 3)
+                    "COFFEE": "A quick coffee break. Save your work before stepping away.",
+                    "HEAD_TILT": "You have my attention.", "SNIFF": "Something caught my nose!",
+                    "LISTEN": "I'm listening.", "KNOCK": "Knock, knock!",
+                    "DUST": "A little imaginary dusting.", "INSPECT": "Taking a closer look at this icon.",
+                    "PERCH": "A comfortable spot to sit.", "WING_FLAP": "Time for a stretch!",
+                    "FETCH": "One tiny game of fetch.", "CURL_UP": "Curling up for a quiet moment."}
+        self.perform(action, 8 if action in ("SLEEP", "CURL_UP") else 4)
         if self.ai_speech_connected and self.settings["speech"] and not self.settings["quiet_mode"]:
             self.conversation_requested.emit('interaction', action)
         else:
@@ -244,7 +259,7 @@ class PixelPet(QWidget):
         self.drop_motion = ParachuteMotion(self.real_y, max(rect.top(), rect.bottom() - self.height() + 1))
         self.action_state, self.state = None, "PARACHUTE"
         self.frame, self.last_tick = 0, time.monotonic()
-        self.timer.setInterval(160 if self.settings["low_power"] else 80)
+        self.timer.setInterval(self.animation_interval())
         self.update()
         return True
 
@@ -266,14 +281,18 @@ class PixelPet(QWidget):
 
     def animate(self):
         now = time.monotonic()
-        elapsed = min(0.25, now - self.last_tick)
+        animation_elapsed = max(0.0, min(1.0, now - self.last_tick))
+        elapsed = min(0.25, animation_elapsed)
         self.last_tick = now
         if now >= self.bubble_expiry:
             self.bubble.hide()
         if not self.isVisible():
             self.timer.stop()
             return
-        self.frame += 1
+        # The renderer uses the original ten-frame-per-second timeline. Time
+        # based phases keep animation and travel speed stable at either cadence.
+        if not self.paused or self.action_state or self.hop_motion or self.drop_motion:
+            self.frame += animation_elapsed * 10
         if self.hop_motion:
             x, y, finished = self.hop_motion.step(elapsed)
             point = clamp_position([round(x), round(y)], self.width(), self.height(), QApplication.screens())
@@ -318,6 +337,9 @@ class PixelPet(QWidget):
             self.state = "EXCITED"
         elif now >= self.next_state or self.state == "EXCITED":
             tricks = ["WAVE", "YAWN", "STRETCH", "SPIN", "FLIP", "ROLL", "SNEEZE", "SCARED", "LAUGH", "SIT", "BALANCE", "TIPTOE", "RUN", "CLIMB", "SLIDE", "SKATE", "BOUNCE", "MAGIC", "UMBRELLA", "JUGGLE", "GROOM", "SALUTE", "FACEPALM", "LEAN", "SNEAK"]
+            tricks += ["HEAD_TILT", "SNIFF", "LISTEN", "FETCH", "CURL_UP"]
+            if self.settings["character"] in ("owl", "dragon"):
+                tricks.append("WING_FLAP")
             choices, weights = (["WALK", "IDLE", "SLEEP"] + tricks, [7, 3, 0.5] + [0.45] * len(tricks)) if self.settings["playful"] else (["WALK", "IDLE", "SLEEP"], [7, 3, 1])
             if self.settings["business_mode"] and self.settings["playful"] and not self.settings["quiet_mode"] and not self.settings["low_power"]:
                 business_tricks = [state for _, state in BUSINESS_ANIMATIONS if state not in ("HIGH_FIVE", "COFFEE")]
@@ -344,8 +366,9 @@ class PixelPet(QWidget):
         dy = cursor.y() - self.height() / 2 - self.real_y
         distance = math.hypot(dx, dy)
         mouse_mode = self.settings["mouse_mode"]
-        self.gaze = (int(math.copysign(1, dx)) if abs(dx) > 20 else 0,
-                     int(math.copysign(1, dy)) if abs(dy) > 20 else 0) if mouse_mode != "off" else (0, 0)
+        target_gaze = (max(-1, min(1, dx / 120)), max(-1, min(1, dy / 120)))
+        ease = 1 - math.exp(-8 * elapsed)
+        self.gaze = tuple(old + (target - old) * ease for old, target in zip(self.gaze, target_gaze)) if mouse_mode != "off" else (0, 0)
         direct_motion = False
         if mouse_mode in ("chase", "shy") and (mouse_mode == "chase" or distance < 220):
             sign = -1 if mouse_mode == "shy" else 1
@@ -396,8 +419,7 @@ class PixelPet(QWidget):
                 self.conversation_requested.emit('check_in', '')
             else:
                 self.say(random.choice(["I'm still here.", "Taking a tiny walk.", "Your notes are safe with me."]))
-        interval = 200 if self.settings["low_power"] else 100
-        interval = max(interval, 300) if self.state in ("IDLE", "SLEEP") else interval
+        interval = self.animation_interval()
         if self.timer.interval() != interval:
             self.timer.setInterval(interval)
         self.update()
@@ -410,7 +432,7 @@ class PixelPet(QWidget):
         elif not paused:
             self.real_x, self.real_y = float(self.x()), float(self.y())
             self.next_state, self.last_tick = 0, time.monotonic()
-            self.timer.setInterval(200 if self.settings["low_power"] else 100)
+            self.timer.setInterval(self.animation_interval())
         self.update()
 
     def paintEvent(self, event):
@@ -418,7 +440,7 @@ class PixelPet(QWidget):
         p.setRenderHint(QPainter.SmoothPixmapTransform, False)
         frames = self.sprites.get(self.state, []) if self.state != "PARACHUTE" else []
         if frames:
-            image = frames[self.frame % len(frames)]
+            image = frames[int(self.frame) % len(frames)]
             if self.direction < 0:
                 image = image.transformed(QTransform().scale(-1, 1))
             target = image.size().scaled(self.size(), Qt.KeepAspectRatio)
@@ -434,7 +456,7 @@ class PixelPet(QWidget):
             self.cancel_drop()
             self.drag_offset = event.globalPosition().toPoint() - self.pos()
             self.was_dragged, self.state = False, "DRAG"
-            self.timer.setInterval(100)
+            self.timer.setInterval(self.animation_interval())
             self.update()
 
     def mouseMoveEvent(self, event):
@@ -464,13 +486,15 @@ class PixelPet(QWidget):
         self.menu_requested.emit(event.globalPos())
 
     def dragEnterEvent(self, event):
-        if any(Path(url.toLocalFile()).is_dir() for url in event.mimeData().urls() if url.isLocalFile()):
+        # Route only local URLs to the visible-target matcher. Do not stat a
+        # potentially disconnected work share on the GUI thread.
+        if any(url.isLocalFile() and url.toLocalFile() for url in event.mimeData().urls()):
             event.acceptProposedAction()
 
     def dropEvent(self, event):
-        folder = next((url.toLocalFile() for url in event.mimeData().urls() if url.isLocalFile() and Path(url.toLocalFile()).is_dir()), None)
-        if folder:
-            self.folder_dropped.emit(folder, [self.x() + self.width(), self.y() - 100])
+        path = next((url.toLocalFile() for url in event.mimeData().urls() if url.isLocalFile() and url.toLocalFile()), None)
+        if path:
+            self.folder_dropped.emit(path, [self.x() + self.width(), self.y() - 100])
             event.acceptProposedAction()
 
     def hideEvent(self, event):
@@ -482,13 +506,7 @@ class PixelPet(QWidget):
     def showEvent(self, event):
         if hasattr(self, "timer"):
             self.last_tick = time.monotonic()
-            if self.drop_motion or self.hop_motion:
-                interval = 160 if self.settings["low_power"] else 80
-            elif self.paused and not self.action_state:
-                interval = 1000
-            else:
-                interval = 200 if self.settings["low_power"] else 100
-            self.timer.start(interval)
+            self.timer.start(self.animation_interval())
         super().showEvent(event)
 
     def closeEvent(self, event):

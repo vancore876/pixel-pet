@@ -71,7 +71,7 @@ class RuntimePerformanceTests(unittest.TestCase):
         before_show = time.monotonic()
         pet.show()
         self.assertTrue(pet.timer.isActive())
-        self.assertEqual(pet.timer.interval(), 80)
+        self.assertEqual(pet.timer.interval(), 33)
         self.assertGreaterEqual(pet.last_tick, before_show)
         pet.hide()
         self.assertFalse(pet.timer.isActive())
