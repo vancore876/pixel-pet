@@ -445,7 +445,12 @@ class WorkServerGuardTests(unittest.TestCase):
             with patch("work_server.app.create_app", wraps=create_app) as factory, patch("uvicorn.run") as run:
                 main(["--host", "0.0.0.0", "--port", "8765", "--allow-lan-http",
                       "--database", str(database)])
-            factory.assert_called_once_with(str(database), allow_lan_http=True)
+            factory.assert_called_once()
+            self.assertEqual(factory.call_args.args, (str(database),))
+            self.assertTrue(factory.call_args.kwargs["allow_lan_http"])
+            self.assertTrue(factory.call_args.kwargs["auto_backup"])
+            self.assertEqual(factory.call_args.kwargs["backup_keep_days"], 14)
+            self.assertFalse(factory.call_args.kwargs["database_lease"].acquired)
             self.assertTrue(database.is_file())
             self.assertEqual(run.call_args.kwargs["host"], "0.0.0.0")
             self.assertEqual(run.call_args.kwargs["port"], 8765)
@@ -472,7 +477,10 @@ class WorkServerGuardTests(unittest.TestCase):
                 self.assertFalse(database.exists())
             with patch("work_server.app.create_app", wraps=create_app) as factory, patch("uvicorn.run") as run:
                 main(base + ["--certfile", str(certificate), "--keyfile", str(key)])
-            factory.assert_called_once_with(str(database), allow_lan_http=False)
+            factory.assert_called_once()
+            self.assertEqual(factory.call_args.args, (str(database),))
+            self.assertFalse(factory.call_args.kwargs["allow_lan_http"])
+            self.assertTrue(factory.call_args.kwargs["auto_backup"])
             self.assertEqual(run.call_args.kwargs["ssl_certfile"], str(certificate))
             self.assertEqual(run.call_args.kwargs["ssl_keyfile"], str(key))
 

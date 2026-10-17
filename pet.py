@@ -229,8 +229,18 @@ class PixelPet(QWidget):
                     "LISTEN": "I'm listening.", "KNOCK": "Knock, knock!",
                     "DUST": "A little imaginary dusting.", "INSPECT": "Taking a closer look at this icon.",
                     "PERCH": "A comfortable spot to sit.", "WING_FLAP": "Time for a stretch!",
-                    "FETCH": "One tiny game of fetch.", "CURL_UP": "Curling up for a quiet moment."}
-        self.perform(action, 8 if action in ("SLEEP", "CURL_UP") else 4)
+                    "FETCH": "One tiny game of fetch.", "CURL_UP": "Curling up for a quiet moment.",
+                    "CARRY_BOX": "One tiny delivery. Check the real parcel against the order.",
+                    "STOCK_OK": "A little stock-room celebration!",
+                    "FIND_SHELF": "Find the part's shelf location in the shared inventory.",
+                    "PAPER_PLANE": "A small flight of imagination.",
+                    "BLOW_BUBBLES": "A few bubbles for a quiet break.",
+                    "TAI_CHI": "A slow stretch and an easy breath.",
+                    "STARGAZE": "A little space to wonder.",
+                    "TAP_FOOT": "Ready when you are."}
+        duration = (8 if action in ("SLEEP", "CURL_UP") else
+                    6 if action in ("TAI_CHI", "BLOW_BUBBLES", "STARGAZE") else 4)
+        self.perform(action, duration)
         if self.ai_speech_connected and self.settings["speech"] and not self.settings["quiet_mode"]:
             self.conversation_requested.emit('interaction', action)
         else:
@@ -337,7 +347,8 @@ class PixelPet(QWidget):
             self.state = "EXCITED"
         elif now >= self.next_state or self.state == "EXCITED":
             tricks = ["WAVE", "YAWN", "STRETCH", "SPIN", "FLIP", "ROLL", "SNEEZE", "SCARED", "LAUGH", "SIT", "BALANCE", "TIPTOE", "RUN", "CLIMB", "SLIDE", "SKATE", "BOUNCE", "MAGIC", "UMBRELLA", "JUGGLE", "GROOM", "SALUTE", "FACEPALM", "LEAN", "SNEAK"]
-            tricks += ["HEAD_TILT", "SNIFF", "LISTEN", "FETCH", "CURL_UP"]
+            tricks += ["HEAD_TILT", "SNIFF", "LISTEN", "FETCH", "CURL_UP",
+                       "PAPER_PLANE", "BLOW_BUBBLES", "TAI_CHI", "TAP_FOOT"]
             if self.settings["character"] in ("owl", "dragon"):
                 tricks.append("WING_FLAP")
             choices, weights = (["WALK", "IDLE", "SLEEP"] + tricks, [7, 3, 0.5] + [0.45] * len(tricks)) if self.settings["playful"] else (["WALK", "IDLE", "SLEEP"], [7, 3, 1])

@@ -59,6 +59,85 @@ def _date_label(value):
     return _timestamp(value).astimezone().strftime("%Y-%m-%d %H:%M")
 
 
+def _backup_size(value):
+    for unit in ("B", "KiB", "MiB", "GiB", "TiB"):
+        if value < 1024 or unit == "TiB":
+            return f"{value:,.0f} {unit}" if unit == "B" else f"{value:,.1f} {unit}"
+        value /= 1024
+
+
+class BackupActionDialog(QDialog):
+    """A fresh IT password authorizes one server-side backup job."""
+
+    def __init__(self, owner):
+        super().__init__(owner)
+        self.owner = owner
+        self._reply = None
+        self._active = True
+        self._busy = False
+        self.setWindowModality(Qt.WindowModal)
+        self.setWindowTitle("Back up office data · Jeffery IT")
+        self.resize(460, 240)
+        layout = QVBoxLayout(self)
+        layout.addWidget(_label("Back up office data", "sectionTitle"))
+        layout.addWidget(_label("Create and verify a backup on the office server. Employees can keep working while it runs."))
+        form = QFormLayout()
+        self.admin_password = _password()
+        form.addRow("Your current IT password", self.admin_password)
+        layout.addLayout(form)
+        self.status = _label("", "hint")
+        layout.addWidget(self.status)
+        row = QHBoxLayout()
+        row.addStretch()
+        self.cancel_button = _button("Cancel", self.reject)
+        self.submit_button = _button("Back up now", self.submit)
+        row.addWidget(self.cancel_button)
+        row.addWidget(self.submit_button)
+        layout.addLayout(row)
+        apply_window_style(self, owner.settings)
+
+    def submit(self):
+        if self._busy or not self._active or not self.owner._token or self.owner._must_change_password:
+            return
+        password = self.admin_password.text()
+        if not password:
+            self.status.setText("Enter your current IT password.")
+            return
+        self.admin_password.clear()
+        self._busy = True
+        self.submit_button.setEnabled(False)
+        self.cancel_button.setText("Close")
+        self.status.setText("Starting backup… Closing this dialog does not stop a backup already started on the server.")
+
+        def finished(data, error, status):
+            if not self._active:
+                return
+            self._busy = False
+            self.submit_button.setEnabled(True)
+            if status == 404:
+                self.status.setText("Update and restart the office server to use backups.")
+                return
+            if error and status != 409:
+                self.status.setText(error)
+                return
+            self.owner.backup_status.setText("A backup is already running on the server." if status == 409
+                                            else "Backup started. Verifying the saved copy…")
+            self.owner._backups_running = True
+            self.owner._sync_backup_poll()
+            self.owner.refresh_backups(force=True)
+            self.accept()
+
+        self._reply = self.owner._request("POST", "/api/it/backups", {"admin_password": password}, finished)
+
+    def done(self, result):
+        self._active = False
+        if self._reply is not None:
+            self.owner._cancel_request(self._reply)
+            self._reply = None
+        self.admin_password.clear()
+        super().done(result)
+
+
 class EmployeeActionDialog(QDialog):
     """Ask for fresh credentials for one explicitly selected employee."""
 
@@ -185,6 +264,16 @@ class ITWindow(QDialog):
         self._last_activity = time.monotonic()
         self._users = []
         self._action_dialog = None
+        self._backup_dialog = None
+        self._backups_available = False
+        self._backups_running = False
+        self._backups_refreshing = False
+        self._backup_refresh_reply = None
+        self._backup_refresh_id = 0
+        self._backup_poll = QTimer(self)
+        self._backup_poll.setInterval(2_000)
+        self._backup_poll.setSingleShot(True)
+        self._backup_poll.timeout.connect(self.refresh_backups)
         self._stopped = False
         self.setWindowTitle("Jeffery · IT administration")
         self.resize(920, 720)
@@ -322,6 +411,7 @@ class ITWindow(QDialog):
         row.addWidget(self.sign_out_button)
         row.addStretch()
         layout.addLayout(row)
+        self._build_backups(layout)
         layout.addWidget(_label("Recent IT actions", "sectionTitle"))
         self.audit_list = QListWidget()
         self.audit_list.setMinimumHeight(140)
@@ -329,12 +419,164 @@ class ITWindow(QDialog):
         self.dashboard_page.setWidget(content)
         self.pages.addWidget(self.dashboard_page)
 
+    def _build_backups(self, layout):
+        layout.addWidget(_label("Office backups", "sectionTitle"))
+        self.backup_summary = _label("Sign in to check office backups.")
+        self.backup_dates = _label("", "hint")
+        self.backup_status = _label("", "hint")
+        self.backup_directory = _label("", "hint")
+        self.backup_directory.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        for label in (self.backup_summary, self.backup_dates, self.backup_status, self.backup_directory):
+            layout.addWidget(label)
+        row = QHBoxLayout()
+        self.backup_now_button = _button("Back up now…", self._backup_action)
+        self.backup_refresh_button = _button("Refresh backups", self.refresh_backups)
+        self.backup_restore_button = _button("Restore on server", self._toggle_restore_help)
+        self.backup_restore_button.setCheckable(True)
+        row.addWidget(self.backup_now_button)
+        row.addWidget(self.backup_refresh_button)
+        row.addWidget(self.backup_restore_button)
+        row.addStretch()
+        layout.addLayout(row)
+        self.backup_restore_help = _label(
+            "On the office server PC, stop the office server and follow the backup restore instructions in WORK_CHAT.md. "
+            "Choose a verified backup listed below. Restore replaces the office database; restart the server after the restore finishes. "
+            "Local notes and shared-folder files need their own backups.", "hint")
+        self.backup_restore_help.hide()
+        layout.addWidget(self.backup_restore_help)
+        self.backups_table = QTableWidget(0, 4)
+        self.backups_table.setHorizontalHeaderLabels(["Backup", "Created", "Size", "Verified"])
+        self.backups_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.backups_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.backups_table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.backups_table.setAlternatingRowColors(True)
+        self.backups_table.verticalHeader().hide()
+        self.backups_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        for column in (1, 2, 3):
+            self.backups_table.horizontalHeader().setSectionResizeMode(column, QHeaderView.ResizeToContents)
+        self.backups_table.setMinimumHeight(150)
+        layout.addWidget(self.backups_table)
+
+    def _toggle_restore_help(self, checked=False):
+        self.backup_restore_help.setVisible(bool(checked))
+
+    def _backup_action(self):
+        if (not self._token or self._must_change_password or self._busy or not self._backups_available
+                or self._backups_running or self._backups_refreshing):
+            return
+        if self._backup_dialog is not None and self._backup_dialog.isVisible():
+            self._backup_dialog.raise_()
+            return
+        if self._backup_dialog is not None:
+            self._backup_dialog.deleteLater()
+        self._backup_dialog = BackupActionDialog(self)
+        self._backup_dialog.show()
+        self._backup_dialog.admin_password.setFocus()
+
+    def _sync_backup_poll(self):
+        if (self._backups_running and self._token and not self._must_change_password and not self._stopped
+                and self.isVisible() and self.pages.currentWidget() is self.dashboard_page):
+            self._backup_poll.start()
+        else:
+            self._backup_poll.stop()
+
+    def refresh_backups(self, checked=False, *, force=False):
+        if (not self._token or self._must_change_password or self._busy or self._stopped
+                or not self.isVisible() or self.pages.currentWidget() is not self.dashboard_page):
+            self._backup_poll.stop()
+            return
+        if self._backups_refreshing:
+            if not force:
+                return
+            if self._backup_refresh_reply is not None:
+                self._cancel_request(self._backup_refresh_reply)
+        self._backup_poll.stop()
+        self._backup_refresh_id += 1
+        request_id = self._backup_refresh_id
+        self._backups_refreshing = True
+        self._update_controls()
+
+        def finished(data, error, status):
+            if request_id != self._backup_refresh_id:
+                return
+            self._backups_refreshing = False
+            self._backup_refresh_reply = None
+            if status == 404:
+                self._clear_backups()
+                self.backup_status.setText("Update and restart the office server to use backups. Other IT tools are available.")
+            elif error:
+                self.backup_status.setText("Could not refresh backups. " + error)
+            else:
+                try:
+                    self._set_backups(data)
+                except (ValueError, TypeError, KeyError, OverflowError):
+                    self._clear_backups()
+                    self.backup_status.setText("The server returned invalid backup details. Refresh or update the office server.")
+            self._update_controls()
+            self._sync_backup_poll()
+
+        self._backup_refresh_reply = self._request("GET", "/api/it/backups", None, finished)
+
+    def _set_backups(self, data):
+        if (not isinstance(data, dict) or not isinstance(data.get("enabled"), bool)
+                or not isinstance(data.get("running"), bool) or not _count(data.get("keep_days"))
+                or not 1 <= data["keep_days"] <= 36500):
+            raise ValueError("Invalid backup settings")
+        directory, error = data.get("directory"), data.get("last_error")
+        if (not isinstance(directory, str) or len(directory) > 4096 or any(ord(char) < 32 for char in directory)
+                or (error is not None and (not isinstance(error, str) or len(error) > 1000))):
+            raise ValueError("Invalid backup details")
+        last = _date_label(data["last_success_at"]) if data.get("last_success_at") else "None yet"
+        next_due = _date_label(data["next_due"]) if data.get("next_due") else "Not scheduled"
+        backups = data.get("backups")
+        if not isinstance(backups, list) or len(backups) > 1000:
+            raise ValueError("Invalid backup list")
+        rows, seen = [], set()
+        for backup in backups:
+            if not isinstance(backup, dict):
+                raise ValueError("Invalid backup")
+            name = backup.get("name")
+            if (not isinstance(name, str) or not 1 <= len(name) <= 255 or name in (".", "..")
+                    or name in seen or any(char in "/\\" or ord(char) < 32 for char in name)
+                    or not _count(backup.get("size")) or not isinstance(backup.get("verified"), bool)):
+                raise ValueError("Invalid backup metadata")
+            seen.add(name)
+            rows.append((name, _date_label(backup.get("created_at")), _backup_size(backup["size"]),
+                         "Yes" if backup["verified"] else "No"))
+        self._backups_available = True
+        self._backups_running = data["running"]
+        self.backup_summary.setText(f"Automatic daily backups: {'On' if data['enabled'] else 'Off'} · Keep latest {data['keep_days']:,} backup dates")
+        self.backup_dates.setText(f"Last verified backup: {last} · Next due: {next_due}")
+        self.backup_directory.setText("Saved on the server: " + directory)
+        self.backup_status.setText("Backup running; the saved copy will be verified." if data["running"]
+                                   else "Last backup error: " + error if error
+                                   else "Backups are ready." if rows else "No verified backups yet. Use Back up now to create the first copy.")
+        self.backups_table.setRowCount(len(rows))
+        for row, values in enumerate(rows):
+            for column, value in enumerate(values):
+                self.backups_table.setItem(row, column, QTableWidgetItem(value))
+
+    def _clear_backups(self):
+        self._backup_refresh_id += 1
+        self._backups_available = self._backups_running = self._backups_refreshing = False
+        self._backup_refresh_reply = None
+        self._backup_poll.stop()
+        self.backup_summary.setText("Sign in to check office backups.")
+        self.backup_dates.clear()
+        self.backup_status.clear()
+        self.backup_directory.clear()
+        self.backups_table.setRowCount(0)
+        self.backup_restore_button.setChecked(False)
+        self.backup_restore_help.hide()
+
     def configure(self, settings=None):
         if settings is not None:
             self.settings = settings
         apply_window_style(self, self.settings)
         if self._action_dialog is not None and self._action_dialog.isVisible():
             apply_window_style(self._action_dialog, self.settings)
+        if self._backup_dialog is not None and self._backup_dialog.isVisible():
+            apply_window_style(self._backup_dialog, self.settings)
 
     @property
     def token(self):
@@ -454,6 +696,7 @@ class ITWindow(QDialog):
                                    else "Changing the IT password signs out other IT sessions. Employee passwords stay the same.")
         self.password_back_button.setVisible(not self._must_change_password)
         self.pages.setCurrentWidget(self.password_page)
+        self._backup_poll.stop()
         self.current_password.setFocus()
 
     def _password_back(self):
@@ -461,6 +704,7 @@ class ITWindow(QDialog):
             return
         self._clear_password_fields()
         self.pages.setCurrentWidget(self.dashboard_page)
+        self.refresh_backups()
 
     def change_password(self):
         if self._busy or not self._token or self.pages.currentWidget() is not self.password_page:
@@ -521,6 +765,7 @@ class ITWindow(QDialog):
 
         self._request("GET", "/api/it/overview", None, lambda *args: finish("overview", *args))
         self._request("GET", "/api/it/users", None, lambda *args: finish("users", *args))
+        self.refresh_backups()
 
     def _overview(self, data):
         if not isinstance(data, dict) or any(not _count(data.get(key)) for key in self.metrics):
@@ -602,6 +847,11 @@ class ITWindow(QDialog):
         self.password_back_button.setEnabled(not self._busy)
         self.refresh_button.setEnabled(bool(self._token) and not self._refreshing and not self._busy)
         self.password_button.setEnabled(bool(self._token) and not self._busy and not self._refreshing)
+        backup_access = bool(self._token and not self._must_change_password and not self._busy and not self._stopped)
+        self.backup_refresh_button.setEnabled(backup_access and not self._backups_refreshing)
+        self.backup_now_button.setEnabled(backup_access and self._backups_available and not self._backups_running
+                                         and not self._backups_refreshing)
+        self.backup_restore_button.setEnabled(backup_access)
         employee = self._selected_user()
         available = bool(employee and self._token and not self._must_change_password and not self._busy and not self._refreshing)
         self.reset_button.setEnabled(available)
@@ -623,6 +873,9 @@ class ITWindow(QDialog):
         self._idle_timer.stop()
         if self._action_dialog is not None:
             self._action_dialog.reject()
+        if self._backup_dialog is not None:
+            self._backup_dialog.reject()
+        self._clear_backups()
         self._clear_password_fields()
         self._users = []
         self.search.clear()
@@ -668,6 +921,15 @@ class ITWindow(QDialog):
     def closeEvent(self, event):
         self._lock()
         super().closeEvent(event)
+
+    def hideEvent(self, event):
+        self._backup_poll.stop()
+        super().hideEvent(event)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if self._token and not self._must_change_password:
+            self.refresh_backups()
 
     def shutdown(self):
         self._stopped = True

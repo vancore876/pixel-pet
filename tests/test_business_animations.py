@@ -112,7 +112,8 @@ class BusinessAnimationTests(unittest.TestCase):
         self.assertEqual(MOBILE_STATES, LEGACY_STATES)
         self.assertEqual(ANIMATION_STATES[:49], LEGACY_STATES)
         self.assertEqual(ANIMATION_STATES[49:55], tuple(state for _, state in BUSINESS_ANIMATIONS))
-        self.assertEqual(len(set(ANIMATION_STATES)), 65)
+        self.assertEqual(len(set(ANIMATION_STATES)), len(ANIMATION_STATES))
+        self.assertGreaterEqual(len(ANIMATION_STATES), 65)
 
     def test_every_pose_has_visible_animation_and_fits_all_characters_and_sizes(self):
         for character in ('robot', 'cat', 'knight'):

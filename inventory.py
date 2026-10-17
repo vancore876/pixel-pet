@@ -11,6 +11,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 import io
+import json
+import math
 from pathlib import Path
 import re
 import sqlite3
@@ -22,9 +24,10 @@ MAX_FILE_BYTES = 50 * 1024 * 1024
 MAX_UNCOMPRESSED_BYTES = 500 * 1024 * 1024
 MAX_ROWS = 100_000
 MAX_COLUMNS = 100
+MAX_HISTORY_BYTES = 768 * 1024
 FIELDS = ("sku", "description", "quantity", "location", "reorder_point",
-          "reorder_quantity", "target_stock", "supplier")
-TEXT_LIMITS = {"sku": 128, "description": 2000, "location": 500, "supplier": 500}
+          "reorder_quantity", "target_stock", "supplier", "barcode")
+TEXT_LIMITS = {"sku": 128, "description": 2000, "location": 500, "supplier": 500, "barcode": 128}
 COUNT_LIMIT = 2**31 - 1
 ALIASES = {
     "sku": ("sku", "part", "partnumber", "partno", "partcode", "itemcode", "itemnumber", "itemno", "productcode", "stockcode"),
@@ -35,6 +38,7 @@ ALIASES = {
     "reorder_quantity": ("reorderquantity", "reorderqty", "orderquantity", "restockquantity", "restockqty"),
     "target_stock": ("targetstock", "targetquantity", "targetqty", "maximumstock", "maxstock"),
     "supplier": ("supplier", "vendor", "suppliername", "vendorname"),
+    "barcode": ("barcode", "barcodes", "upc", "upca", "ean", "ean13", "gtin", "gtin12", "gtin13", "gtin14"),
 }
 
 
@@ -125,6 +129,16 @@ def _count(value, name, nullable=False):
     return int(number)
 
 
+def _code(value, *, optional=False):
+    """Scanner identifiers are text, never numbers or approximate searches."""
+    if not isinstance(value, str):
+        raise InventoryError("Barcode must be text so leading zeroes are preserved.")
+    value = value.strip()
+    if (not optional and not value) or len(value) > 128 or any(ord(c) < 32 or ord(c) == 127 for c in value):
+        raise InventoryError("Enter a barcode or exact part number with 1–128 readable characters.")
+    return value
+
+
 def validate_row(row):
     if not isinstance(row, dict) or any(key not in FIELDS for key in row):
         raise InventoryError("Inventory rows must contain only recognized stock fields.")
@@ -134,14 +148,16 @@ def validate_row(row):
     for name in FIELDS:
         if name in result or name not in row:
             continue
-        result[name] = _text(row[name], name) if name in TEXT_LIMITS else _count(row[name], name, name == "target_stock")
+        result[name] = (_code(row[name] if row[name] is not None else "", optional=True) if name == "barcode"
+                        else _text(row[name], name) if name in TEXT_LIMITS
+                        else _count(row[name], name, name == "target_stock"))
     return result
 
 
 def validate_rows(rows):
     if not isinstance(rows, (list, tuple)) or not rows or len(rows) > MAX_ROWS:
         raise InventoryError(f"Import must contain 1–{MAX_ROWS:,} rows.")
-    normalized, seen = [], {}
+    normalized, seen, barcodes = [], {}, {}
     for index, row in enumerate(rows, 1):
         try:
             item = validate_row(row)
@@ -151,6 +167,11 @@ def validate_rows(rows):
         if key in seen:
             raise InventoryError(f"Row {index}: duplicate part number {item['sku']!r} (also row {seen[key]}).")
         seen[key] = index
+        barcode = item.get("barcode", "")
+        if barcode and barcode in barcodes:
+            raise InventoryError(f"Row {index}: duplicate barcode {barcode!r} (also row {barcodes[barcode]}).")
+        if barcode:
+            barcodes[barcode] = index
         normalized.append(item)
     return normalized
 
@@ -159,7 +180,7 @@ def _cell_value(cell):
     value = cell.value
     # Excel stores numeric part codes without their displayed leading zeroes.
     # Honor only simple zero-padding formats; do not evaluate format expressions.
-    if isinstance(value, (int, float)) and not isinstance(value, bool) and value >= 0 and value == int(value):
+    if isinstance(value, (int, float)) and not isinstance(value, bool) and 0 <= value < 10**15 and value == int(value):
         pattern = str(getattr(cell, "number_format", ""))
         if re.fullmatch(r"0{2,128}", pattern):
             return str(int(value)).zfill(len(pattern))
@@ -232,7 +253,7 @@ def _read_spreadsheet(path, sheet=None, cancel=None):
                 for column in range(worksheet.ncols):
                     cell = worksheet.cell(index, column)
                     value = cell.value
-                    if cell.ctype == xlrd.XL_CELL_NUMBER and value >= 0 and value == int(value):
+                    if cell.ctype == xlrd.XL_CELL_NUMBER and 0 <= value < 10**15 and value == int(value):
                         fmt = book.format_map.get(book.xf_list[worksheet.cell_xf_index(index, column)].format_key)
                         pattern = fmt.format_str if fmt else ""
                         value = str(int(value)).zfill(len(pattern)) if re.fullmatch(r"0{2,128}", pattern) else int(value)
@@ -295,7 +316,7 @@ def parse_excel(path, mapping=None, sheet=None, cancel=None, progress=None):
     headers = _headers(rows)
     mapping = suggest_mapping(headers) if mapping is None else dict(mapping)
     resolved = {}
-    errors, warnings, result, seen = [], [], [], {}
+    errors, warnings, result, seen, barcodes = [], [], [], {}, {}
     for name, column in mapping.items():
         if name not in FIELDS or column is None or column == "":
             continue
@@ -323,11 +344,24 @@ def parse_excel(path, mapping=None, sheet=None, cancel=None, progress=None):
             continue
         source = {name: values[column] if column < len(values) else None for name, column in resolved.items()}
         try:
+            barcode = source.get("barcode")
+            # Numeric Excel cells with a simple zero-padding format have already
+            # become strings in _cell_value. Unformatted numbers are usable only
+            # while within Excel's 15-digit integer precision; never guess a GTIN.
+            if isinstance(barcode, (int, float)) and not isinstance(barcode, bool):
+                if not math.isfinite(barcode) or barcode < 0 or barcode >= 10**15 or barcode != int(barcode):
+                    raise InventoryError("Save this barcode as text in Excel; numeric cells can lose digits.")
+                source["barcode"] = str(int(barcode))
             item = validate_row(source)
             key = item["sku"].casefold()
             if key in seen:
                 raise InventoryError(f"Duplicate part number {item['sku']!r}; also appears on row {seen[key]}.")
             seen[key] = index
+            barcode = item.get("barcode", "")
+            if barcode and barcode in barcodes:
+                raise InventoryError(f"Duplicate barcode {barcode!r}; also appears on row {barcodes[barcode]}.")
+            if barcode:
+                barcodes[barcode] = index
             result.append(item)
         except InventoryError as error:
             if len(errors) < 100:
@@ -361,7 +395,26 @@ class InventoryStore:
                     updated_at TEXT NOT NULL, source TEXT NOT NULL
                 );
                 CREATE INDEX IF NOT EXISTS inventory_description ON inventory_items(description COLLATE NOCASE);
+                CREATE TABLE IF NOT EXISTS inventory_movements (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT, sku_key TEXT NOT NULL, sku TEXT NOT NULL,
+                    kind TEXT NOT NULL, quantity INTEGER NOT NULL, before_quantity INTEGER NOT NULL,
+                    after_quantity INTEGER NOT NULL, delta INTEGER NOT NULL,
+                    reason TEXT NOT NULL DEFAULT '', reference TEXT NOT NULL DEFAULT '',
+                    actor TEXT NOT NULL DEFAULT '', actor_id INTEGER,
+                    created_at TEXT NOT NULL, item_revision INTEGER NOT NULL,
+                    changes_json TEXT NOT NULL DEFAULT '{}'
+                );
+                CREATE INDEX IF NOT EXISTS inventory_movement_part ON inventory_movements(sku_key,id DESC);
+                CREATE TABLE IF NOT EXISTS inventory_movement_requests (
+                    actor_key TEXT NOT NULL, request_id TEXT NOT NULL, payload_json TEXT NOT NULL,
+                    result_json TEXT NOT NULL, PRIMARY KEY(actor_key,request_id)
+                );
             """)
+            connection.execute("BEGIN IMMEDIATE")
+            columns = {row[1] for row in connection.execute("PRAGMA table_info(inventory_items)")}
+            if "barcode" not in columns:
+                connection.execute("ALTER TABLE inventory_items ADD COLUMN barcode TEXT NOT NULL DEFAULT ''")
+            connection.execute("CREATE UNIQUE INDEX IF NOT EXISTS inventory_barcode ON inventory_items(barcode) WHERE barcode<>''")
 
     def _connect(self):
         connection = sqlite3.connect(self.path, timeout=5)
@@ -384,6 +437,21 @@ class InventoryStore:
         with closing(self._connect()) as connection:
             return self._public(connection.execute("SELECT * FROM inventory_items WHERE key=?", (str(sku).strip().casefold(),)).fetchone())
 
+    def resolve_code(self, code):
+        """Resolve a scanner's full text without changing stock or its revision."""
+        code = _code(code)
+        with closing(self._connect()) as connection:
+            # Separate indexed equality probes avoid a table scan or LIKE
+            # wildcard interpretation. A code matching two parts is not safe.
+            rows = connection.execute("""SELECT * FROM inventory_items WHERE key=?
+                UNION SELECT * FROM inventory_items WHERE barcode=? AND barcode<>''""",
+                                      (code.casefold(), code)).fetchall()
+        if not rows:
+            raise InventoryError("No part matches this barcode or exact part number. Check the label or import its barcode.", 404)
+        if len(rows) != 1:
+            raise InventoryError("This code matches different parts as a barcode and a part number. Correct the catalogue before scanning it.", 409)
+        return self._public(rows[0])
+
     def search(self, query="", limit=100, offset=0, low_stock=False):
         if not isinstance(query, str) or len(query) > 500:
             raise InventoryError("Search must contain at most 500 characters.")
@@ -392,8 +460,8 @@ class InventoryStore:
         where, parameters = [], []
         for word in query.split():
             pattern = "%" + word.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
-            where.append("(sku LIKE ? ESCAPE '\\' OR description LIKE ? ESCAPE '\\' OR location LIKE ? ESCAPE '\\' OR supplier LIKE ? ESCAPE '\\')")
-            parameters.extend([pattern] * 4)
+            where.append("(sku LIKE ? ESCAPE '\\' OR description LIKE ? ESCAPE '\\' OR location LIKE ? ESCAPE '\\' OR supplier LIKE ? ESCAPE '\\' OR barcode LIKE ? ESCAPE '\\')")
+            parameters.extend([pattern] * 5)
         if low_stock:
             where.append("quantity <= reorder_point")
         sql = "SELECT * FROM inventory_items" + (" WHERE " + " AND ".join(where) if where else "") + " ORDER BY sku COLLATE NOCASE LIMIT ? OFFSET ?"
@@ -405,9 +473,8 @@ class InventoryStore:
 
     def summary(self):
         with closing(self._connect()) as connection:
-            state = dict(connection.execute("SELECT revision,last_import_at,last_import_source FROM inventory_state WHERE id=1").fetchone())
-            totals = connection.execute("SELECT COUNT(*), COALESCE(SUM(quantity),0), COALESCE(SUM(quantity<=reorder_point),0) FROM inventory_items").fetchone()
-        return {**state, "item_count": totals[0], "total_quantity": totals[1], "low_stock_count": totals[2]}
+            connection.execute("BEGIN")
+            return self._summary(connection)
 
     def preview_import(self, plan):
         if isinstance(plan, InventoryImportPlan):
@@ -422,6 +489,7 @@ class InventoryStore:
         changes = []
         with closing(self._connect()) as connection:
             connection.execute("BEGIN")
+            self._validate_barcodes(connection, normalized)
             summary = self._summary(connection)
             for item in normalized:
                 old = connection.execute("SELECT * FROM inventory_items WHERE key=?", (item["sku"].casefold(),)).fetchone()
@@ -450,35 +518,201 @@ class InventoryStore:
         totals = connection.execute("SELECT COUNT(*),COALESCE(SUM(quantity),0),COALESCE(SUM(quantity<=reorder_point),0) FROM inventory_items").fetchone()
         return {**state, "item_count": totals[0], "total_quantity": totals[1], "low_stock_count": totals[2]}
 
-    def _apply_rows(self, connection, normalized, source, expected_revision):
+    @staticmethod
+    def _validate_barcodes(connection, normalized):
+        """Check the final assignment, allowing deliberate barcode swaps."""
+        owners = {row["barcode"]: row["key"] for row in connection.execute(
+            "SELECT key,barcode FROM inventory_items WHERE barcode<>''")}
+        changed_keys = {row["sku"].casefold() for row in normalized if "barcode" in row}
+        owners = {code: key for code, key in owners.items() if key not in changed_keys}
+        for item in normalized:
+            code = item.get("barcode", "")
+            if not code:
+                continue
+            key = item["sku"].casefold()
+            if code in owners and owners[code] != key:
+                raise InventoryError(f"Barcode {code!r} is assigned to another part. Each barcode must identify one part.", 409)
+            owners[code] = key
+
+    @staticmethod
+    def _audit_text(value, label, limit, required=False):
+        if not isinstance(value, str):
+            raise InventoryError(f"{label} must contain text.")
+        value = value.strip()
+        if len(value) > limit or (required and not value) or any(ord(c) < 32 and c not in "\n\t" for c in value):
+            raise InventoryError(f"{label} must contain {'1–' if required else 'at most '}{limit} readable characters.")
+        return value
+
+    @staticmethod
+    def _actor_label(connection, actor, actor_id):
+        if actor_id is None:
+            return actor
+        user = connection.execute("SELECT username,deleted_at FROM users WHERE id=?", (actor_id,)).fetchone()
+        return user["username"] if user and user["deleted_at"] is None else "Deleted employee"
+
+    @classmethod
+    def _public_movement(cls, connection, row):
+        movement = dict(row)
+        movement.pop("sku_key", None)
+        actor_id = movement.pop("actor_id", None)
+        movement["actor"] = cls._actor_label(connection, movement["actor"], actor_id)
+        movement["changes"] = json.loads(movement.pop("changes_json", "{}"))
+        return movement
+
+    def _insert_movement(self, connection, *, sku, kind, quantity, before, after,
+                         reason, reference, actor, actor_id, timestamp, revision, changes=None):
+        # Store server identities by ID only. Account deletion then anonymizes
+        # history without preserving a second copy of the employee's username.
+        stored_actor = "" if actor_id is not None else actor
+        cursor = connection.execute("""INSERT INTO inventory_movements
+            (sku_key,sku,kind,quantity,before_quantity,after_quantity,delta,reason,reference,
+             actor,actor_id,created_at,item_revision,changes_json)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (sku.casefold(), sku, kind, quantity, before, after, after - before, reason,
+             reference, stored_actor, actor_id, timestamp, revision,
+             json.dumps(changes or {}, ensure_ascii=False, separators=(",", ":"))))
+        return self._public_movement(connection, connection.execute(
+            "SELECT * FROM inventory_movements WHERE id=?", (cursor.lastrowid,)).fetchone())
+
+    def movements(self, sku="", limit=50, before_id=None):
+        """Bounded keyset pagination; lookups and cache refreshes create no audit."""
+        if not isinstance(sku, str) or len(sku) > 128:
+            raise InventoryError("Choose a valid part number for stock history.")
+        if type(limit) is not int or not 1 <= limit <= 200:
+            raise InventoryError("History page size must be between 1 and 200.")
+        if before_id is not None and (type(before_id) is not int or not 1 <= before_id < 2**63):
+            raise InventoryError("History cursor must be a positive whole number.")
+        where, values = [], []
+        if sku.strip():
+            where.append("sku_key=?")
+            values.append(sku.strip().casefold())
+        if before_id is not None:
+            where.append("id<?")
+            values.append(before_id)
+        sql = "SELECT * FROM inventory_movements" + (" WHERE " + " AND ".join(where) if where else "") + " ORDER BY id DESC LIMIT ?"
+        with closing(self._connect()) as connection:
+            connection.execute("BEGIN")
+            rows = connection.execute(sql, (*values, limit + 1)).fetchall()
+            movements, response_bytes = [], 0
+            for row in rows[:limit]:
+                movement = self._public_movement(connection, row)
+                size = len(json.dumps(movement, ensure_ascii=False, separators=(",", ":")).encode("utf-8")) + 1
+                # Imported before/after descriptions may each contain thousands
+                # of Unicode characters. Bound actual bytes as well as row count
+                # so every page fits the desktop transport's 1 MiB response cap.
+                if movements and response_bytes + size > MAX_HISTORY_BYTES:
+                    break
+                movements.append(movement)
+                response_bytes += size
+        has_more = len(rows) > len(movements)
+        return {"movements": movements, "has_more": has_more,
+                "next_before_id": movements[-1]["id"] if has_more else None}
+
+    def _record_movement(self, connection, sku, kind, quantity, *, expected_revision,
+                         request_id, reason="", reference="", actor="Local user", actor_id=None):
+        sku = _text(sku, "sku", True)
+        if kind not in ("receive", "sale", "return", "count"):
+            raise InventoryError("Choose receive, sale, return, or count for a stock movement.")
+        if type(quantity) is not int or not (0 if kind == "count" else 1) <= quantity <= COUNT_LIMIT:
+            raise InventoryError("Enter a positive whole quantity; a physical count can be zero.")
+        if type(expected_revision) is not int or not 0 <= expected_revision < 2**63 - 1:
+            raise InventoryError("Refresh this part before recording its stock movement.")
+        if not isinstance(request_id, str) or not re.fullmatch(r"[0-9a-f]{32}", request_id):
+            raise InventoryError("Stock movements need a unique 32-character request ID.")
+        reason = self._audit_text(reason, "Reason", 500, kind == "count")
+        reference = self._audit_text(reference, "Reference", 200)
+        actor = self._audit_text(actor, "Employee name", 128, True)
+        actor_key = "user:" + str(actor_id) if actor_id is not None else "local:" + actor
+        payload = {"sku": sku.casefold(), "kind": kind, "quantity": quantity,
+                   "expected_revision": expected_revision, "reason": reason, "reference": reference}
+        encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        previous = connection.execute("SELECT payload_json,result_json FROM inventory_movement_requests WHERE actor_key=? AND request_id=?",
+                                      (actor_key, request_id)).fetchone()
+        if previous is not None:
+            if previous["payload_json"] != encoded:
+                raise InventoryError("This request ID was already used for a different stock movement. Refresh before trying again.", 409)
+            result = json.loads(previous["result_json"])
+            result["movement"]["actor"] = self._actor_label(connection, actor, actor_id)
+            return result
+        old = connection.execute("SELECT * FROM inventory_items WHERE key=?", (sku.casefold(),)).fetchone()
+        if old is None:
+            raise InventoryError("Part number was not found. Scan or select an existing part first.", 404)
+        if old["revision"] != expected_revision:
+            raise InventoryError("This part changed on another PC. Scan or refresh it and review the new quantity.", 409)
+        before = old["quantity"]
+        after = quantity if kind == "count" else before + (-quantity if kind == "sale" else quantity)
+        if not 0 <= after <= COUNT_LIMIT:
+            raise InventoryError("This movement would make stock negative or exceed the maximum quantity.", 409)
+        revision = connection.execute("SELECT revision FROM inventory_state WHERE id=1").fetchone()[0] + 1
+        timestamp = datetime.fromtimestamp(self.clock(), timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+        connection.execute("UPDATE inventory_items SET quantity=?,revision=?,updated_at=?,source=? WHERE key=?",
+                           (after, revision, timestamp, "Stock movement", sku.casefold()))
+        connection.execute("UPDATE inventory_state SET revision=? WHERE id=1", (revision,))
+        movement = self._insert_movement(connection, sku=old["sku"], kind=kind, quantity=quantity,
+            before=before, after=after, reason=reason, reference=reference, actor=actor, actor_id=actor_id,
+            timestamp=timestamp, revision=revision, changes={"quantity": {"before": before, "after": after}})
+        result = {"item": self._public(connection.execute("SELECT * FROM inventory_items WHERE key=?", (sku.casefold(),)).fetchone()),
+                  "movement": movement, "summary": self._summary(connection)}
+        stored_result = {**result, "movement": {**movement, "actor": "" if actor_id is not None else actor}}
+        connection.execute("INSERT INTO inventory_movement_requests VALUES(?,?,?,?)",
+                           (actor_key, request_id, encoded, json.dumps(stored_result, ensure_ascii=False)))
+        return result
+
+    def record_movement(self, sku, kind, quantity, *, expected_revision, request_id,
+                        reason="", reference="", actor="Local user"):
+        """Commit the quantity, audit, and retry receipt under one write lock."""
+        with closing(self._connect()) as connection, connection:
+            connection.execute("BEGIN IMMEDIATE")
+            return self._record_movement(connection, sku, kind, quantity,
+                expected_revision=expected_revision, request_id=request_id, reason=reason,
+                reference=reference, actor=actor)
+
+    def _apply_rows(self, connection, normalized, source, expected_revision, *, actor="Local user", actor_id=None, audit=True):
         """Apply already validated rows in the caller's write transaction."""
         timestamp = datetime.fromtimestamp(self.clock(), timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
         revision = connection.execute("SELECT revision FROM inventory_state WHERE id=1").fetchone()[0]
         if expected_revision is not None and expected_revision != revision:
             raise InventoryError("Stock changed since the preview. Refresh and review this import again.", 409)
+        self._validate_barcodes(connection, normalized)
+        # Remember the originals before releasing changed barcode assignments.
+        # Releasing them together permits an explicit A/B barcode swap without
+        # violating the uniqueness constraint halfway through the transaction.
+        originals = {row["sku"].casefold(): connection.execute(
+            "SELECT * FROM inventory_items WHERE key=?", (row["sku"].casefold(),)).fetchone()
+            for row in normalized}
         existing_count = connection.execute("SELECT COUNT(*) FROM inventory_items").fetchone()[0]
-        incoming_new = sum(not connection.execute("SELECT 1 FROM inventory_items WHERE key=?", (row["sku"].casefold(),)).fetchone()
-                           for row in normalized)
+        incoming_new = sum(old is None for old in originals.values())
         if existing_count + incoming_new > MAX_ROWS:
             raise InventoryError(f"The inventory can contain at most {MAX_ROWS:,} different parts.", 413)
+        connection.executemany("UPDATE inventory_items SET barcode='' WHERE key=?",
+            ((row["sku"].casefold(),) for row in normalized if "barcode" in row
+             and originals[row["sku"].casefold()] is not None
+             and originals[row["sku"].casefold()]["barcode"] != row["barcode"]))
         revision += 1
         created = updated = unchanged = 0
         for item in normalized:
             key = item["sku"].casefold()
-            old = connection.execute("SELECT * FROM inventory_items WHERE key=?", (key,)).fetchone()
+            old = originals[key]
+            changes = {name: {"before": old[name] if old is not None else None, "after": value}
+                       for name, value in item.items() if old is None or old[name] != value}
             if old is None:
                 created += 1
                 values = {"description": "", "location": "", "reorder_point": 0,
-                          "reorder_quantity": 0, "target_stock": None, "supplier": "", **item}
-                connection.execute("""INSERT INTO inventory_items(key,sku,description,quantity,location,reorder_point,reorder_quantity,target_stock,supplier,revision,updated_at,source)
-                    VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""", (key, *(values[name] for name in FIELDS), revision, timestamp, source))
-            elif any(old[name] != value for name, value in item.items()):
+                          "reorder_quantity": 0, "target_stock": None, "supplier": "", "barcode": "", **item}
+                connection.execute("""INSERT INTO inventory_items(key,sku,description,quantity,location,reorder_point,reorder_quantity,target_stock,supplier,barcode,revision,updated_at,source)
+                    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""", (key, *(values[name] for name in FIELDS), revision, timestamp, source))
+            elif changes:
                 updated += 1
                 assignments = ",".join(f"{name}=?" for name in item)
                 connection.execute(f"UPDATE inventory_items SET {assignments},revision=?,updated_at=?,source=? WHERE key=?",
                                    (*item.values(), revision, timestamp, source, key))
             else:
                 unchanged += 1
+            if audit and changes:
+                before = old["quantity"] if old is not None else 0
+                self._insert_movement(connection, sku=item["sku"], kind="import", quantity=item["quantity"],
+                    before=before, after=item["quantity"], reason="Stock imported or edited", reference=source,
+                    actor=actor, actor_id=actor_id, timestamp=timestamp, revision=revision, changes=changes)
         connection.execute("UPDATE inventory_state SET revision=?,last_import_at=?,last_import_source=? WHERE id=1", (revision, timestamp, source))
         return {**self._summary(connection), "created": created, "updated": updated, "unchanged": unchanged, "rows": len(normalized)}
 
@@ -504,7 +738,7 @@ class InventoryStore:
             connection.execute("BEGIN IMMEDIATE")
             connection.execute("DELETE FROM inventory_items")
             if normalized:
-                self._apply_rows(connection, normalized, str(last_import_source)[:255], None)
+                self._apply_rows(connection, normalized, str(last_import_source)[:255], None, audit=False)
             connection.execute("UPDATE inventory_items SET revision=?", (revision,))
             for row in rows:
                 row_revision = row.get("revision", revision)

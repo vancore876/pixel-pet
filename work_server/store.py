@@ -98,6 +98,13 @@ class ChatStore:
                 );
                 CREATE INDEX IF NOT EXISTS messages_recipient ON messages(recipient_id, id);
                 CREATE INDEX IF NOT EXISTS messages_pair ON messages(sender_id, recipient_id, id);
+                CREATE TABLE IF NOT EXISTS read_receipts (
+                    reader_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    conversation_id INTEGER NOT NULL CHECK(conversation_id >= 0),
+                    through_id INTEGER NOT NULL REFERENCES messages(id),
+                    PRIMARY KEY(reader_id, conversation_id)
+                );
+                CREATE INDEX IF NOT EXISTS read_receipts_conversation ON read_receipts(conversation_id, through_id);
                 CREATE TABLE IF NOT EXISTS business_state (
                     id INTEGER PRIMARY KEY CHECK(id = 1),
                     revision INTEGER NOT NULL
@@ -332,6 +339,78 @@ class ChatStore:
                     "cursor": page[-1]["id"] if page else max(after_id, latest_id),
                     "latest_id": latest_id, "has_more": len(rows) > limit}
 
+    def mark_read(self, actor_id, *, peer_id=None, through_id, session_token=None):
+        """Record a reader's opened conversation, independently of popup acknowledgements."""
+        if type(through_id) is not int or not 1 <= through_id <= 2**63 - 1:
+            raise StoreError(422, "Choose a valid incoming message to mark as read.")
+        with closing(self._connect()) as connection, connection:
+            connection.execute("BEGIN IMMEDIATE")
+            self.require_active_user(connection, actor_id)
+            if session_token is not None:
+                self._require_receipt_session(connection, actor_id, session_token)
+            if peer_id is not None:
+                if type(peer_id) is not int or not 1 <= peer_id <= 2**63 - 1:
+                    raise StoreError(422, "Choose a valid recipient.")
+                self._ensure_peer(connection, peer_id, include_deleted=True)
+            message = connection.execute("SELECT sender_id, recipient_id FROM messages WHERE id=?", (through_id,)).fetchone()
+            belongs = message is not None and message["sender_id"] != actor_id
+            if belongs:
+                belongs = (message["recipient_id"] is None if peer_id is None else
+                           message["sender_id"] == peer_id and message["recipient_id"] == actor_id)
+            if not belongs:
+                # Same response for missing, own, and inaccessible messages.
+                raise StoreError(422, "Choose an incoming message from this conversation.")
+            conversation_id = peer_id or 0
+            connection.execute("""
+                INSERT INTO read_receipts(reader_id, conversation_id, through_id) VALUES (?, ?, ?)
+                ON CONFLICT(reader_id, conversation_id) DO UPDATE
+                SET through_id=MAX(read_receipts.through_id, excluded.through_id)
+            """, (actor_id, conversation_id, through_id))
+            cursor = connection.execute("SELECT through_id FROM read_receipts WHERE reader_id=? AND conversation_id=?",
+                                        (actor_id, conversation_id)).fetchone()[0]
+            return {"peer_id": peer_id, "through_id": cursor}
+
+    def message_receipts(self, actor_id, *, peer_id=None, after_id=0, limit=50, session_token=None):
+        """Only the author can inspect a sent message's readers; names are bounded."""
+        if type(after_id) is not int or not 0 <= after_id <= 2**63 - 1:
+            raise StoreError(422, "Receipt cursor must be a nonnegative integer.")
+        if type(limit) is not int or not 1 <= limit <= 50:
+            raise StoreError(422, "Receipt limit must be between 1 and 50.")
+        with closing(self._connect()) as connection, connection:
+            connection.execute("BEGIN")
+            self.require_active_user(connection, actor_id)
+            if session_token is not None:
+                self._require_receipt_session(connection, actor_id, session_token)
+            if peer_id is not None:
+                if type(peer_id) is not int or not 1 <= peer_id <= 2**63 - 1:
+                    raise StoreError(422, "Choose a valid recipient.")
+                self._ensure_peer(connection, peer_id, include_deleted=True)
+            messages = connection.execute("""
+                SELECT id FROM messages WHERE sender_id=? AND recipient_id IS ? AND id>?
+                ORDER BY id DESC LIMIT ?
+            """, (actor_id, peer_id, after_id, limit)).fetchall()
+            receipts = []
+            for message in reversed(messages):
+                condition = "r.conversation_id=0 AND r.reader_id!=?" if peer_id is None else "r.conversation_id=? AND r.reader_id=?"
+                values = [actor_id] if peer_id is None else [actor_id, peer_id]
+                parameters = [*values, message["id"]]
+                joins = f"FROM read_receipts r JOIN users u ON u.id=r.reader_id WHERE {condition} AND r.through_id>=? AND u.deleted_at IS NULL"
+                count = connection.execute("SELECT COUNT(*) " + joins, parameters).fetchone()[0]
+                readers = connection.execute("SELECT u.id, u.username " + joins +
+                                             " ORDER BY u.username COLLATE NOCASE LIMIT 20", parameters).fetchall()
+                receipts.append({"message_id": message["id"], "read_count": count,
+                                 "readers": [dict(reader) for reader in readers]})
+            return {"peer_id": peer_id, "receipts": receipts}
+
+    def _require_receipt_session(self, connection, actor_id, token):
+        """Check revocation again inside the receipt transaction, after API auth."""
+        if not isinstance(token, str) or not re.fullmatch(r"[A-Za-z0-9_-]{43}", token):
+            raise StoreError(401, "Sign in to use work chat.")
+        digest = hashlib.sha256(token.encode("ascii")).hexdigest()
+        if connection.execute("SELECT 1 FROM sessions WHERE token_digest=? AND user_id=? AND expires_at>?",
+                              (digest, actor_id, self.clock())).fetchone() is None:
+            raise StoreError(401, "Your session has ended. Sign in again.")
+
     def generate_recovery_code(self, actor_id, password):
         """Rotate a signed-in user's recovery credential after password proof."""
         validate_password(password)
@@ -416,6 +495,7 @@ class ChatStore:
                                (tombstone, deleted_at, actor_id))
             connection.execute("DELETE FROM sessions WHERE user_id=?", (actor_id,))
             connection.execute("DELETE FROM recovery_codes WHERE user_id=?", (actor_id,))
+            connection.execute("DELETE FROM read_receipts WHERE reader_id=?", (actor_id,))
             # Shared stock is company data; uncommitted uploads and retry receipts
             # belong to the removed account and must not survive it.
             tables = {row["name"] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}

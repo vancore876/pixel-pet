@@ -4,18 +4,18 @@ from __future__ import annotations
 from PySide6.QtCore import Qt, QSignalBlocker, QTimer, Signal
 from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDialog,
     QFileDialog, QFormLayout, QFrame, QGridLayout, QHBoxLayout, QHeaderView, QLabel,
-    QLineEdit, QPlainTextEdit, QProgressBar, QPushButton, QScrollArea, QSpinBox,
+    QLayout, QLineEdit, QMessageBox, QPlainTextEdit, QProgressBar, QPushButton, QScrollArea, QSpinBox,
     QSplitter, QTabWidget, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 
 from ui_style import apply_window_style
 
 FIELDS = ("sku", "description", "quantity", "location", "reorder_point",
-          "reorder_quantity", "target_stock", "supplier")
+          "reorder_quantity", "target_stock", "supplier", "barcode")
 LABELS = {"sku": "Part number / SKU", "description": "Description", "quantity": "Quantity on hand",
           "location": "Aisle / shelf / bin", "reorder_point": "Restock at or below",
-          "reorder_quantity": "Restock quantity", "target_stock": "Target stock", "supplier": "Supplier"}
-TABLE_FIELDS = ("sku", "description", "quantity", "location", "reorder_point", "reorder_quantity", "supplier")
-TABLE_LABELS = ("Part number", "Description", "Qty", "Location", "Restock at", "Order qty", "Supplier")
+          "reorder_quantity": "Restock quantity", "target_stock": "Target stock", "supplier": "Supplier", "barcode": "Barcode"}
+TABLE_FIELDS = ("sku", "description", "quantity", "location", "reorder_point", "reorder_quantity", "supplier", "barcode")
+TABLE_LABELS = ("Part number", "Description", "Qty", "Location", "Restock at", "Order qty", "Supplier", "Barcode")
 
 
 def _label(text, name=""):
@@ -54,10 +54,17 @@ class InventoryWindow(QDialog):
         self._scope_stamp = self._current_scope()
         self._preview = None
         self._building = False
+        self._scan_item = None
+        self._scan_cached = False
+        self._unknown_code = ""
+        self._history_before = None
+        self._history_sku = ""
         layout = QVBoxLayout(self)
         layout.setContentsMargins(22, 18, 22, 18)
         header = QHBoxLayout()
         header.addWidget(_label("Parts inventory", "pageHeading"), 1)
+        self.scanner_button = _button("Scan barcode", self.show_scanner, "primary")
+        header.addWidget(self.scanner_button)
         self.home_button = _button("Home", self.home_requested.emit)
         header.addWidget(self.home_button)
         layout.addLayout(header)
@@ -75,6 +82,8 @@ class InventoryWindow(QDialog):
         layout.addWidget(self.tabs, 1)
         self._build_stock()
         self._build_import()
+        self._build_scanner()
+        self._build_history()
         footer = QHBoxLayout()
         self.progress = QProgressBar()
         self.progress.setRange(0, 100)
@@ -92,12 +101,26 @@ class InventoryWindow(QDialog):
         service.preview_ready.connect(self._show_preview)
         service.import_ready.connect(self._show_plan)
         service.import_finished.connect(self._import_finished)
+        service.scan_ready.connect(self._show_scan)
+        service.movement_finished.connect(self._movement_finished)
+        service.history_ready.connect(self._show_history)
+        service.scope_reset.connect(self._clear_scanner)
         self.configure()
         self.refresh()
 
+    @staticmethod
+    def _scroll_page():
+        page = QScrollArea()
+        page.setWidgetResizable(True)
+        page.setFrameShape(QFrame.NoFrame)
+        body = QWidget()
+        layout = QVBoxLayout(body)
+        layout.setSizeConstraint(QLayout.SetMinimumSize)
+        page.setWidget(body)
+        return page, layout
+
     def _build_stock(self):
-        page = QWidget()
-        layout = QVBoxLayout(page)
+        page, layout = self._scroll_page()
         metrics = QHBoxLayout()
         self.metrics = {}
         for key, label in (("item_count", "Parts"), ("total_quantity", "Units on hand"),
@@ -132,6 +155,7 @@ class InventoryWindow(QDialog):
         actions.addWidget(self.refresh_button)
         layout.addLayout(actions)
         self.stock_table = QTableWidget(0, len(TABLE_FIELDS))
+        self.stock_table.setMinimumHeight(150)
         self.stock_table.setHorizontalHeaderLabels(TABLE_LABELS)
         self.stock_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.stock_table.setSelectionBehavior(QAbstractItemView.SelectRows)
@@ -156,8 +180,11 @@ class InventoryWindow(QDialog):
         editor_layout.addWidget(self.edit_title)
         form = QGridLayout()
         self.editors = {}
-        for index, field in enumerate(("quantity", "location", "reorder_point", "reorder_quantity")):
-            widget = QLineEdit() if field == "location" else QSpinBox()
+        for index, field in enumerate(("quantity", "location", "reorder_point", "reorder_quantity", "barcode")):
+            widget = QLineEdit() if field in ("location", "barcode") else QSpinBox()
+            widget.setMinimumHeight(36)
+            if field == "barcode":
+                widget.setMaxLength(128)
             if isinstance(widget, QSpinBox):
                 widget.setRange(0, 2**31 - 1)
                 widget.setGroupSeparatorShown(True)
@@ -175,13 +202,15 @@ class InventoryWindow(QDialog):
         self.save_button = _button("Save stock changes", self._save_item, "primary")
         self.save_button.setEnabled(False)
         row.addWidget(self.save_button)
+        self.assign_barcode_button = _button("Use scanned barcode", self._assign_barcode)
+        self.assign_barcode_button.setEnabled(False)
+        row.addWidget(self.assign_barcode_button)
         editor_layout.addLayout(row)
         layout.addWidget(editor)
         self.tabs.addTab(page, "Stock & locations")
 
     def _build_import(self):
-        page = QWidget()
-        layout = QVBoxLayout(page)
+        page, layout = self._scroll_page()
         layout.addWidget(_label("Import an Excel or CSV stock list", "sectionTitle"))
         layout.addWidget(_label("Choose a worksheet, match its columns, and review every error before confirming. "
             "Matching part numbers update existing parts; parts absent from the file remain in stock. "
@@ -215,6 +244,7 @@ class InventoryWindow(QDialog):
             mapping.addWidget(combo, row * 2 + 1, column, 1, 2)
         layout.addLayout(mapping)
         self.import_table = QTableWidget()
+        self.import_table.setMinimumHeight(150)
         self.import_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.import_table.setAlternatingRowColors(True)
         self.import_table.verticalHeader().hide()
@@ -229,6 +259,326 @@ class InventoryWindow(QDialog):
         self.import_button.setEnabled(False)
         layout.addWidget(self.import_button)
         self.tabs.addTab(page, "Import stock list")
+
+    def _build_scanner(self):
+        self.scanner_page, layout = self._scroll_page()
+        layout.addWidget(_label("Scan a part", "sectionTitle"))
+        layout.addWidget(_label("Click the barcode box, then scan with your USB scanner. Enter looks up the exact barcode or part number. "
+            "Scanning never changes stock. Your scanner should send Enter after each code.", "hint"))
+        scan_row = QHBoxLayout()
+        self.scan_input = QLineEdit()
+        self.scan_input.setObjectName("barcodeInput")
+        self.scan_input.setPlaceholderText("Scan barcode or type exact part number, then press Enter")
+        self.scan_input.setMaxLength(128)
+        self.scan_input.setMinimumHeight(44)
+        self.scan_input.returnPressed.connect(self._scan)
+        self.scan_input.textEdited.connect(self._scan_edited)
+        scan_row.addWidget(self.scan_input, 1)
+        self.scan_button = _button("Look up", self._scan, "primary")
+        scan_row.addWidget(self.scan_button)
+        layout.addLayout(scan_row)
+        self.scan_result = _label("Ready for a barcode.", "sectionTitle")
+        self.scan_result.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        layout.addWidget(self.scan_result)
+        self.scan_detail = _label("", "hint")
+        self.scan_detail.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        layout.addWidget(self.scan_detail)
+        self.scan_stock_button = _button("Choose a part to assign this barcode…", self._choose_barcode_part)
+        self.scan_stock_button.hide()
+        layout.addWidget(self.scan_stock_button)
+        form = QGridLayout()
+        self.movement_kind = QComboBox()
+        for label, kind in (("Receive stock", "receive"), ("Sale / stock out", "sale"),
+                            ("Customer return", "return"), ("Physical count", "count")):
+            self.movement_kind.addItem(label, kind)
+        self.movement_kind.currentIndexChanged.connect(self._movement_kind_changed)
+        self.movement_quantity = QSpinBox()
+        self.movement_quantity.setRange(1, 2**31 - 1)
+        self.movement_quantity.setValue(1)
+        self.movement_quantity.setGroupSeparatorShown(True)
+        self.movement_quantity_label = _label("Units to add")
+        self.movement_reason = QLineEdit()
+        self.movement_reason.setMaxLength(500)
+        self.movement_reason.setPlaceholderText("Delivery, sale, return, or count explanation")
+        self.movement_reference = QLineEdit()
+        self.movement_reference.setMaxLength(200)
+        self.movement_reference.setPlaceholderText("Invoice, delivery, or customer reference (optional)")
+        for row, (label, widget) in enumerate(((_label("Stock action"), self.movement_kind),
+                (self.movement_quantity_label, self.movement_quantity),
+                (_label("Reason"), self.movement_reason), (_label("Reference"), self.movement_reference))):
+            widget.setMinimumHeight(36)
+            form.addWidget(label, row, 0)
+            form.addWidget(widget, row, 1)
+        layout.addLayout(form)
+        actions = QHBoxLayout()
+        self.movement_button = _button("Review stock change…", self._review_movement, "primary")
+        actions.addWidget(self.movement_button)
+        self.scan_history_button = _button("View this part’s history", self._part_history)
+        actions.addWidget(self.scan_history_button)
+        actions.addStretch(1)
+        layout.addLayout(actions)
+        self.movement_status = _label("", "hint")
+        self.movement_status.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        layout.addWidget(self.movement_status)
+        self.retry_movement_button = _button("Check / retry original change…", self._retry_movement)
+        self.retry_movement_button.hide()
+        layout.addWidget(self.retry_movement_button)
+        layout.addStretch(1)
+        self.tabs.addTab(self.scanner_page, "Scan barcode")
+
+    def _build_history(self):
+        self.history_page = QWidget()
+        layout = QVBoxLayout(self.history_page)
+        layout.addWidget(_label("Stock movement history", "sectionTitle"))
+        controls = QHBoxLayout()
+        self.history_filter = QLineEdit()
+        self.history_filter.setPlaceholderText("Exact part number, or leave blank for all parts")
+        self.history_filter.setMaxLength(128)
+        self.history_filter.returnPressed.connect(self._reload_history)
+        controls.addWidget(self.history_filter, 1)
+        self.history_refresh_button = _button("Load history", self._reload_history)
+        controls.addWidget(self.history_refresh_button)
+        layout.addLayout(controls)
+        self.history_hint = _label("Load history to see who changed stock, when, and why.", "hint")
+        layout.addWidget(self.history_hint)
+        columns = ("When", "Part", "Action", "Before → after", "Employee", "Reason", "Reference", "Details")
+        self.history_table = QTableWidget(0, len(columns))
+        self.history_table.setHorizontalHeaderLabels(columns)
+        self.history_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.history_table.setAlternatingRowColors(True)
+        self.history_table.verticalHeader().hide()
+        self.history_table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
+        self.history_table.horizontalHeader().setSectionResizeMode(5, QHeaderView.Stretch)
+        self.history_table.setColumnWidth(0, 175)
+        self.history_table.setColumnWidth(3, 130)
+        layout.addWidget(self.history_table, 1)
+        self.history_more_button = _button("Load older movements", self._more_history)
+        self.history_more_button.setEnabled(False)
+        layout.addWidget(self.history_more_button)
+        self.tabs.addTab(self.history_page, "Movement history")
+
+    def show_scanner(self):
+        self.tabs.setCurrentWidget(self.scanner_page)
+        self.show()
+        self.raise_()
+        self.activateWindow()
+        self.scan_input.setFocus(Qt.OtherFocusReason)
+        self.scan_input.selectAll()
+
+    def _scan_edited(self):
+        self.service.invalidate_scan()
+        self._scan_item = None
+        self._scan_cached = False
+        self._unknown_code = ""
+        self.scan_result.setText("Press Enter to look up this code.")
+        self.scan_detail.clear()
+        self.scan_stock_button.hide()
+        self._scanner_controls()
+
+    def _scan(self):
+        self._scan_item = None
+        self._scan_cached = False
+        self._unknown_code = ""
+        self.scan_result.setText("Looking up part…")
+        self.scan_detail.clear()
+        self.scan_stock_button.hide()
+        if not self.service.pending_movement:
+            self.movement_status.clear()
+        self._scanner_controls()
+        self.service.scan_code(self.scan_input.text().strip())
+        self.scan_input.selectAll()
+
+    def _show_scan(self, result):
+        self._scan_item = result.get("item")
+        self._scan_cached = bool(result.get("cached"))
+        self._unknown_code = ""
+        if self._scan_item:
+            item = self._scan_item
+            self.scan_result.setText(f"{item['sku']} · {item.get('description', '')}")
+            details = f"On hand: {item.get('quantity', 0):,}    Location: {item.get('location') or 'Not set'}\nBarcode: {item.get('barcode') or 'Not assigned'}"
+            if self._scan_cached:
+                details += f"\nOFFLINE · Cached stock saved {result.get('saved_at', 'at an unknown time')}. May be out of date; stock changes are disabled."
+            else:
+                details += "\nExact match · Review a stock action below, or scan the next part."
+            self.scan_detail.setText(details)
+        else:
+            self.scan_result.setText("Part not found" if not self._scan_cached else "No cached part found")
+            detail = str(result.get("error", "No exact barcode or part number matched."))
+            if self._scan_cached:
+                detail += "\nOFFLINE · Cached stock may be out of date. Reconnect and scan again."
+            else:
+                self._unknown_code = str(result.get("code", ""))
+                detail += "\nFor an unassigned barcode, choose its part in Stock & locations, use the scanned barcode, then save the reviewed edit."
+            self.scan_detail.setText(detail)
+        self.scan_stock_button.setVisible(bool(self._unknown_code))
+        self._scanner_controls()
+
+    def _choose_barcode_part(self):
+        self.tabs.setCurrentIndex(0)
+        self.search.setFocus()
+        self.search.selectAll()
+        self.status.setText("Choose the matching part, click Use scanned barcode, review the Barcode field, then Save stock changes.")
+
+    def _assign_barcode(self):
+        if not self._selected or not self._unknown_code or not self.service.can_write:
+            return
+        self.editors["barcode"].setText(self._unknown_code)
+        self._editor_dirty = True
+        self.status.setText(f"Barcode {self._unknown_code} prepared for {self._selected['sku']}. Review it, then Save stock changes.")
+        self.editors["barcode"].setFocus()
+
+    def _movement_kind_changed(self):
+        kind = self.movement_kind.currentData()
+        self.movement_quantity.setMinimum(0 if kind == "count" else 1)
+        self.movement_quantity_label.setText("Actual units on hand" if kind == "count" else
+                                            "Units to remove" if kind == "sale" else "Units to add")
+        self.movement_reason.setPlaceholderText("Required: why this count was corrected" if kind == "count" else
+                                                "Delivery, sale, or return explanation (optional)")
+
+    def _confirm(self, title, text):
+        box = QMessageBox(QMessageBox.Question, title, text, QMessageBox.Yes | QMessageBox.Cancel, self)
+        box.setTextFormat(Qt.PlainText)
+        box.setDefaultButton(QMessageBox.Cancel)
+        box.button(QMessageBox.Yes).setText("Confirm stock change")
+        return box.exec() == QMessageBox.Yes
+
+    def _review_movement(self):
+        item = self._scan_item
+        if not item or self._scan_cached or not self.service.can_write or self.service.busy:
+            return
+        kind, quantity = self.movement_kind.currentData(), self.movement_quantity.value()
+        reason, reference = self.movement_reason.text().strip(), self.movement_reference.text().strip()
+        before = item["quantity"]
+        after = quantity if kind == "count" else before + (-quantity if kind == "sale" else quantity)
+        if kind == "count" and not reason:
+            self.movement_status.setText("Enter a reason before recording a physical count.")
+            self.movement_reason.setFocus()
+            return
+        if after < 0 or after > 2**31 - 1:
+            self.movement_status.setText("This change would put the stock count outside its allowed range. Check the quantity.")
+            return
+        text = (f"{self.movement_kind.currentText()}\nPart: {item['sku']} · {item.get('description', '')}\n"
+                f"Quantity: {quantity:,}\nStock: {before:,} → {after:,}\n"
+                f"Reason: {reason or '(none)'}\nReference: {reference or '(none)'}\n\n"
+                f"Save this change to {'office inventory for all PCs' if self.service.shared else 'this PC'}?")
+        generation = self.service._generation
+        # The item object and payload remain the reviewed snapshot while the
+        # modal dialog is open; a concurrent update is rejected by its revision.
+        if self._confirm("Review stock change", text) and generation == self.service._generation:
+            if self.service.record_movement(item, kind, quantity, reason, reference):
+                self.movement_status.setText("Submitting reviewed stock change…")
+                self._scanner_controls()
+
+    def _movement_finished(self, result):
+        if result.get("error"):
+            if result.get("uncertain"):
+                self.movement_status.setText("The result is not confirmed. Use Check / retry original change to safely check the SAME change. "
+                    "Do not create a replacement transaction.\n" + result["error"])
+            else:
+                self._scan_item = None
+                self.scan_result.setText("Scan again before changing stock")
+                self.scan_detail.clear()
+                self.movement_status.setText(("Stock changed on another PC. " if result.get("status") == 409 else "Change was not saved. ") +
+                                             result["error"] + " Scan the part again and review its current quantity.")
+        else:
+            item, movement = result["item"], result["movement"]
+            self.movement_status.setText(f"Saved {movement.get('kind', 'stock change')} for {item['sku']}: "
+                f"{movement.get('before_quantity', 0):,} → {movement.get('after_quantity', item['quantity']):,}. Scan again for the next change.")
+            # A success may arrive after a different barcode was scanned. Never
+            # replace that different part with this transaction's response.
+            if self._scan_item and self._scan_item.get("sku") == item.get("sku"):
+                self._show_scan({"item": item, "cached": False})
+                self._scan_item = None
+            self.movement_reason.clear()
+            self.movement_reference.clear()
+            self.movement_quantity.setValue(1)
+            if self._history_sku in ("", item["sku"]):
+                self.service.load_history(self._history_sku)
+        self._scanner_controls()
+
+    def _retry_movement(self):
+        payload = self.service.pending_movement
+        if not payload or not self.service.movement_uncertain:
+            return
+        generation = self.service._generation
+        if self._confirm("Check original stock change", f"Part: {payload['sku']}\nAction: {payload['kind']}\nQuantity: {payload['quantity']:,}\n"
+                f"Reason: {payload.get('reason') or '(none)'}\nReference: {payload.get('reference') or '(none)'}\n\n"
+                "Check the original request with its original ID. The server applies it at most once, even if the earlier response was lost.") and generation == self.service._generation:
+            self.service.retry_movement()
+            self._scanner_controls()
+
+    def _scanner_controls(self):
+        writable = bool(self._scan_item and not self._scan_cached and self.service.can_write and not self.service.busy)
+        for widget in (self.movement_kind, self.movement_quantity, self.movement_reason,
+                       self.movement_reference, self.movement_button):
+            widget.setEnabled(writable)
+        self.scan_history_button.setEnabled(bool(self._scan_item and not self._scan_cached))
+        self.retry_movement_button.setVisible(bool(self.service.pending_movement and self.service.movement_uncertain))
+        self.retry_movement_button.setEnabled(not self.service.busy)
+        self.assign_barcode_button.setEnabled(bool(self._selected and self._unknown_code and self.service.can_write and not self.service.busy))
+
+    def _part_history(self):
+        if self._scan_item:
+            self.history_filter.setText(self._scan_item["sku"])
+            self.tabs.setCurrentWidget(self.history_page)
+            self._reload_history()
+
+    def _reload_history(self):
+        self._history_sku = self.history_filter.text().strip()
+        self._history_before = None
+        self.history_table.setRowCount(0)
+        self.history_more_button.setEnabled(False)
+        self.history_hint.setText("Loading stock history…")
+        self.service.load_history(self._history_sku)
+
+    def _more_history(self):
+        if self._history_before is not None:
+            self.history_more_button.setEnabled(False)
+            self.service.load_history(self._history_sku, self._history_before)
+
+    def _show_history(self, result):
+        if result.get("error"):
+            self.history_hint.setText(result["error"])
+            self.history_more_button.setEnabled(self._history_before is not None)
+            return
+        if not result.get("append"):
+            self.history_table.setRowCount(0)
+        for movement in result["movements"]:
+            row = self.history_table.rowCount()
+            self.history_table.insertRow(row)
+            changes = "; ".join(f"{key}: {value.get('before', '')} → {value.get('after', '')}"
+                                for key, value in movement.get("changes", {}).items() if isinstance(value, dict))
+            values = (movement.get("created_at", ""), movement.get("sku", ""), movement.get("kind", ""),
+                      f"{movement.get('before_quantity', 0):,} → {movement.get('after_quantity', 0):,}",
+                      movement.get("actor", ""), movement.get("reason", ""), movement.get("reference", ""), changes)
+            for column, value in enumerate(values):
+                cell = QTableWidgetItem(str(value))
+                cell.setToolTip(str(value))
+                self.history_table.setItem(row, column, cell)
+        self._history_before = result.get("next_before_id") if result.get("has_more") else None
+        self.history_more_button.setEnabled(self._history_before is not None)
+        self.history_hint.setText(f"{self.history_table.rowCount():,} movements shown · newest first. "
+            "Imports, manual edits, receipts, sales, returns, and counts appear here.")
+
+    def _clear_scanner(self):
+        self._scan_item = None
+        self._scan_cached = False
+        self._unknown_code = ""
+        self._history_before = None
+        self._history_sku = ""
+        self.scan_input.clear()
+        self.scan_result.setText("Ready for a barcode.")
+        self.scan_detail.clear()
+        self.scan_stock_button.hide()
+        self.movement_status.clear()
+        self.movement_reason.clear()
+        self.movement_reference.clear()
+        self.movement_quantity.setValue(1)
+        self.history_filter.clear()
+        self.history_table.setRowCount(0)
+        self.history_hint.setText("Load history to see who changed stock, when, and why.")
+        self.history_more_button.setEnabled(False)
+        self._scanner_controls()
 
     def configure(self):
         apply_window_style(self, self.settings)
@@ -305,6 +655,7 @@ class InventoryWindow(QDialog):
                 widget.setText(str(value or ""))
         self._building = False
         self.save_button.setEnabled(enabled)
+        self._scanner_controls()
 
     def _save_item(self):
         if not self._selected:
@@ -438,6 +789,7 @@ class InventoryWindow(QDialog):
         self.save_button.setEnabled(not busy and self.service.can_write and self._selected is not None)
         for widget in self.editors.values():
             widget.setEnabled(not busy and self.service.can_write and self._selected is not None)
+        self._scanner_controls()
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -446,6 +798,13 @@ class InventoryWindow(QDialog):
     def closeEvent(self, event):
         self.hide()
         event.ignore()
+
+    def hideEvent(self, event):
+        self.service.invalidate_scan()
+        self.service._history_sequence += 1
+        self._scan_item = None
+        self._scanner_controls()
+        super().hideEvent(event)
 
     def shutdown(self):
         self._search_timer.stop()

@@ -450,6 +450,16 @@ class WorkChatWindow(QDialog):
         self._send_reply = None
         self._peer_id = None
         self._messages = {}
+        self._read_receipts = {}
+        self._receipts_supported = True
+        self._receipt_get_reply = self._receipt_post_reply = None
+        self._receipt_get_pending = self._receipt_post_pending = False
+        self._read_through = 0
+        self._rendering_messages = False
+        self.read_timer = QTimer(self)
+        self.read_timer.setSingleShot(True)
+        self.read_timer.setInterval(300)
+        self.read_timer.timeout.connect(self._maybe_mark_read)
         self._cursor = None
         self._drafts = {}
         self._poll_ticks = 0
@@ -654,6 +664,7 @@ class WorkChatWindow(QDialog):
         self.transcript.setReadOnly(True)
         self.transcript.setPlaceholderText("No messages yet. Start the conversation.")
         self.transcript.setAccessibleName("Work Chat messages")
+        self.transcript.verticalScrollBar().valueChanged.connect(self._schedule_read)
         conversation_layout.addWidget(self.transcript, 1)
         self.composer = MessageInput()
         self.composer.setPlaceholderText("Message the team…")
@@ -802,6 +813,7 @@ class WorkChatWindow(QDialog):
                 self.status.setText("The server returned an invalid sign-in response.")
                 return
             self.token, self.user = token, user
+            self._receipts_supported = True
             session_user = dict(user)
             notification_cursor = data.get("notification_cursor")
             if (isinstance(notification_cursor, int) and not isinstance(notification_cursor, bool)
@@ -1008,6 +1020,9 @@ class WorkChatWindow(QDialog):
         self.refresh_messages()
 
     def _reset_messages(self):
+        self._cancel_receipt_requests()
+        self._read_receipts.clear()
+        self._read_through = 0
         self._messages.clear()
         self._cursor = None
         self.transcript.clear()
@@ -1039,6 +1054,8 @@ class WorkChatWindow(QDialog):
                 self.status.setText("The server returned an invalid message.")
                 return
             self._merge_messages(messages)
+            self._refresh_receipts()
+            self._schedule_read()
             more = data.get("has_more") is True
             if more and self._cursor != before_cursor and burst < 4:
                 QTimer.singleShot(0, lambda: self._continue_refresh(session, conversation, burst + 1))
@@ -1079,21 +1096,151 @@ class WorkChatWindow(QDialog):
         if len(self._messages) > MAX_VISIBLE_MESSAGES:
             for identifier in sorted(self._messages)[:-MAX_VISIBLE_MESSAGES]:
                 del self._messages[identifier]
+        self._read_receipts = {identifier: receipt for identifier, receipt in self._read_receipts.items()
+                               if identifier in self._messages}
         if changed:
-            scroll = self.transcript.verticalScrollBar()
-            at_bottom = scroll.value() >= scroll.maximum() - 8
-            previous_position = scroll.value()
-            entries = []
-            for identifier in sorted(self._messages):
-                message = self._messages[identifier]
-                stamp = message["created_at"]
-                try:
-                    stamp = datetime.fromisoformat(stamp.replace("Z", "+00:00")).astimezone().strftime("%b %d, %I:%M %p")
-                except (ValueError, OverflowError, OSError):
-                    stamp = ""
-                entries.append(f"{message['sender_username']}  ·  {stamp}\n{message['body']}")
+            self._render_messages()
+
+    def _render_messages(self):
+        scroll = self.transcript.verticalScrollBar()
+        at_bottom = scroll.value() >= scroll.maximum()
+        previous_position = scroll.value()
+        entries = []
+        for identifier in sorted(self._messages):
+            message = self._messages[identifier]
+            stamp = message["created_at"]
+            try:
+                stamp = datetime.fromisoformat(stamp.replace("Z", "+00:00")).astimezone().strftime("%b %d, %I:%M %p")
+            except (ValueError, OverflowError, OSError):
+                stamp = ""
+            label = ""
+            receipt = self._read_receipts.get(identifier)
+            if self.user and message["sender_id"] == self.user["id"] and receipt and receipt["read_count"]:
+                label = "  ·  Read" if self._peer_id is not None else f"  ·  Read by {receipt['read_count']}"
+            entries.append(f"{message['sender_username']}  ·  {stamp}{label}\n{message['body']}")
+        self._rendering_messages = True
+        try:
             self.transcript.setPlainText("\n\n".join(entries))
             scroll.setValue(scroll.maximum() if at_bottom else previous_position)
+        finally:
+            self._rendering_messages = False
+        self._schedule_read()
+
+    def _cancel_receipt_requests(self):
+        self.read_timer.stop()
+        self.api.cancel(self._receipt_get_reply)
+        self.api.cancel(self._receipt_post_reply)
+        self._receipt_get_reply = self._receipt_post_reply = None
+        self._receipt_get_pending = self._receipt_post_pending = False
+
+    def _receipt_context(self):
+        return (self._session_generation, self._conversation_generation, self.api.base_url, self.token, self._peer_id)
+
+    def _schedule_read(self, *_):
+        if not self._rendering_messages and self.token and self._receipts_supported:
+            self.read_timer.start()
+
+    def _conversation_is_readable(self):
+        # Delivery, a popup, a visible background window, and a scrolled history
+        # are not evidence that the employee opened the newest conversation.
+        scroll = self.transcript.verticalScrollBar()
+        return (bool(self.token) and self.user is not None and self.pages.currentIndex() == 1
+                and self.isVisible() and not self.isMinimized() and self.transcript.isVisible()
+                and QApplication.applicationState() == Qt.ApplicationActive
+                and QApplication.activeWindow() is self and self.isActiveWindow()
+                and QApplication.activeModalWidget() is None and QApplication.activePopupWidget() is None
+                and scroll.value() >= scroll.maximum())
+
+    def _maybe_mark_read(self):
+        if (not self._receipts_supported or self._receipt_post_pending or self._messages_pending
+                or not self._conversation_is_readable()):
+            return
+        incoming = [identifier for identifier, message in self._messages.items()
+                    if message["sender_id"] != self.user["id"] and self._valid_message(message)]
+        through = max(incoming, default=0)
+        if through <= self._read_through:
+            return
+        context = self._receipt_context()
+        self._receipt_post_pending = True
+
+        def received(data, error, status):
+            if context != self._receipt_context():
+                return
+            self._receipt_post_pending = False
+            self._receipt_post_reply = None
+            if status == 404:
+                self._receipts_supported = False  # Older office server: chat still works.
+                self._cancel_receipt_requests()
+                return
+            if status == 401:
+                self._session_error(error, status)
+                return
+            if error:
+                return  # Retry on the ordinary poll, independently of popup reminders.
+            if (isinstance(data, dict) and data.get("peer_id") == self._peer_id
+                    and _positive_id(data.get("through_id")) and data["through_id"] >= through):
+                self._read_through = max(self._read_through, data["through_id"])
+                self._schedule_read()
+
+        self._receipt_post_reply = self.api.request("POST", "/api/read-receipts",
+            {"peer_id": self._peer_id, "through_id": through}, received, self.token)
+
+    def _refresh_receipts(self):
+        if (not self.token or not self.isVisible() or not self._receipts_supported
+                or self._receipt_get_pending or not self.user):
+            return
+        outgoing = [identifier for identifier, message in self._messages.items()
+                    if message["sender_id"] == self.user["id"]]
+        if not outgoing:
+            return
+        query = {"after_id": max(0, min(outgoing) - 1), "limit": 50}
+        if self._peer_id is not None:
+            query["peer_id"] = self._peer_id
+        context = self._receipt_context()
+        self._receipt_get_pending = True
+
+        def received(data, error, status):
+            if context != self._receipt_context():
+                return
+            self._receipt_get_pending = False
+            self._receipt_get_reply = None
+            if status == 404:
+                self._receipts_supported = False
+                self._cancel_receipt_requests()
+                return
+            if status == 401:
+                self._session_error(error, status)
+                return
+            if error or not isinstance(data, dict) or data.get("peer_id") != self._peer_id:
+                return
+            receipts = data.get("receipts")
+            if not isinstance(receipts, list) or len(receipts) > 50:
+                return
+            parsed = {}
+            for receipt in receipts:
+                if not isinstance(receipt, dict):
+                    return
+                identifier, count, readers = receipt.get("message_id"), receipt.get("read_count"), receipt.get("readers")
+                message = self._messages.get(identifier) if _positive_id(identifier) else None
+                if (message is None or message["sender_id"] != self.user["id"] or identifier in parsed
+                        or type(count) is not int or not 0 <= count <= 2**31 - 1
+                        or not isinstance(readers, list) or len(readers) > min(20, count)
+                        or (self._peer_id is not None and count > 1)):
+                    return
+                reader_ids = set()
+                for reader in readers:
+                    if (not isinstance(reader, dict) or not _positive_id(reader.get("id"))
+                            or reader["id"] == self.user["id"] or reader["id"] in reader_ids
+                            or (self._peer_id is not None and reader["id"] != self._peer_id)
+                            or not isinstance(reader.get("username"), str) or not USERNAME_RE.fullmatch(reader["username"])):
+                        return
+                    reader_ids.add(reader["id"])
+                parsed[identifier] = {"read_count": count, "readers": readers}
+            if any(self._read_receipts.get(identifier) != receipt for identifier, receipt in parsed.items()):
+                self._read_receipts.update(parsed)
+                self._render_messages()
+
+        self._receipt_get_reply = self.api.request("GET", "/api/read-receipts?" + urlencode(query), None, received, self.token)
 
     def _update_send(self):
         size = len(self.composer.toPlainText())
@@ -1165,6 +1312,7 @@ class WorkChatWindow(QDialog):
         if self._poll_ticks % 5 == 0:
             self.refresh_users()
         self.refresh_messages()
+        self._schedule_read()
 
     def _clear_session(self):
         self._session_generation += 1
@@ -1226,6 +1374,7 @@ class WorkChatWindow(QDialog):
         self.api.cancel_all(except_reply=self._send_reply)
         self._users_pending = self._messages_pending = False
         self._message_reply = None
+        self._cancel_receipt_requests()
         self.password.clear()
         self.confirm_password.clear()
         self.recovery_code.clear()

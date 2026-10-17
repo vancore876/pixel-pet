@@ -90,6 +90,7 @@ class HomeWindow(QDialog):
         tools.setPopupMode(QToolButton.InstantPopup)
         menu = QMenu(tools)
         for title, key in (('System monitor', 'monitor'), ('Top apps', 'processes'),
+                           ('Overdue customer orders', 'overdue'),
                            ('Quick launch', 'quick_launch'), ('Saved memory', 'memory'),
                            ('Office setup guide', 'setup')):
             menu.addAction(title, lambda checked=False, value=key: self.navigate_requested.emit(value))
@@ -130,7 +131,12 @@ class HomeWindow(QDialog):
             button.setObjectName('primary' if key == 'order' else 'secondary')
             button.clicked.connect(lambda checked=False, value=key: self.create_requested.emit(value))
             self.create_buttons[key] = button
+        self.scan_button = QPushButton('Scan barcode')
+        self.scan_button.setObjectName('primary')
+        self.scan_button.setAutoDefault(False)
+        self.scan_button.clicked.connect(lambda: self.navigate_requested.emit('scan'))
         introduction.addLayout(self.action_grid)
+        introduction.addWidget(self.scan_button)
         hero.addLayout(introduction, 1)
         self.mascot = QLabel()
         self.mascot.setFixedSize(96, 96)

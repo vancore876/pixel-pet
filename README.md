@@ -5,7 +5,7 @@ an animated character, a small system monitor, and the **Famous Twins
 auto-parts workspace**. Home brings orders, checklists, writing, schedules,
 coworker chat, and optional AI help into one clear starting point. The
 workspace keeps exact JMD totals, shared office business records, and six
-parts-counter animations.
+parts-counter animations, with 73 animation states across seven characters.
 The Android/iPhone companion remains in the mobile folder. Sliding replies,
 the tiny HUD, and real Windows desktop play remain available.
 
@@ -27,6 +27,11 @@ your server account after password and username confirmation. Shared work
 history remains with anonymized authors. **Forget saved login** only removes
 this PC's remembered login and remains a separate option.
 
+Message and reminder popups now play a short notification sound. Turn it on or
+off under **Settings → Getting started → Play a sound for message and reminder
+popups**. Quiet mode silences sounds; on Windows they follow the system's
+notification sound and volume settings. Closely spaced popups share one chime.
+
 **IT administration:** Open **Home → IT administration** to manage employee
 passwords, sign an employee out on every PC, and check account/session/stock
 counts and recent IT actions. First setup uses **admin / admin123** on the
@@ -35,6 +40,11 @@ server PC at **127.0.0.1:8765**. Change the starter password to a private
 from employee accounts, and closing its window locks it. See
 **[IT setup and recovery](WORK_CHAT.md#it-administration)**.
 
+The office server now takes daily verified database backups. IT can check their
+status or request **Back up now** with a fresh password confirmation. Offline
+recovery verifies the snapshot, saves the previous database, and signs everyone
+out. See **[Office backups and recovery](WORK_CHAT.md#office-backups-and-recovery)**.
+
 ![IT administration with employee accounts and recent actions](preview/it-administration.png)
 
 Open **Home → Inventory → Import stock list** to review an Excel/CSV parts list
@@ -42,6 +52,13 @@ before saving it to the shared office inventory. Search quantities and shelf/bin
 locations, set restock levels, and optionally let Ask Jeffery use matching saved
 stock records. See **[Inventory setup](INVENTORY.md)**. Update and restart the
 office server and desktop clients together; keep the existing server database.
+
+**Home → Scan barcode** supports USB scanners that type a code and press Enter.
+Scans show the item, quantity, and bin without changing stock. Review and confirm
+receipts, sales, returns, and physical counts; shared movement history records
+who changed each count. Work Chat now shows read receipts when a coworker views
+the conversation in the desktop app. **Home → More tools → Overdue customer
+orders** lists due work with small internal reminders and snooze choices.
 
 ![Home with readable order counts and balances](preview/home-readable-metrics.png)
 
@@ -188,6 +205,22 @@ preserved. Deleting a note and editing it elsewhere can preserve the edited
 copy as a separate note. Disconnecting a PC does not erase its saved local data
 or remove already-shared work from the team.
 
+**Fix for “Review this record's current revisions before changing it”:** the
+updated client checks missing revision history against the shared folder before
+retrying. A local edit to a note deleted on another PC is preserved as a separate
+note, and a problem with one note no longer blocks unrelated notes from syncing.
+Pending full-document transfers preserve the local edit while waiting. Genuine
+simultaneous edits still appear as conflicts for review.
+
+Install the update on every participating PC (or update the shared application
+folder after everyone exits), then restart Jeffery. Keep all PCs connected to
+the same writable team folder. The office web server must also be updated and
+restarted for the new inventory, chat, and backup features. Keep the existing
+notebooks, document databases, team workspace, and server database; deleting
+them is not part of the sync repair. After connecting, confirm that a saved
+test note appears on a second PC and check any recovered copies before removing
+duplicates. This repository update does not install itself on your work PCs.
+
 Shared-work content is excluded from Groq replies by default. To allow it,
 enable **Team setup → Allow shared notebook passages in Groq replies** and the
 existing saved-note sharing control. This is separate from local preference
@@ -255,9 +288,15 @@ stop their animation timer.
 
 **Play with Jeffery → Companion Moves** adds head tilting, sniffing, listening,
 knocking, dusting, inspecting, perching, fluttering, fetching, and curling up.
-All seven characters support the 65 desktop animation states, including the
+Eight more moves add carrying a delivery, a stock celebration, finding a shelf,
+a paper plane, bubbles, a slow stretch, stargazing, and foot tapping. Successful
+barcode lookups trigger the scan pose, and confirmed stock movements trigger
+the stock celebration when the pet is visible and unpaused.
+All seven characters support the 73 desktop animation states, including the
 existing six business poses. The mobile app retains its existing three-character,
 49-state sprite layout.
+
+![Eight new companion moves across all seven characters](preview/office-companion-moves.png)
 
 ![Seven desktop companions inspecting icons and curling up](preview/companion-characters.png)
 
@@ -310,7 +349,10 @@ the Windows desktop app. The mobile companion keeps its existing workflow.
 | 49 animation states, including 24 new moves | Random play; Play with Jeffery → More Moves |
 | Six desktop business animations | Play with Jeffery → At the Parts Counter; stock check, part scan, packing, wrench, high five, coffee |
 | Visible files, folders, tabs and windows | Desktop Play → Real Files, Folders, Tabs and Windows → choose an Activity → Go and play |
-| Seven characters and ten companion moves | Settings → Your buddy → Character; Play with Jeffery → Companion Moves |
+| Seven characters and eighteen companion moves | Settings → Your buddy → Character; Play with Jeffery → Companion Moves |
+| USB barcode lookup and reviewed stock changes | Home → Scan barcode; Inventory → Movement history |
+| Overdue customer order reminders | Home → More tools → Overdue customer orders; open or snooze the compact card |
+| Daily verified office backups | Home → IT administration; see WORK_CHAT.md for offline recovery |
 | Actual browser or Explorer tab controls | Choose a tab → Jump / ride, or Select tab |
 | Selected letters from an editor | Select text → Ctrl+Alt+J → drag letters → Apply to editor |
 | Groq chooses occasional actions and remarks | Ask Jeffery → AI setup → Show preferences and privacy → Let Groq choose occasional moves |
@@ -521,8 +563,9 @@ Jeffery's optional Groq advice is grounded in saved work and is prompted not to
 invent stock, payments, fitment, promises, or completed work. Manual stock
 labels are not live inventory or a supplier connection.
 
-Use a desktop ZIP for complete local notebook backups, and back up the server's
-private database folder to preserve shared business data and chat. Mobile
+Use a desktop ZIP for complete local notebook backups. The server's daily
+verified database snapshots preserve shared business data, inventory, and chat;
+back up the shared-folder workspace and any TLS keys separately. Mobile
 small-note transfers do not provide the richer shared order workflow. The
 desktop text export includes vehicle/part details and exact JMD totals.
 
@@ -795,12 +838,16 @@ errors. No automatic installation at login occurs unless Start with Windows is e
 
 ## Validation and practical limits
 
-The desktop unit suite passed 810 tests with Python 3.12 and Linux offscreen Qt.
-All 14 GUI workflows passed, including IT setup, employee password resets and
+The desktop unit suite passed 967 tests with Python 3.12 and Linux offscreen Qt.
+All 15 GUI workflows passed, including IT setup, employee password resets and
 remote sign-out, readable Home counts, background office
 message popups, account recovery and permanent deletion, shared Excel inventory,
-two-PC shared-folder messaging, and customer reminders. Compact/expanded cards
-and native window-control flags were checked across thirteen workspaces, including
+barcode stock changes, read receipts, verified backups, and customer reminders.
+Three-PC checks cover shared-note revision recovery and preserved full documents.
+Notification sound settings, Quiet mode, delivery gates, and audio failures were
+tested with mocked playback; real Windows sound output remains unverified.
+Compact/expanded cards and native window-control flags were checked across
+fourteen workspaces, including
 draft preservation. Two real background-feed cases also passed with hidden chat
 and another conversation open. Native Windows focus and titlebar rendering still
 need checking on a work PC. Three

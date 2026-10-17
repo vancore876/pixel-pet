@@ -576,42 +576,98 @@ class TeamService(QObject):
         notes = {n['id']: n for n in snapshot['notes']
                  if not n.get('team_workspace_id') or n['team_workspace_id'] == workspace}
         baseline = ledger.rows(workspace)
+        # A restored/copied notebook may have a newer baseline than its local
+        # event cache. Replay the share once before deciding ancestry is lost.
+        missing = any(not store.has_revisions('note', _entity_id(note),
+            note.get('team_revisions') or (baseline.get(local_id, {}).get('revisions', [])
+                if baseline.get(local_id, {}).get('entity_id') == _entity_id(note) else []))
+            for local_id, note in notes.items())
+        missing = missing or any(not store.has_revisions('note', row['entity_id'], row['revisions'])
+            for local_id, row in baseline.items() if local_id not in notes and not row['deleted'])
+        if missing and online:
+            try:
+                events, incoming_warnings = transport.read_events(incremental=False)
+                warnings.extend(str(warning) for warning in incoming_warnings)
+                for event in events:
+                    if cancel.is_set():
+                        raise RuntimeError('The previous work connection was canceled.')
+                    try:
+                        store.ingest_event(event)
+                        transport.confirm_event(event['event_id'])
+                    except ValueError as exc:
+                        warnings.append(str(exc))
+            except (OSError, SharedWorkspaceError) as exc:
+                online = False
+                warnings.append(f'Shared folder unavailable: {exc}. Changes remain queued locally.')
+        deferred_ids = set()
+        recovered_links = {}
         for local_id, note in notes.items():
             if cancel.is_set():
                 raise RuntimeError('The previous work connection was canceled.')
-            payload = shared_note_payload(note)
-            previous = baseline.get(local_id)
-            if previous and not previous['deleted'] and payload == previous['payload']:
-                continue
-            current = store.get_entity('note', payload['id'])
-            matching = next((variant for variant in current['variants'] if not variant['deleted'] and variant['payload'] == payload), None) if current else None
-            if matching:
-                ledger.save(workspace, local_id, payload['id'], payload, [matching['revision']],
-                            conflict_revision=note.get('team_conflict_revision', ''))
-                continue
-            if current and current['deleted']:
-                # A tombstone must not resurrect a stale notebook. Keep a
-                # genuinely new local edit as an independent note instead.
-                if previous and payload != previous['payload']:
+            try:
+                payload = shared_note_payload(note)
+                previous = baseline.get(local_id)
+                if previous and not previous['deleted'] and payload == previous['payload']:
+                    continue
+                current = store.get_entity('note', payload['id'])
+                matching = next((variant for variant in current['variants'] if not variant['deleted'] and variant['payload'] == payload), None) if current else None
+                if matching:
+                    ledger.save(workspace, local_id, payload['id'], payload, [matching['revision']],
+                                conflict_revision=note.get('team_conflict_revision', ''))
+                    continue
+                parents = note.get('team_revisions') if note.get('team_id') == payload['id'] else []
+                if previous and not parents and previous['entity_id'] == payload['id']:
+                    parents = previous['revisions']
+                recover = False
+                recovery_warning = ''
+                if current and current['deleted']:
+                    # A tombstone must not resurrect a stale notebook. Keep a
+                    # local edit as an independent note instead. With a lost
+                    # baseline, preserve uncertain local text as well.
+                    if previous is None or payload != previous['payload']:
+                        recover = True
+                        recovery_warning = 'A local note was also deleted by another employee. Your local version was preserved as a separate note.'
+                    else:
+                        continue
+                if not recover and not store.has_revisions('note', payload['id'], parents or []):
+                    if not online:
+                        deferred_ids.add(local_id)
+                        warnings.append('A note is waiting for its shared revisions. Your local text is preserved; other notes can still sync.')
+                        continue
+                    recover = True
+                    recovery_warning = 'A note had unavailable shared revisions. Its local text was preserved as a separate recovered note; other notes continue syncing.'
+                if recover:
                     replacement = hashlib.sha256((local_id + _hash(payload)).encode()).hexdigest()[:32]
                     payload = {**payload, 'id': replacement}
-                    warnings.append('An edited note was also deleted by another employee. Your edited version was preserved as a separate note.')
-                else:
-                    continue
-            if payload.get('document'):
-                if not online:
-                    continue
-                try:
-                    self._upload_document(transport, snapshot['document_path'], note, cancel)
-                except (OSError, ValueError, SharedWorkspaceError) as exc:
-                    warnings.append(f"{note['title']}: full document sync is pending ({exc}).")
-                    continue
-            parents = note.get('team_revisions') if note.get('team_id') == payload['id'] else []
-            if previous and not parents:
-                parents = previous['revisions']
-            event = store.put_note(payload, base_revisions=parents)
-            ledger.save(workspace, local_id, payload['id'], payload, [event['event_id']],
-                        conflict_revision=note.get('team_conflict_revision', ''))
+                    # Parents belong to exactly one entity. A recovered copy
+                    # must never consume revisions from the original record.
+                    parents = []
+                if payload.get('document'):
+                    if not online:
+                        deferred_ids.add(local_id)
+                        continue
+                    try:
+                        self._upload_document(transport, snapshot['document_path'], note, cancel)
+                    except (OSError, ValueError, SharedWorkspaceError) as exc:
+                        deferred_ids.add(local_id)
+                        warnings.append(f"{note['title']}: full document sync is pending ({exc}).")
+                        continue
+                recovered_current = store.get_entity('note', payload['id']) if recover else None
+                recovered_match = next((variant for variant in recovered_current['variants']
+                    if not variant['deleted'] and variant['payload'] == payload), None) if recovered_current else None
+                event = None if recovered_match else store.put_note(payload, base_revisions=parents)
+                revision = recovered_match['revision'] if recovered_match else event['event_id']
+                ledger.save(workspace, local_id, payload['id'], payload, [revision],
+                            conflict_revision=note.get('team_conflict_revision', ''))
+                if recovery_warning:
+                    warnings.append(recovery_warning)
+                if recover and current is None:
+                    # There is no original server record to replace this local
+                    # row, so rebind it rather than creating a duplicate copy.
+                    recovered_links[payload['id']] = local_id
+            except (OSError, ValueError, sqlite3.Error) as exc:
+                deferred_ids.add(local_id)
+                warnings.append(f"{note.get('title', 'Note')}: sync is pending; your local text was preserved ({exc}).")
         for local_id, previous in baseline.items():
             if local_id not in notes and not previous['deleted']:
                 if local_id in snapshot.get('excluded_ids', []):
@@ -619,13 +675,17 @@ class TeamService(QObject):
                 if previous['conflict_revision']:
                     warnings.append('A conflicting note copy was preserved. Choose a version to resolve the conflict before removing its copy.')
                     continue
-                current = store.get_entity('note', previous['entity_id'])
-                if current and not current['deleted']:
-                    event = store.delete_note(previous['entity_id'], base_revisions=previous['revisions'])
-                    revisions = [event['event_id']]
-                else:
-                    revisions = current['revisions'] if current else previous['revisions']
-                ledger.save(workspace, local_id, previous['entity_id'], previous['payload'], revisions, True)
+                try:
+                    current = store.get_entity('note', previous['entity_id'])
+                    if current and not current['deleted']:
+                        event = store.delete_note(previous['entity_id'], base_revisions=previous['revisions'])
+                        revisions = [event['event_id']]
+                    else:
+                        revisions = current['revisions'] if current else previous['revisions']
+                    ledger.save(workspace, local_id, previous['entity_id'], previous['payload'], revisions, True)
+                except (OSError, ValueError, sqlite3.Error) as exc:
+                    deferred_ids.add(local_id)
+                    warnings.append(f'A removed note is waiting for its shared revisions; other notes continue syncing ({exc}).')
         if online:
             try:
                 for event in store.pending_events():
@@ -640,7 +700,10 @@ class TeamService(QObject):
                 warnings.append(f'Shared folder unavailable: {exc}. Changes remain queued locally.')
         result = self._cached(state)
         result['snapshot'] = snapshot
-        result['updates'], result['restore_id'], result['_documents'] = self._prepare_updates(state, snapshot, cancel, warnings)
+        deferred_entities = {_entity_id(notes[identifier]) if identifier in notes else baseline[identifier]['entity_id']
+                             for identifier in deferred_ids}
+        result['updates'], result['restore_id'], result['_documents'] = self._prepare_updates(
+            state, snapshot, cancel, warnings, deferred_ids, deferred_entities, recovered_links)
         result['document_path'] = snapshot['document_path']
         result['status'] = ('Connected. Notes and employee reminders are synced.' if online else
                             'Offline. Saved changes will sync when the shared folder returns.')
@@ -681,13 +744,14 @@ class TeamService(QObject):
             if uploaded['sha256'] != note['body_sha256']:
                 raise ValueError('The full document checksum changed; its note was not shared.')
 
-    def _prepare_updates(self, state, snapshot, cancel, warnings):
+    def _prepare_updates(self, state, snapshot, cancel, warnings, deferred_ids=None,
+                         deferred_entities=None, recovered_links=None):
         from documents import DocumentStore
         store = state['store']
         workspace = store.identity()['workspace_id']
         locals_by_id = {note['id']: note for note in snapshot['notes']}
-        excluded_ids = set(snapshot.get('excluded_ids', []))
-        excluded_entities = {_entity_id({'id': identifier}) for identifier in excluded_ids}
+        excluded_ids = set(snapshot.get('excluded_ids', [])) | set(deferred_ids or ())
+        excluded_entities = {_entity_id({'id': identifier}) for identifier in excluded_ids} | set(deferred_entities or ())
         linked = {}
         documents_by_hash = {}
         for note in snapshot['notes']:
@@ -695,6 +759,8 @@ class TeamService(QObject):
                 linked[(note.get('team_id'), note.get('team_conflict_revision', ''))] = note
             if note.get('document_id'):
                 documents_by_hash[(note['body_sha256'], note['body_characters'])] = note
+        for entity_id, local_id in (recovered_links or {}).items():
+            linked[(entity_id, '')] = locals_by_id[local_id]
         rows = []
         active_conflicts = set()
         for entity in store.entities('note'):
@@ -828,7 +894,12 @@ class TeamService(QObject):
         self._applying = True
         try:
             def change():
-                for row in result['updates']:
+                # A recovered copy can sort before the tombstoned original.
+                # Free only eligible deleted rows first so a full notebook
+                # can replace a note without temporarily exceeding its limit.
+                # The per-row snapshot guard still protects midflight edits,
+                # and any later failure rolls back the entire local commit.
+                for row in sorted(result['updates'], key=lambda item: not item['deleted']):
                     current = store.find(row['local_id'])
                     original = before.get(row['local_id'])
                     if original is not None and (current is None or shared_note_payload(current) != shared_note_payload(original)):

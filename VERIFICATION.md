@@ -1,5 +1,50 @@
 # Jeffery 6.0 verification
 
+The office expansion, shared-note sync repair, and notification sounds passed
+all **967 unit tests**, all **15 Qt GUI workflows**, and isolated desktop startup
+with Python 3.12/Linux offscreen Qt. Three shared-business HTTP integration cases
+and two background-notification cases also passed. Dependency checks are clean.
+
+Independent three-PC profiles reproduce the reported “current revisions” error:
+a local edit after a coworker's deletion now becomes a separate recovered note.
+Tests also cover lost revision caches, simultaneous conflicts, unavailable
+ancestry, missing baselines, and interrupted full-document uploads. Unrelated
+notes continue in both directions, complete document text survives recovery,
+and cross-record revision validation remains strict. Recovery also works at
+the notebook entry limit while preserving edits made during a sync.
+
+Stock checks cover keyboard-wedge Enter input, leading zeros, ambiguous codes,
+cancelled confirmations, nonnegative quantities, stale revisions, durable server
+retry receipts, account changes, employee audit attribution, and bounded history.
+Late catalogue responses cannot replace confirmed quantities. Narrow scanner
+layouts scroll without overlapping controls. Backup checks exercise real SQLite
+WAL snapshots, verification, retention, corruption, stopped-server restoration,
+safety copies, session revocation, and bounded worker shutdown with database
+locking. A Windows-compatible writable-fsync regression passed on Linux.
+
+Desktop read receipts require the selected foreground conversation at the bottom;
+notification previews and other windows do not mark it read. Overdue customer
+orders use account-scoped tiers and snoozes, complete-snapshot caching, quiet
+deferral, and completion cancellation. Eight new animations preserve the old
+state order and render across seven characters at small and large sizes in both
+directions; the new contact sheet was visually inspected.
+
+The combined HTTP/BuddyApp workflow imported a real Excel file, scanned codes
+with keyboard input and Enter, cancelled and confirmed a stock receipt, and
+checked the saved quantity from another employee account. It also exercised
+personal/team read receipts, order snooze/escalation/completion, and a verified
+manual IT backup containing the resulting receipts and stock audit. Notification
+sound tests use mocked playback to check the native Windows API, settings,
+Quiet mode, burst limits, failed audio devices, and accepted visible deliveries.
+The six affected GUI workflows and isolated startup passed again after sounds
+were added. Actual sound output on a Windows work PC was not tested here.
+
+No dependencies changed. Update/restart the server and every desktop client,
+retaining existing data and the same writable shared notes folder. These tests
+use disposable local servers and folders; the real Windows SMB share, physical
+USB scanner, native Windows titlebars, and office deployment were not exercised.
+No new Windows executable was built in this cloud. Earlier checks follow.
+
 The IT administration update passed all **810 unit tests**, all **14 Qt GUI
 workflows**, and isolated desktop startup on Python 3.12/Linux offscreen Qt.
 Nineteen new server tests cover separate admin/employee identities and tokens,

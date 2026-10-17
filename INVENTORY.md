@@ -7,8 +7,8 @@ The **This PC only** option keeps a separate local list.
 
 Update and restart the office server as well as the desktop clients for these
 features. Keep its database on the server's local disk and retain your existing
-database when updating. Back it up with the server stopped, as described in
-[WORK_CHAT.md](WORK_CHAT.md).
+database when updating. Daily verified office backups and an IT **Back up now**
+action are described in [WORK_CHAT.md](WORK_CHAT.md#office-backups-and-recovery).
 
 ## Import an Excel stock list
 
@@ -31,12 +31,15 @@ database when updating. Back it up with the server stopped, as described in
 | Reorder quantity | Minimum suggested order quantity |
 | Target stock | Desired quantity after restocking |
 | Supplier | Supplier name |
+| Barcode | Optional unique scanner code; Barcode, UPC, EAN, and GTIN columns can be mapped here |
 
 Imports update matching part numbers and add new ones. Unmapped optional fields
 on existing items are preserved, and items absent from the spreadsheet remain
 in the inventory. A concurrent stock change requires a fresh review rather than
 silently overwriting another employee's work. Part numbers match without regard
 to letter case; duplicate codes in one import are rejected.
+Keep both barcodes and part numbers as text in Excel to preserve leading zeros.
+An import cannot recover zeros that Excel has already removed.
 
 Each import supports up to 100,000 data rows, 100 columns, and a 50 MiB source
 file; the combined inventory also supports 100,000 items. Workbook contents are
@@ -54,6 +57,39 @@ Select an item to update its location, quantity, or restock settings explicitly.
 Updates retain the revision you opened, so a stale editor cannot overwrite a
 newer count. Completing customer orders or ticking checklist items does not
 automatically deduct stock.
+
+## USB barcode scanning and stock movements
+
+1. Open **Home → Scan barcode**, or **Inventory → Scan barcode**. Click the
+   barcode box and scan with a USB scanner configured to type its code and
+   press Enter. You can also type the exact barcode or part number and press
+   Enter. Leading zeros are retained; a scan only looks up the item.
+2. Check the description, shelf/bin location, and quantity. An unknown or
+   ambiguous code does not select a guessed item. For a new barcode, choose
+   **Choose a part to assign this barcode…**, select its existing stock item,
+   use **Use scanned barcode**, then review and **Save stock changes**.
+3. Choose **Receive stock**, **Sale / stock out**, **Customer return**, or
+   **Physical count**. Receive and return add units; sale removes units;
+   physical count sets the actual total and requires a reason. Add an optional
+   invoice/delivery reference.
+4. Choose **Review stock change…**, check the before/after quantities, then
+   **Confirm stock change**. Cancel leaves stock unchanged. Scan again before
+   recording the next movement.
+
+Shared stock updates use the item revision you reviewed. If another employee
+changes it first, refresh/scan again and review the new count. Quantities cannot
+go below zero. A connection failure can leave the result uncertain: use
+**Check / retry original change…** while the same session is open. It reuses the
+original request identifier, so an already-saved movement is returned without
+applying it twice. This pending retry is not saved across app restarts or
+sign-out; check **Movement history** before entering a replacement change.
+
+History shows quantities before and after, the movement, employee, time, reason,
+and reference. Imports and manual item edits are audited too. Filter by exact
+part number and use **Load older movements** for more entries. All employees
+share the office history; **This PC only** has its own local history. Cached
+office lookups stay available when disconnected and are labelled as snapshots;
+stock changes require a live server connection.
 
 ## Jeffery's inventory memory
 
@@ -76,5 +112,8 @@ The authenticated inventory API provides a future connection point. A stock
 script can read `/api/inventory`, create an import stage with the current
 revision at `/api/inventory/imports`, upload bounded row batches, and explicitly
 commit the stage. Revision checks and idempotent commit responses protect the
-shared list. Build and authorize that automation separately when its data source
-and update rules are known.
+shared list. Exact lookups use `GET /api/inventory/scan?code=...`; individual
+movements use `POST /api/inventory/movements` with the reviewed item revision
+and a unique request identifier. History is available through
+`GET /api/inventory/movements`. Build and authorize that automation separately
+when its data source and update rules are known.

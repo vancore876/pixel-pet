@@ -14,7 +14,9 @@ ANIMATION_STATES = ("IDLE", "WALK_LEFT", "WALK_RIGHT", "SLEEP", "EXCITED", "DRAG
                     "FACEPALM", "LEAN", "HANG", "SNEAK",
                     "CHECK_STOCK", "SCAN_PART", "PACK_ORDER", "WRENCH", "HIGH_FIVE", "COFFEE",
                     "HEAD_TILT", "SNIFF", "LISTEN", "KNOCK", "DUST", "INSPECT",
-                    "PERCH", "WING_FLAP", "FETCH", "CURL_UP")
+                    "PERCH", "WING_FLAP", "FETCH", "CURL_UP",
+                    "CARRY_BOX", "STOCK_OK", "FIND_SHELF", "PAPER_PLANE",
+                    "BLOW_BUBBLES", "TAI_CHI", "STARGAZE", "TAP_FOOT")
 
 CHARACTER_CHOICES = (("Robot", "robot"), ("Cat", "cat"), ("Knight", "knight"),
                      ("Dog", "dog"), ("Fox", "fox"), ("Owl", "owl"), ("Dragon", "dragon"))
@@ -22,7 +24,11 @@ CHARACTER_CHOICES = (("Robot", "robot"), ("Cat", "cat"), ("Knight", "knight"),
 COMPANION_ANIMATIONS = (("Tilt head", "HEAD_TILT"), ("Sniff around", "SNIFF"),
                         ("Listen", "LISTEN"), ("Knock", "KNOCK"), ("Dust off", "DUST"),
                         ("Inspect", "INSPECT"), ("Perch", "PERCH"),
-                        ("Flutter", "WING_FLAP"), ("Fetch", "FETCH"), ("Curl up", "CURL_UP"))
+                        ("Flutter", "WING_FLAP"), ("Fetch", "FETCH"), ("Curl up", "CURL_UP"),
+                        ("Carry a delivery", "CARRY_BOX"), ("Stock celebration", "STOCK_OK"),
+                        ("Find a shelf", "FIND_SHELF"), ("Paper plane", "PAPER_PLANE"),
+                        ("Blow bubbles", "BLOW_BUBBLES"), ("Slow stretch", "TAI_CHI"),
+                        ("Stargaze", "STARGAZE"), ("Tap a foot", "TAP_FOOT"))
 
 # These desktop poses are drawn locally, so every character can use them even
 # when a sprite folder only contains the original animation states.
@@ -46,6 +52,10 @@ def draw_character(p: QPainter, size: int, height=None, frame=0, state="IDLE", d
     base = PET_PALETTES.get(skin, PET_PALETTES["mint"])
     dark, light, highlight, middle, limbs = base[:5]
     gx, gy = (max(-1, min(1, float(v))) for v in gaze)
+    if state == "FIND_SHELF":
+        gx, gy = math.sin(frame * 0.25) * 0.35, 0.65
+    elif state in ("PAPER_PLANE", "BLOW_BUBBLES", "STARGAZE"):
+        gx, gy = 0.7, -0.45 + math.sin(frame * 0.3) * 0.2
     def block(x, y, w, h, color):
         p.fillRect(round(x), round(y), w, h, QColor(color))
     def tint(color, alpha):
@@ -204,7 +214,7 @@ def draw_character(p: QPainter, size: int, height=None, frame=0, state="IDLE", d
     jump = -abs(math.sin(frame * math.pi / 10)) * 6 if state in ("JUMP", "HOP", "BOUNCE", "FLIP") else 0
     bob = -abs(math.sin(frame * math.pi / 2)) if state in ("EXCITED", "DANCE", "CELEBRATE") else -abs(math.sin(frame * 0.4)) * 0.8 if state == "HIGH_FIVE" else 0
     p.translate(4 + (math.sin(frame * 0.6) if state == "DANCE" else 0), 8 + jump + bob)
-    if state in ("IDLE", "LOOK", "THINK", "TALK", "PET", "READ", "SLEEP", "CHECK_STOCK", "COFFEE", "HEAD_TILT", "LISTEN", "CURL_UP", "PERCH", "INSPECT"):
+    if state in ("IDLE", "LOOK", "THINK", "TALK", "PET", "READ", "SLEEP", "CHECK_STOCK", "COFFEE", "HEAD_TILT", "LISTEN", "CURL_UP", "PERCH", "INSPECT", "FIND_SHELF", "PAPER_PLANE", "BLOW_BUBBLES", "TAI_CHI", "STARGAZE", "TAP_FOOT"):
         # Fractional motion gives a quiet breathing rhythm without moving the feet.
         breath = math.sin(frame * math.tau / 24) * 0.012
         p.translate(12, 22)
@@ -249,6 +259,14 @@ def draw_character(p: QPainter, size: int, height=None, frame=0, state="IDLE", d
         p.translate(math.sin(frame * 0.5) * 0.5, -abs(math.sin(frame * 0.55)) * 0.8)
     elif state == "WING_FLAP":
         p.translate(0, -abs(math.sin(frame * 0.4)) * 1.5)
+    elif state == "CARRY_BOX":
+        p.translate(math.sin(frame * 0.5) * 0.25, -abs(math.sin(frame * 0.5)) * 0.55)
+    elif state == "STOCK_OK":
+        p.translate(0, -abs(math.sin(frame * 0.45)) * 0.8)
+    elif state == "TAI_CHI":
+        p.translate(12, 20)
+        p.rotate(math.sin(frame * 0.2) * 3)
+        p.translate(-12, -20)
     if direction < 0:
         p.translate(24, 0)
         p.scale(-1, 1)
@@ -318,7 +336,7 @@ def draw_character(p: QPainter, size: int, height=None, frame=0, state="IDLE", d
         block(20, 9 - frame % 2, 1, 1, "#b29aff")
         block(18, 10 - frame % 2, 3, 1, "#b29aff")
     else:
-        moving = state.startswith("WALK") or state in ("EXCITED", "DANCE", "CELEBRATE", "DRAG", "CHASE", "SHY", "PUSH", "RUN", "TIPTOE", "SKATE", "CLIMB", "GROOM", "SNEAK", "FETCH")
+        moving = state.startswith("WALK") or state in ("EXCITED", "DANCE", "CELEBRATE", "DRAG", "CHASE", "SHY", "PUSH", "RUN", "TIPTOE", "SKATE", "CLIMB", "GROOM", "SNEAK", "FETCH", "CARRY_BOX", "STOCK_OK")
         swing = math.sin(frame * math.pi / 2)
         blink = state in ("IDLE", "PET", "YAWN", "LAUGH", "SNEEZE") and frame % (4 if state == "LAUGH" else 20) < 2
         if character == "cat":
@@ -523,9 +541,13 @@ def draw_character(p: QPainter, size: int, height=None, frame=0, state="IDLE", d
             for x in (10.5, 11.5, 12.5):
                 curve(x, 17.3, x, 17.9, x, 18.4, "#fff5d6", 0.35)
             oval(15, 17.8, 0.7, 0.7, "#a6ffef")
-        raised = state in ("WAVE", "DANCE", "CELEBRATE", "PARACHUTE", "DRAG", "HOP", "PEEK", "PUSH", "STRETCH", "JUGGLE", "MAGIC", "HANG", "SCARED", "SALUTE", "UMBRELLA", "HIGH_FIVE", "WRENCH", "SCAN_PART", "CHECK_STOCK", "KNOCK", "DUST", "INSPECT", "WING_FLAP", "LISTEN")
+        raised = state in ("WAVE", "DANCE", "CELEBRATE", "PARACHUTE", "DRAG", "HOP", "PEEK", "PUSH", "STRETCH", "JUGGLE", "MAGIC", "HANG", "SCARED", "SALUTE", "UMBRELLA", "HIGH_FIVE", "WRENCH", "SCAN_PART", "CHECK_STOCK", "KNOCK", "DUST", "INSPECT", "WING_FLAP", "LISTEN", "STOCK_OK", "FIND_SHELF", "PAPER_PLANE", "BLOW_BUBBLES", "STARGAZE")
         for x, y in ((4, 12 if raised else 16 + (swing if moving else 0)),
                      (18, 10 + math.sin(frame * 0.65) if raised else 16 - (swing if moving else 0))):
+            if state == "TAI_CHI":
+                y = 10.5 + math.sin(frame * 0.2 + (math.pi if x < 12 else 0)) * 2
+            elif state == "TAP_FOOT":
+                y = 15.5 if x < 12 else 13.5
             if character == "owl":
                 side = -1 if x < 12 else 1
                 extent = 9 + math.sin(frame * 0.7) * 1.3 if state == "WING_FLAP" else 7
@@ -560,7 +582,10 @@ def draw_character(p: QPainter, size: int, height=None, frame=0, state="IDLE", d
                 soft_oval(x - 0.3, y - 0.5, 2.8, 2.8, highlight, middle, dark, dark)
                 panel(x, y, 2.2, 3.8, highlight, limbs, middle, 1)
                 oval(x + 0.45, y + 0.65, 0.8, 0.8, tint(highlight, 155))
-        for x in (8 - (swing if moving else 0), 14 + (swing if moving else 0)):
+        for foot_index, x in enumerate((8 - (swing if moving else 0), 14 + (swing if moving else 0))):
+            p.save()
+            if state == "TAP_FOOT" and foot_index == 1:
+                p.translate(0, -max(0, math.sin(frame * 0.9)) * 1.5)
             if organic:
                 soft_oval(x - 0.4, 19.4, 3.8, 2.6, *coat, outline=coat[2])
                 for toe in (0.8, 1.8):
@@ -570,6 +595,7 @@ def draw_character(p: QPainter, size: int, height=None, frame=0, state="IDLE", d
             else:
                 panel(x - 0.1, 19.8, 3.2, 2.1, middle, dark, dark, 0.8)
                 curve(x + 0.55, 20.4, x + 1.5, 20.1, x + 2.4, 20.4, tint(highlight, 150), 0.3)
+            p.restore()
         if state == "LAUGH":
             block(10, 13, 5, 2, "#243647")
             block(11, 14, 3, 1, "#f4a4c7")
@@ -777,6 +803,142 @@ def draw_character(p: QPainter, size: int, height=None, frame=0, state="IDLE", d
             curve(8.7, 17.3 + bob, 12.7, 17 + bob, 16.7, 17.3 + bob, "#fff0cf", 0.4)
             soft_oval(6.7, 16.6 + bob, 2.7, 2.3, *coat)
             soft_oval(16.1, 16.6 + bob, 2.7, 2.3, *coat)
+        elif state == "CARRY_BOX":
+            # A closed parcel rides in the arms while the feet march in place.
+            # This is a prop; stock is changed only by the inventory controls.
+            panel(5.7, 13.9, 13.1, 7.3, "#f1d0a0", "#c39a68", "#89613d", 0.6, "#77583f")
+            lid = QPainterPath(QPointF(5.7, 14.2))
+            lid.lineTo(8.1, 11.9)
+            lid.lineTo(20.6, 11.9)
+            lid.lineTo(18.8, 14.2)
+            lid.closeSubpath()
+            shape(lid, "#f4dbb0", "#ddba87", "#b78958", "#9a744d")
+            side = QPainterPath(QPointF(18.8, 14.2))
+            side.lineTo(20.6, 11.9)
+            side.lineTo(20.6, 19.2)
+            side.lineTo(18.8, 21.2)
+            side.closeSubpath()
+            shape(side, "#d7b17d", "#ae8155", "#8c613e", "#8d6644")
+            panel(11.4, 14, 1.7, 6.9, "#fff0c0", "#e7d299", "#c5ad76", 0.1, "#b7a06c")
+            curve(12.3, 13.8, 13.2, 12.7, 14.1, 12.1, "#f6e8b7", 1.6)
+            panel(14.1, 15.4, 3.5, 2.7, "#fffdf2", "#eee8d4", "#d5c7a7", 0.2)
+            curve(15, 17.4, 15, 16.5, 15, 15.9, "#56736f", 0.4)
+            curve(16.4, 17.4, 16.4, 16.5, 16.4, 15.9, "#56736f", 0.4)
+            for x in (4.9, 17.9):
+                soft_oval(x, 17.2, 3.1, 2.8, *coat, outline=coat[2] if organic else dark)
+        elif state == "STOCK_OK":
+            # A clear success gesture is also available as a manual celebration.
+            lift = math.sin(frame * 0.4) * 0.5
+            shield = QPainterPath(QPointF(18.8, 5.2 + lift))
+            shield.quadTo(22.5, 6, 25.7, 5.2 + lift)
+            shield.lineTo(25.1, 11 + lift)
+            shield.quadTo(24.5, 13.5 + lift, 22.2, 15 + lift)
+            shield.quadTo(19.4, 13.5 + lift, 18.8, 10.8 + lift)
+            shield.closeSubpath()
+            shape(shield, "#c7f1c4", "#67b793", "#328072", "#2d7268")
+            mark = QPainterPath(QPointF(20.1, 9.5 + lift))
+            mark.lineTo(21.6, 11.1 + lift)
+            mark.lineTo(24.3, 7.8 + lift)
+            stroke(mark, "#f4ffe2", 1.1)
+            for i in range(4):
+                angle = frame * 0.2 + i * math.pi / 2
+                x, y = 22.2 + math.cos(angle) * 4.2, 3.3 + math.sin(angle) * 2.1
+                oval(x - 0.35, y - 0.35, 0.7, 0.7, "#f4ce7c" if i % 2 else "#8acbd7")
+        elif state == "FIND_SHELF":
+            panel(4.1, 14.2, 15.7, 7.5, "#edf4e1", "#cdd9c6", "#9eafa0", 0.6, "#667f79")
+            for x in (5.8, 10.5, 15.2):
+                panel(x, 15.3, 2.8, 5, "#a3b8b4", "#7d9792", "#5c7973", 0.2, "#67847c")
+                for y in (16.8, 18.5):
+                    curve(x + 0.3, y, x + 1.2, y, x + 2.5, y, "#cad6c4", 0.3)
+            # A marker travels down the aisle, then the paw points to its shelf.
+            marker_y = 16.1 + (math.sin(frame * 0.35) + 1) * 1.65
+            oval(13.5, marker_y, 1.1, 1.1, "#d87357")
+            curve(18.9, 12.1, 21, 11.2, 21.6, 8.4, coat[1] if organic else limbs, 1.4)
+            pin = QPainterPath(QPointF(20.1, 5.5))
+            pin.cubicTo(20.1, 2.3, 25.2, 2.3, 25.2, 5.5)
+            pin.quadTo(25.2, 7.5, 22.7, 9)
+            pin.quadTo(20.1, 7.5, 20.1, 5.5)
+            shape(pin, "#ffd7a4", "#e3a26a", "#b76e50", "#a76c50")
+            oval(21.8, 4.2, 1.8, 1.8, "#fff0c5")
+        elif state == "PAPER_PLANE":
+            # The plane stays within the companion footprint throughout its loop.
+            phase = frame * 0.35
+            plane_x, plane_y = 21.3 + math.sin(phase) * 2, 3.3 + math.cos(phase) * 2.1
+            trail = QPainterPath(QPointF(18.4, 7.7))
+            trail.cubicTo(26, 6.6, 19.6, -0.9, plane_x, plane_y)
+            stroke(trail, tint("#b5d7e9", 130), 0.4)
+            p.save()
+            p.translate(plane_x, plane_y)
+            p.rotate(math.sin(phase) * 18)
+            plane = QPainterPath(QPointF(-2.5, 0))
+            plane.lineTo(2.8, -1.5)
+            plane.lineTo(0.1, 2.4)
+            plane.lineTo(-0.5, 0.9)
+            plane.closeSubpath()
+            shape(plane, "#f5ffff", "#c6e3ef", "#8cb7d0", "#729bb2")
+            curve(-0.5, 0.9, 1.2, -0.4, 2.8, -1.5, "#96b6cb", 0.35)
+            p.restore()
+        elif state == "BLOW_BUBBLES":
+            panel(3, 17, 3.6, 4.4, "#c3e6e3", "#75bcb8", "#4e8e98", 0.7)
+            panel(3.2, 16.3, 3.2, 1.2, "#fff0bf", "#e5d192", "#baa66f", 0.3)
+            curve(17.9, 15.8, 18.5, 13.7, 19.2, 11.6, "#edc69c", 0.65)
+            p.setPen(QPen(QColor("#edc69c"), 0.5))
+            p.setBrush(Qt.NoBrush)
+            p.drawEllipse(QRectF(18.4, 9.2, 2.6, 2.6))
+            for i in range(3):
+                travel = (frame * 0.035 + i / 3) % 1
+                bubble_x = 20.9 + math.sin(travel * math.pi + i) * 1.1 + i * 0.8
+                bubble_y = 9.6 - travel * 10.3
+                radius = 0.8 + i * 0.3 + travel * 0.25
+                opacity = round(180 * min(1, travel * 9, (1 - travel) * 9))
+                p.setPen(QPen(tint("#c1e9ed", opacity), 0.35))
+                p.setBrush(tint("#92cbe4", opacity // 5))
+                p.drawEllipse(QRectF(bubble_x - radius, bubble_y - radius, radius * 2, radius * 2))
+                curve(bubble_x - radius * 0.5, bubble_y - radius * 0.2,
+                      bubble_x - radius * 0.5, bubble_y - radius * 0.7,
+                      bubble_x + radius * 0.1, bubble_y - radius * 0.7,
+                      tint("#fff2e5", opacity), 0.35)
+        elif state == "TAI_CHI":
+            # Slow, opposed arm arcs work with paws, wings and articulated hands.
+            for side in (-1, 1):
+                lift = math.sin(frame * 0.2 + (math.pi if side < 0 else 0)) * 2
+                x = 12 + side * 8.4
+                curve(x - side * 1.3, 9.5 + lift, x + side * 0.7, 11.1 + lift,
+                      x + side * 0.2, 13.5 + lift, tint("#acd9cf", 145), 0.4)
+            # A small breathing orb changes size smoothly with the movement.
+            radius = 1.2 + math.sin(frame * 0.2) * 0.25
+            glow(12, 18, radius * 1.9, "#a7e2ce", 95)
+            soft_oval(12 - radius, 18 - radius, radius * 2, radius * 2,
+                      "#e5ffe9", "#94d6ba", "#599e91")
+        elif state == "STARGAZE":
+            curve(21.2, 14.2, 19.6, 18.2, 18.4, 21.5, "#8d9fab", 0.7)
+            curve(21.2, 14.2, 23, 18.5, 24.7, 21.5, "#8d9fab", 0.7)
+            curve(21.2, 14.2, 21.4, 18, 21.4, 21.7, "#b6c3c7", 0.7)
+            p.save()
+            p.translate(21.2, 12.8)
+            p.rotate(-22 + math.sin(frame * 0.25) * 7)
+            panel(-3.9, -1.3, 8.7, 2.6, "#d6e6f1", "#84a6bf", "#4e718d", 0.7)
+            panel(3.5, -1.8, 1.7, 3.6, "#f0d8a4", "#c6a56f", "#95744f", 0.5)
+            oval(4.2, -1.1, 0.7, 2.1, "#bcf2f1")
+            panel(-5.1, -0.7, 1.5, 1.4, "#a8becb", "#54778d", "#35556c", 0.3)
+            p.restore()
+            for i, (x, y) in enumerate(((2.6, 3.2), (21.7, 0), (25.3, 4.1))):
+                reach = 0.45 + (math.sin(frame * 0.4 + i * 2) + 1) * 0.35
+                curve(x - reach, y, x, y, x + reach, y, "#e7d59b", 0.45)
+                curve(x, y - reach, x, y, x, y + reach, "#e7d59b", 0.45)
+        elif state == "TAP_FOOT":
+            # A wristwatch and an independently lifted foot make waiting legible.
+            panel(18.2, 14.1, 2.3, 3.7, "#bacbd2", "#6f909f", "#486a7c", 0.5)
+            soft_oval(17.8, 14.5, 3.1, 3.1, "#fff8e1", "#e2dbc3", "#a6a18d", "#71909d")
+            angle = frame * 0.17
+            curve(19.35, 16.05, 19.35 + math.sin(angle) * 0.35,
+                  16.05 - math.cos(angle) * 0.35,
+                  19.35 + math.sin(angle) * 0.85, 16.05 - math.cos(angle) * 0.85,
+                  "#526f79", 0.3)
+            curve(19.35, 16.05, 19, 16.05, 18.7, 16.05, "#526f79", 0.35)
+            tap = max(0, -math.sin(frame * 0.9))
+            curve(14.3 - tap * 0.4, 22.4, 15.6, 22.8 + tap * 0.3,
+                  17.1 + tap * 0.4, 22.4, tint("#d6c89f", round(50 + tap * 130)), 0.45)
     if state == "CURL_UP" and not organic:
         # A softly pulsing night light distinguishes curl-up from ordinary sleep.
         glow(22.5, 10, 2.3, "#c8c2ed", 70 + round(math.sin(frame * 0.3) * 25))

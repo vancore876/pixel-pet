@@ -233,6 +233,20 @@ class TeamStore:
     def conflicts(self):
         return [entity for kind in ("note", "message") for entity in self.entities(kind) if entity["conflict"]]
 
+    def has_revisions(self, kind, entity_id, revisions):
+        """Whether all proposed parents belong to this workspace and record."""
+        if kind not in KINDS or not _identifier(entity_id) or not isinstance(revisions, (list, tuple)):
+            return False
+        with self._lock:
+            workspace = self._workspace()
+            for revision in revisions:
+                if not _identifier(revision):
+                    return False
+                row = self._db.execute("SELECT workspace_id,kind,entity_id FROM events WHERE event_id=?", (revision,)).fetchone()
+                if row is None or tuple(row) != (workspace, kind, entity_id):
+                    return False
+        return True
+
     def _put(self, kind, entity_id, payload, operation="put", base_revisions=None, now=None, restore=False):
         with self._lock, self._db:
             current = self._view(kind, entity_id)

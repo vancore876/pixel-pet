@@ -39,6 +39,7 @@ DEFAULTS = {
     "work_chat_server": "", "work_chat_username": "",
     "work_chat_notifications": True, "work_chat_reminder_minutes": 30,
     "notification_size": "compact",
+    "notification_sounds": True,
     "inventory_shared": True, "inventory_share_with_ai": False,
 }
 

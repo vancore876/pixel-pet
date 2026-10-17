@@ -52,8 +52,11 @@ from team_window import TeamWindow
 from team_popup import TeamPopup
 from work_notifications import WorkNotificationService
 from work_notification_popup import WorkNotificationPopup
+from notification_sounds import NotificationSounds
 from inventory_service import InventoryService
 from inventory_window import InventoryWindow
+from order_escalation import OrderEscalationService
+from overdue_orders_window import OverdueOrdersWindow, OverdueOrderPopup
 
 
 class BuddyApp(QObject):
@@ -64,6 +67,7 @@ class BuddyApp(QObject):
         super().__init__()
         self.app = app
         self.settings = settings or AppSettings()
+        self.notification_sounds = NotificationSounds(self.settings)
         self.shutting_down = False
         self._ai_shared_ids = set()
         self.overlay = StatsOverlay(self.settings)
@@ -76,10 +80,11 @@ class BuddyApp(QObject):
         self.memory_store = MemoryStore(self.settings.path.parent / "memory.json")
         self.note_service = NoteService(self.notes_store, self.settings,
             lambda: not self.note_popup.isVisible() and not self.team_popup.isVisible()
-                and not self.work_popup.isVisible(), self)
+                and not self.work_popup.isVisible() and not self.overdue_popup.isVisible(), self)
         self.note_popup = ReminderPopup(self.settings)
         self.team_popup = TeamPopup(self.settings)
         self.work_popup = WorkNotificationPopup(self.settings)
+        self.overdue_popup = OverdueOrderPopup(self.settings)
         self.notepad = NotepadWindow(self.note_service, self.settings)
         self.team = TeamService(self.note_service, self.settings, parent=self,
             can_notify=self.team_can_notify)
@@ -131,6 +136,8 @@ class BuddyApp(QObject):
         self.inventory_window.preference_requested.connect(self.apply_inventory_preference)
         self.work_chat.session_changed.connect(self.inventory_session_changed)
         self.inventory.auth_expired.connect(self.work_chat._clear_session)
+        self.inventory.scan_ready.connect(self.stock_scan_feedback)
+        self.inventory.movement_finished.connect(self.stock_movement_feedback)
         self.chat.inventory_context = self.inventory_context
         self.home = HomeWindow(self.note_service, self.settings, self.focus)
         self.home.navigate_requested.connect(self.home_navigate)
@@ -149,6 +156,18 @@ class BuddyApp(QObject):
         self.business_sync.status_changed.connect(self.home.set_connection)
         self.work_chat.session_changed.connect(self.business_sync.set_session)
         self.business_sync.session_expired.connect(self.work_chat._clear_session)
+        self.order_escalations = OrderEscalationService(self.settings, self.business_sync,
+            can_notify=self.order_can_notify, parent=self)
+        self.overdue_window = OverdueOrdersWindow(self.order_escalations, self.settings)
+        self.work_chat.session_changed.connect(self.order_escalations.set_session)
+        self.order_escalations.notification.connect(self.deliver_order_escalation)
+        self.order_escalations.reset.connect(self.overdue_popup.clear)
+        self.order_escalations.error.connect(self.overdue_window.status.setText)
+        self.overdue_window.home_requested.connect(self.show_home)
+        self.overdue_window.open_requested.connect(self.open_overdue_order)
+        self.overdue_popup.open_requested.connect(self.open_overdue_order)
+        self.overdue_popup.snooze_requested.connect(self.order_escalations.snooze)
+        self.overdue_popup.dismissed.connect(self.order_escalations.release_notification)
         self.notepad.connection_work_chat_requested.connect(self.show_work_chat)
         self.notepad.set_shared_status('Sign in to Work Chat to use shared orders and checklists.', False)
         self.chat.user_message.connect(self.memory_learner.observe)
@@ -274,6 +293,8 @@ class BuddyApp(QObject):
             sections.addAction(label, lambda checked=False, value=section: self.show_business_workspace(value))
         sections.addAction("Shared-folder setup", self.show_team)
         sections.addAction("Stock inventory", self.show_inventory)
+        sections.addAction("Scan barcode", self.show_barcode_scanner)
+        sections.addAction("Overdue customer orders", self.show_overdue_orders)
         create = notes.addMenu("Create")
         create.addAction("New Writing", lambda: self.new_business_entry("note"))
         create.addAction("New Checklist", lambda: self.new_business_entry("list"))
@@ -430,6 +451,8 @@ class BuddyApp(QObject):
         self.chat.configure()
         self.work_chat.configure()
         self.it_window.configure()
+        self.overdue_window.configure()
+        self.overdue_popup.configure()
         self.home.configure()
         apply_window_style(self.menu, self.settings)
         self.configure_semantic_memory(changes)
@@ -447,9 +470,11 @@ class BuddyApp(QObject):
         if self.settings["quiet_mode"] or not self.settings["note_reminders"]:
             self.note_popup.hide()
             self.team_popup.dismiss()
+            self.overdue_popup.clear()
         if self.settings['quiet_mode'] or not self.settings['work_chat_notifications']:
             self.work_popup.dismiss()
         self.work_notifications.pump()
+        self.order_escalations.pump()
         if any(key in changes for key in ("team_sync_enabled", "team_shared_folder", "team_employee_name")):
             self.configure_team()
         self.team.pump()
@@ -568,6 +593,20 @@ class BuddyApp(QObject):
         self.inventory_window.show()
         self.inventory_window.raise_()
         self.inventory_window.activateWindow()
+
+    def show_barcode_scanner(self):
+        self.show_inventory()
+        self.inventory_window.show_scanner()
+
+    def stock_scan_feedback(self, result):
+        if (not self.shutting_down and isinstance(result, dict) and result.get('item')
+                and not result.get('error') and self.pet.isVisible() and not self.pet.paused):
+            self.pet.perform('SCAN_PART', 2.5)
+
+    def stock_movement_feedback(self, result):
+        if (not self.shutting_down and isinstance(result, dict) and result.get('movement')
+                and not result.get('error') and self.pet.isVisible() and not self.pet.paused):
+            self.pet.perform('STOCK_OK', 3)
 
     def apply_inventory_preference(self, key, value):
         if key == 'inventory_shared' and value != self.settings['inventory_shared'] and self.settings['inventory_share_with_ai']:
@@ -771,16 +810,43 @@ class BuddyApp(QObject):
     def team_can_notify(self):
         return (not self.shutting_down and not self.settings['quiet_mode']
                 and self.settings['note_reminders'] and not self.note_popup.isVisible()
-                and not self.team_popup.isVisible() and not self.work_popup.isVisible())
+                and not self.team_popup.isVisible() and not self.work_popup.isVisible()
+                and not self.overdue_popup.isVisible())
 
     def work_can_notify(self):
         return (not self.shutting_down and not self.settings['quiet_mode']
                 and self.settings['work_chat_notifications'] and not self.note_popup.isVisible()
-                and not self.team_popup.isVisible() and not self.work_popup.isVisible())
+                and not self.team_popup.isVisible() and not self.work_popup.isVisible()
+                and not self.overdue_popup.isVisible())
+
+    def order_can_notify(self):
+        active = self.app.activeWindow()
+        return (self.team_can_notify() and self.app.activeModalWidget() is None
+                and not (active and active.isFullScreen()))
+
+    def deliver_order_escalation(self, notification):
+        if (self.order_can_notify()
+                and self.overdue_popup.display(notification, self.pet.geometry().center())):
+            if not self.order_escalations.mark_notification_presented(notification):
+                self.overdue_popup.clear()
+            elif self.overdue_popup.isVisible():
+                self.notification_sounds.play()
+        else:
+            self.order_escalations.release_notification(notification)
+
+    def show_overdue_orders(self):
+        self.order_escalations.pump()
+        self.overdue_window.show_workspace()
+
+    def open_overdue_order(self, identifier):
+        if any(row['id'] == identifier for row in self.order_escalations.rows):
+            self.open_note(identifier)
 
     def deliver_work_notification(self, notification):
         if self.work_can_notify() and self.work_popup.present(notification, self.pet.geometry().center()):
-            self.work_notifications.mark_notification_presented(notification)
+            if (self.work_notifications.mark_notification_presented(notification)
+                    and self.work_popup.isVisible()):
+                self.notification_sounds.play()
         else:
             self.work_notifications.release_notification(notification)
 
@@ -858,7 +924,9 @@ class BuddyApp(QObject):
 
     def deliver_team_notification(self, notification):
         if self.team_can_notify() and self.team_popup.present(notification, self.pet.geometry().center()):
-            self.team.mark_notification_presented(notification)
+            if (self.team.mark_notification_presented(notification)
+                    and self.team_popup.isVisible()):
+                self.notification_sounds.play()
             if self.pet.isVisible():
                 self.pet.perform('REMINDER', 3)
         else:
@@ -885,6 +953,7 @@ class BuddyApp(QObject):
             return
         actions = {'home': self.show_home, 'coworkers': self.show_work_chat,
                    'it': self.show_it,
+                   'scan': self.show_barcode_scanner, 'overdue': self.show_overdue_orders,
                    'inventory': self.show_inventory,
                    'assistant': self.show_chat, 'settings': self.show_settings,
                    'monitor': self.show_overlay, 'processes': self.show_processes,
@@ -900,7 +969,8 @@ class BuddyApp(QObject):
         for window in (self.home, self.dialog, self.notepad, self.work_chat, self.it_window, self.chat,
                        self.memory_window, self.process_window, self.launcher_window,
                        self.note_popup, self.team_popup, self.team_window, self.work_popup,
-                       self.inventory_window, self.desktop.panel, self.desktop.text_window):
+                       self.inventory_window, self.overdue_window, self.overdue_popup,
+                       self.desktop.panel, self.desktop.text_window):
             window.configure()
         for sticky in self.stickies.values():
             sticky.configure()
@@ -991,6 +1061,8 @@ class BuddyApp(QObject):
             except (OSError, ValueError) as exc:
                 self.note_error(str(exc))
         self.note_popup.present(note, kind, self.pet.geometry().center())
+        if self.note_popup.isVisible():
+            self.notification_sounds.play()
         if stored:
             self.smart_notes.request_reminder(stored, kind)
 
@@ -1156,6 +1228,9 @@ class BuddyApp(QObject):
         self.inventory_window.shutdown()
         self.work_notifications.stop()
         self.work_popup.clear_session()
+        self.order_escalations.stop()
+        self.overdue_popup.clear()
+        self.overdue_window.hide()
         self.team.stop()
         self.team_popup.shutdown()
         self.team_window.hide()

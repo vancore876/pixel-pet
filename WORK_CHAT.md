@@ -44,6 +44,21 @@ Room. They leave the selected conversation and its unsent reply in place; only
 including Work Chat, have native minimize, maximize/restore, and close buttons.
 Closing a workspace keeps the background app running and retains its draft.
 
+Shown message and reminder popups play the Windows notification sound by
+default. **Settings → Getting started → Play a sound for message and reminder
+popups** turns this off without hiding the popups. Quiet mode also silences it.
+Expanding a card or refreshing chat does not replay the sound, and a shared
+two-second interval prevents a burst of popups from overlapping sounds.
+
+Outgoing desktop messages now show **Read** in direct chats and **Read by N**
+in Team Room. A receipt is recorded only when the recipient's selected
+conversation is visible, active, and scrolled to the bottom, with no modal
+dialog covering it. A hidden/minimized chat, another open conversation, or a
+notification preview does not count as reading. Receipts cover the latest 50
+sent messages requested for the conversation, with up to 20 reader names.
+They are separate from delivery and **Acknowledge**: reading does not stop
+message reminders. The browser chat currently does not mark messages read.
+
 New accounts receive a one-time recovery code. Save it privately. Existing
 signed-in users can open **Account security** and enter their current password
 to generate or replace a code. **Forgot password?** accepts the username,
@@ -66,6 +81,11 @@ server address and username, leaving the server account intact.
 The same office server now holds the shared [parts inventory](INVENTORY.md).
 Update and restart the server before using the new desktop controls; the existing
 database migrates without discarding accounts, notes, or messages.
+**Home → Scan barcode** supports USB scanners that type a code followed by
+Enter. Lookups never change quantities; receive, sale, return, and physical
+count actions require review and confirmation. The server shares stock movement
+history and checks revisions to prevent one PC overwriting another's count.
+See [Inventory setup](INVENTORY.md#usb-barcode-scanning-and-stock-movements).
 
 The proposed work server is Windows at **192.168.50.194**. Confirm its IPv4
 address with `ipconfig` on that machine. The simple office setup uses:
@@ -232,6 +252,17 @@ one, then try to save an older editor draft on the other. The older save should
 be rejected without overwriting the coworker's change; its draft stays in the
 editor until reviewed or discarded.
 
+If shared notebook sync reports **“Review this record's current revisions before
+changing it”**, update Jeffery on every PC and restart it using the same writable
+team folder. The fix replays missing shared history, preserves an edited note
+deleted elsewhere as a separate note, and allows unrelated notes to continue
+syncing when one note needs recovery. Keep the existing local notebooks,
+`documents.sqlite`, and `JefferyWorkspace`; do not delete them to clear the
+message. Shared-folder notebook sync is separate from the Work Chat API:
+starting the web server alone does not enable it. Follow
+[shared-folder setup](README.md#work-team-messages-and-shared-notes-on-windows)
+and verify a new note and an edit on two PCs after updating.
+
 ## Shared Famous Twins records
 
 The redesigned desktop workspace separates **Writing**, **Checklists**,
@@ -262,6 +293,17 @@ pickup summaries, templates, and animations.
   entry. Completed records still count until deleted. Each desktop's existing
   local notebook limit also includes loaded business records. There is no
   offline business-save queue or per-order access control.
+
+Open **Home → More tools → Overdue customer orders** for the shared order list.
+The desktop shows a small internal reminder when an active customer order is
+due, one hour overdue, or one day overdue. It shows the current tier once per
+due date; **Later** can repeat it after 15 minutes, one hour, or one day. Open
+takes you to the order. Quiet mode and the note-reminder setting apply. Quotes,
+completed, delivered, and cancelled orders are excluded; a new due date rearms
+the reminder. State belongs to the signed-in employee on that PC, so snoozing
+does not change another employee's reminder. Offline results use the last
+complete office snapshot and are labelled as cached. These are staff reminders;
+Jeffery does not contact customers automatically.
 
 If another PC cannot connect, open `http://192.168.50.194:8765/api/health` in its
 browser. It should show a JSON response with `"status":"ok"`. Confirm the actual
@@ -296,8 +338,9 @@ Test-NetConnection 192.168.50.194 -Port 8765
 - The clients initially load the latest 50 messages in the selected conversation
   and retain up to 500 visible messages as new ones arrive. Older messages remain
   in the database; this version has no scroll-back browser or retention policy.
-- Messages are plain text, up to 4,000 characters. Uploads, push notifications,
-  read receipts, and automatic AI replies to coworker messages are not included.
+- Messages are plain text, up to 4,000 characters. Desktop popups and read receipts
+  require the signed-in app. Uploads, mobile push notifications, and automatic
+  AI replies to coworker messages are not included.
 - Sign-in/sign-up, sending, and business writes have rate limits. Ordinary
   requests are bounded to 16 KiB; business API requests allow up to 256 KiB.
   Business delta pages contain up to three records so desktop responses remain
@@ -315,14 +358,57 @@ revokes all sessions for that account. Restart the server afterward.
 Run the reset command under the same Windows account that runs the server, or
 replace the database argument with its actual private path.
 
-For backups, stop the server and copy the complete
-`%LOCALAPPDATA%\PixelSystemBuddy\work-server` folder from that server Windows
-account to a protected backup location, then restart. Preserve the database and
-any existing SQLite WAL/SHM files together. Backups contain workplace accounts,
-chat, shared orders/checklists, revisions, deletion markers, and TLS private
-keys if HTTPS is configured; limit access accordingly. Desktop notebook exports
-do not replace this server backup.
-Restore while the server is stopped.
+## Office backups and recovery
+
+**Start_Work_Server.bat** now enables automatic database snapshots. While the
+server runs, it takes one per UTC date and catches up after downtime. Snapshots
+use SQLite's online backup operation, so normal office work can continue. Each
+snapshot is checked for database integrity and written with a SHA-256 manifest.
+The default keeps the newest successful snapshot for each of the last **14
+backup dates**; a successful manual snapshot replaces that date's older copy.
+
+The default folder is `office-backups` beside the office database, normally
+`%LOCALAPPDATA%\PixelSystemBuddy\work-server\office-backups`. Keep it private
+and on a local disk. A custom CLI start can use `--backup-directory` and
+`--backup-keep-days 14` (1–365 backup dates); `--no-auto-backup` disables the
+schedule while preserving manual backups. Network-share and linked-directory
+backup paths are rejected. Copy completed `.sqlite` snapshots **and their
+adjacent `.sqlite.json` manifests** to a protected separate backup location for
+protection against failure of the server disk.
+
+Open **Home → IT administration** after completing the initial IT password
+change. The backup panel shows status, last success, next due time, errors,
+location, and saved snapshots. **Back up now** requires the current IT password
+again and starts a server job. Closing the window does not cancel that job.
+The list reports verification performed at creation; the verification command
+below checks the current file contents again.
+
+These snapshots include office accounts, password hashes, chat/read receipts,
+shared orders/checklists, inventory/movement history, and IT records. They do
+not include individual PCs' notebooks/documents, the shared-folder notebook
+workspace, or TLS certificate/private-key files. Back those up separately;
+desktop notebook exports do not replace an office database backup.
+
+To verify a snapshot on the server, run this from the project folder, replacing
+`SNAPSHOT.sqlite` with the actual filename shown in IT:
+
+```powershell
+.\.server-venv\Scripts\python.exe -m work_server verify-backup "$env:LOCALAPPDATA\PixelSystemBuddy\work-server\office-backups\SNAPSHOT.sqlite"
+```
+
+To restore, stop every office server process first. Choose the snapshot and
+confirm the existing destination database path before running:
+
+```powershell
+.\.server-venv\Scripts\python.exe -m work_server restore-backup "$env:LOCALAPPDATA\PixelSystemBuddy\work-server\office-backups\SNAPSHOT.sqlite" --database "$env:LOCALAPPDATA\PixelSystemBuddy\work-server\work-chat.sqlite" --confirm-restore
+```
+
+Restore verifies the snapshot, creates a verified copy of the current database
+under `restore-safety-backups`, then replaces the database. It refuses a running
+server or a nonexistent destination. Restart the server afterward and have
+everyone sign in again: restored employee and IT sessions are revoked. Accounts
+and passwords return to their snapshot values, and work saved afterward is only
+in the safety copy. Restore is an offline server command, not a live IT button.
 
 ## IT administration
 

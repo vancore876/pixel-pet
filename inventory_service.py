@@ -2,12 +2,14 @@
 from __future__ import annotations
 
 from concurrent.futures import Future
+from datetime import datetime, timezone
 import hashlib
 import json
 from pathlib import Path
 from queue import Empty, Queue
 import re
 import threading
+import uuid
 from urllib.parse import urlencode
 
 from PySide6.QtCore import QObject, QTimer, Signal
@@ -79,6 +81,10 @@ class InventoryService(QObject):
     import_ready = Signal(object)
     import_finished = Signal(object)
     auth_expired = Signal()
+    scan_ready = Signal(object)
+    history_ready = Signal(object)
+    movement_finished = Signal(object)
+    scope_reset = Signal()
     _completed = Signal(object)
 
     def __init__(self, settings, local_path, parent=None):
@@ -107,8 +113,14 @@ class InventoryService(QObject):
         self._stage = None
         self._network_rows = []
         self._syncing = False
+        self._refresh_sequence = 0
         self._pending_import = None
         self._context_index, self._low_indices = {}, []
+        self._scan_sequence = self._history_sequence = 0
+        self._scan_reply = None
+        self.pending_movement = None
+        self.movement_uncertain = False
+        self._movement_inflight = False
         self._timer = QTimer(self)
         self._timer.setInterval(60_000)
         self._timer.timeout.connect(self.refresh)
@@ -125,7 +137,8 @@ class InventoryService(QObject):
 
     @property
     def can_write(self):
-        return not self._stopped and (not self.shared or bool(self.token and self.user and self.online))
+        return (not self._stopped and not self.pending_movement and
+                (not self.shared or bool(self.token and self.user and self.online)))
 
     def _set_status(self, message):
         self.status = message
@@ -179,6 +192,11 @@ class InventoryService(QObject):
         self._file = ""
         self._syncing = False
         self._network_rows = []
+        self.invalidate_scan()
+        self._history_sequence += 1
+        self.pending_movement = None
+        self.movement_uncertain = self._movement_inflight = False
+        self.scope_reset.emit()
         self.changed.emit()
 
     def set_shared(self, shared):
@@ -218,7 +236,7 @@ class InventoryService(QObject):
     def _index(rows):
         index, low = {}, []
         for number, row in enumerate(rows):
-            text = " ".join(str(row.get(key, "")) for key in ("sku", "description", "location", "supplier"))
+            text = " ".join(str(row.get(key, "")) for key in ("sku", "barcode", "description", "location", "supplier"))
             for token in set(re.findall(r"[\w-]+", text.casefold())):
                 matches = index.setdefault(token, [])
                 if len(matches) < 256:
@@ -245,9 +263,11 @@ class InventoryService(QObject):
         finally:
             store.close()
 
-    def _load_cache(self, offline=False):
+    def _load_cache(self, offline=False, refresh_sequence=None):
         path = self._path
         def received(result):
+            if refresh_sequence is not None and refresh_sequence != self._refresh_sequence:
+                return
             self.catalog, self.summary, indexes = result
             self._context_index, self._low_indices = indexes
             self._filter_rows()
@@ -255,7 +275,7 @@ class InventoryService(QObject):
                 self.online = False
                 self._set_status("Offline · showing this account's cached stock. Reconnect before importing or editing office stock.")
             elif not self.shared:
-                self._set_status("Local inventory · quantities change only when you import or save stock edits.")
+                self._set_status("Local inventory · import stock, save edits, or review a stock action to change quantities.")
             self.changed.emit()
         self._submit(lambda cancel: self._read_store(path, cancel), received)
 
@@ -266,7 +286,7 @@ class InventoryService(QObject):
             if self._low_stock and float(row.get("quantity", 0)) > float(row.get("reorder_point", 0)):
                 continue
             if query and query not in " ".join(str(row.get(key, "")) for key in
-                    ("sku", "description", "location", "supplier")).casefold():
+                    ("sku", "barcode", "description", "location", "supplier")).casefold():
                 continue
             matches.append(row)
         self.rows = matches[:1000]
@@ -290,19 +310,20 @@ class InventoryService(QObject):
             self._set_status("Sign in to Work Chat to view and import your office's stock.")
             return
         self._syncing = True
+        self._refresh_sequence += 1
         self._network_rows = []
         self._set_status("Refreshing office inventory…")
-        self._fetch_page(0, None)
+        self._fetch_page(0, None, self._refresh_sequence)
 
     def search(self, query="", low_stock=False):
         self._query, self._low_stock = str(query)[:500], bool(low_stock)
         self._filter_rows()
         self.changed.emit()
 
-    def _fetch_page(self, offset, revision):
+    def _fetch_page(self, offset, revision, sequence):
         generation = self._generation
         def received(data, error, status):
-            if self._stopped or generation != self._generation:
+            if self._stopped or generation != self._generation or sequence != self._refresh_sequence:
                 return
             if error:
                 self.online = False
@@ -316,7 +337,7 @@ class InventoryService(QObject):
                 elif status == 404:
                     self._set_status("Update the office server to enable shared inventory.")
                 else:
-                    self._load_cache(offline=True)
+                    self._load_cache(offline=True, refresh_sequence=sequence)
                 return
             rows = data.get("items") if isinstance(data, dict) else None
             summary = data.get("summary") if isinstance(data, dict) else None
@@ -337,13 +358,15 @@ class InventoryService(QObject):
                 self.error.emit("The office inventory exceeds the 100,000-item limit.")
                 return
             if len(rows) == 50:
-                self._fetch_page(offset + len(rows), current_revision)
+                self._fetch_page(offset + len(rows), current_revision, sequence)
                 return
             snapshot = self._network_rows
             self._network_rows = []
             path = self._path
             def save(cancel):
                 from inventory import InventoryStore, InventoryCancelled
+                if sequence != self._refresh_sequence:
+                    return None
                 if cancel.is_set():
                     raise InventoryCancelled("Inventory refresh cancelled.")
                 store = InventoryStore(path)
@@ -355,6 +378,8 @@ class InventoryService(QObject):
                 finally:
                     store.close()
             def saved(result):
+                if sequence != self._refresh_sequence:
+                    return
                 self._syncing = False
                 self.online = True
                 self.catalog, self.summary, indexes = result
@@ -465,6 +490,8 @@ class InventoryService(QObject):
                 self.refresh()
                 return
             self.plan = None
+            self._refresh_sequence += 1
+            self._syncing = False
             self.import_finished.emit(data)
             self.refresh()
         def chunk(offset):
@@ -509,11 +536,208 @@ class InventoryService(QObject):
             stage, self._stage = self._stage, None
             self.api.request("DELETE", "/api/inventory/imports/" + stage, {}, lambda *args: None, self.token)
 
+    def invalidate_scan(self):
+        """Stop publishing an earlier scan without cancelling unrelated requests."""
+        self._scan_sequence += 1
+        reply, self._scan_reply = self._scan_reply, None
+        if reply is not None and hasattr(reply, "abort"):
+            try:
+                reply.abort()
+            except RuntimeError:  # Qt may already have deleted the reply.
+                pass
+
+    def _expire_access(self):
+        self._reset_scope()
+        self.token, self.user = "", None
+        self._set_status("Office access has ended. Sign in to Work Chat again.")
+        self.auth_expired.emit()
+
+    def _cached_scan(self, code):
+        matches = [dict(row) for row in self.catalog if row.get("barcode") == code or
+                   str(row.get("sku", "")).casefold() == code.casefold()]
+        try:
+            saved = datetime.fromtimestamp(self._path.stat().st_mtime, timezone.utc).astimezone().isoformat(timespec="minutes")
+        except OSError:
+            saved = "unknown time"
+        return {"code": code, "item": matches[0] if len(matches) == 1 else None,
+                "cached": True, "saved_at": saved,
+                "error": "This code matches more than one part. Correct the stock list." if len(matches) > 1 else
+                         ("No exact match in this account's cached stock." if not matches else "")}
+
+    def scan_code(self, code):
+        """Resolve one exact scanner code. A scan can never change stock."""
+        self.invalidate_scan()
+        sequence, generation = self._scan_sequence, self._generation
+        if self._stopped:
+            return
+        if not isinstance(code, str) or not code.strip() or len(code) > 128 or not all(c.isprintable() for c in code):
+            self.scan_ready.emit({"code": code, "item": None, "error": "Use a readable barcode or part number of 1–128 characters."})
+            return
+        def current():
+            return not self._stopped and sequence == self._scan_sequence and generation == self._generation
+        def received(data, error="", status=200):
+            if not current():
+                return
+            if error:
+                if status in (401, 403):
+                    self._expire_access()
+                    return
+                if self.shared and (status == 0 or status >= 500):
+                    self.online = False
+                    self.changed.emit()
+                    self.scan_ready.emit(self._cached_scan(code))
+                    return
+                self.scan_ready.emit({"code": code, "item": None, "error": str(error)})
+                return
+            item = data.get("item") if isinstance(data, dict) else None
+            if not isinstance(item, dict) or not item.get("sku"):
+                self.scan_ready.emit({"code": code, "item": None, "error": "No exact part match was returned."})
+                return
+            if self.shared:
+                self.online = True
+                self.changed.emit()
+            self.scan_ready.emit({"code": code, "item": item, "cached": False})
+        if self.shared:
+            if not self.token or not self.user:
+                received(None, "Sign in to Work Chat before scanning office stock.", 400)
+                return
+            self._scan_reply = self.api.request("GET", "/api/inventory/scan?" + urlencode({"code": code}),
+                                                None, received, self.token)
+        else:
+            path = self._path
+            def lookup(cancel):
+                from inventory import InventoryStore
+                store = None
+                try:
+                    store = InventoryStore(path)
+                    return ({"item": store.resolve_code(code)}, "", 200)
+                except Exception as exc:
+                    return (None, str(exc), getattr(exc, "status", 422))
+                finally:
+                    if store is not None:
+                        store.close()
+            self._submit(lookup, lambda result: received(*result))
+
+    def load_history(self, sku="", before_id=None):
+        self._history_sequence += 1
+        sequence, generation = self._history_sequence, self._generation
+        def received(data, error="", status=200):
+            if self._stopped or sequence != self._history_sequence or generation != self._generation:
+                return
+            if status in (401, 403):
+                self._expire_access()
+                return
+            if error:
+                self.history_ready.emit({"error": str(error), "movements": []})
+            elif isinstance(data, dict) and isinstance(data.get("movements"), list):
+                self.history_ready.emit({**data, "append": before_id is not None, "sku": sku})
+            else:
+                self.history_ready.emit({"error": "The server returned invalid stock history.", "movements": []})
+        if self.shared:
+            if not self.token or not self.user:
+                received(None, "Sign in to Work Chat to view shared stock history.", 400)
+                return
+            params = {"sku": sku, "limit": 50}
+            if before_id is not None:
+                params["before_id"] = before_id
+            self.api.request("GET", "/api/inventory/movements?" + urlencode(params), None, received, self.token)
+        else:
+            path = self._path
+            def history(cancel):
+                from inventory import InventoryStore
+                store = InventoryStore(path)
+                try:
+                    return (store.movements(sku=sku, limit=50, before_id=before_id), "", 200)
+                except Exception as exc:
+                    return (None, str(exc), getattr(exc, "status", 422))
+                finally:
+                    store.close()
+            self._submit(history, lambda result: received(*result))
+
+    def record_movement(self, item, kind, quantity, reason="", reference=""):
+        if self.busy or not self.can_write or self.pending_movement:
+            return False
+        self.pending_movement = {"sku": item["sku"], "kind": kind, "quantity": quantity,
+                                 "reason": reason, "reference": reference,
+                                 "expected_revision": item["revision"], "request_id": uuid.uuid4().hex}
+        self._send_movement()
+        return True
+
+    def retry_movement(self):
+        # Retain the ORIGINAL payload and ID even if another scan has since shown
+        # a newer item revision. This cannot accidentally apply a timed-out sale twice.
+        if self.pending_movement and self.movement_uncertain and not self.busy and not self._stopped:
+            if not self.shared or (self.token and self.user):
+                self._send_movement()
+
+    def _send_movement(self):
+        payload = dict(self.pending_movement)
+        generation, operation = self._generation, self._operation
+        self._movement_inflight = True
+        self.movement_uncertain = False
+        self._busy(True)
+        def received(data, error="", status=200):
+            if self._stopped or generation != self._generation or operation != self._operation:
+                return
+            self._movement_inflight = False
+            self._busy(False)
+            if status in (401, 403):
+                self._expire_access()
+                return
+            valid = isinstance(data, dict) and isinstance(data.get("item"), dict) and isinstance(data.get("movement"), dict)
+            if error or not valid:
+                uncertain = status == 0 or status >= 500 or not error
+                self.movement_uncertain = uncertain
+                if not uncertain:
+                    self.pending_movement = None
+                self.movement_finished.emit({"error": str(error or "Invalid server response."),
+                                             "uncertain": uncertain, "status": status, "request": payload})
+                self.changed.emit()
+                return
+            self.pending_movement = None
+            self.movement_uncertain = False
+            self._refresh_sequence += 1
+            self._syncing = False
+            item = data["item"]
+            self.catalog = [item if row.get("sku") == item.get("sku") else row for row in self.catalog]
+            if isinstance(data.get("summary"), dict):
+                self.summary = data["summary"]
+            self._context_index, self._low_indices = self._index(self.catalog)
+            self._filter_rows()
+            self.movement_finished.emit(data)
+            self.refresh()
+        if self.shared:
+            self.api.request("POST", "/api/inventory/movements", payload, received, self.token)
+        else:
+            path = self._path
+            def write(cancel):
+                from inventory import InventoryStore
+                if cancel.is_set():
+                    return (None, "Stock change cancelled before submission.", 400)
+                store = None
+                try:
+                    store = InventoryStore(path)
+                    return (store.record_movement(**payload, actor="Local user"), "", 200)
+                except Exception as exc:
+                    return (None, str(exc), getattr(exc, "status", 500))
+                finally:
+                    if store is not None:
+                        store.close()
+            self._submit(write, lambda result: received(*result))
+
     def cancel(self):
         self._operation += 1
+        self._refresh_sequence += 1
         self._cancel.set()
         self._cancel = threading.Event()
         self.api.cancel_all()
+        self.invalidate_scan()
+        self._history_sequence += 1
+        if self._movement_inflight:
+            self._movement_inflight = False
+            self.movement_uncertain = True
+            self.movement_finished.emit({"error": "Submission interrupted. Check the original change before retrying.",
+                                         "uncertain": True, "request": self.pending_movement})
         self._abort_stage()
         self._syncing = False
         self._busy(False)

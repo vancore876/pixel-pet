@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from collections import OrderedDict, deque
 import asyncio
+from contextlib import asynccontextmanager
 import ipaddress
 from pathlib import Path
 from threading import Lock
@@ -213,8 +214,30 @@ class BusinessWrite(BusinessRevision):
 def create_app(database_path="server-data/work-chat.sqlite", *, clock=time.time,
                session_seconds=8 * 60 * 60, auth_limit=20, send_limit=60,
                rate_window_seconds=60, static_directory=None, account_auth_limit=10,
-               max_users=1000, allow_lan_http=False, max_business_entries=2000, business_limit=60):
+               max_users=1000, allow_lan_http=False, max_business_entries=2000, business_limit=60,
+               auto_backup=False, backup_directory=None, backup_keep_days=14, database_lease=None):
+    from .backups import DatabaseLease
+    lease = database_lease or DatabaseLease(database_path)
+
+    @asynccontextmanager
+    async def lifespan(application):
+        owns_lease = not lease.acquired
+        lease.acquire()
+        try:
+            if application.state.backups.enabled:
+                application.state.backups.start()
+            yield
+        finally:
+            # Bound shutdown without letting an offline restore replace a slow
+            # worker's source. The OS lease outlives shutdown if cancellation
+            # is waiting for a filesystem call to return.
+            if not await asyncio.to_thread(application.state.backups.stop):
+                lease.defer_release_until(application.state.backups._thread)
+            if owns_lease:
+                lease.release()
+
     app = FastAPI(title="Jeffery Work Chat", docs_url=None, redoc_url=None, openapi_url=None,
+                  lifespan=lifespan,
                   telemetry={"tracing": False, "metrics": False, "logs": False, "auto_configure": False})
     store = ChatStore(database_path, clock=clock, session_seconds=session_seconds, max_users=max_users,
                       max_business_entries=max_business_entries)
@@ -223,6 +246,7 @@ def create_app(database_path="server-data/work-chat.sqlite", *, clock=time.time,
     send_limiter = RateLimiter(send_limit, rate_window_seconds)
     business_limiter = RateLimiter(business_limit, rate_window_seconds)
     app.state.store = store
+    app.state.database_lease = lease
     app.state.auth_limiter = auth_limiter
     app.state.account_limiter = account_limiter
     app.state.send_limiter = send_limiter
@@ -251,6 +275,12 @@ def create_app(database_path="server-data/work-chat.sqlite", *, clock=time.time,
     from .admin import register_admin_routes
     register_admin_routes(app, store, rate_limiter=RateLimiter, is_loopback=is_loopback_address,
                           rate_window_seconds=rate_window_seconds)
+    from .backup_routes import register_backup_routes
+    register_backup_routes(app, store, directory=backup_directory, enabled=auto_backup,
+                           keep_days=backup_keep_days)
+    from .receipts import register_receipt_routes
+    register_receipt_routes(app, store, signed_in, rate_limiter=RateLimiter,
+                            rate_window_seconds=rate_window_seconds)
 
     @app.get("/api/health")
     def health():
