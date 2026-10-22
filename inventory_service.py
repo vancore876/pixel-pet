@@ -236,7 +236,7 @@ class InventoryService(QObject):
     def _index(rows):
         index, low = {}, []
         for number, row in enumerate(rows):
-            text = " ".join(str(row.get(key, "")) for key in ("sku", "barcode", "description", "location", "supplier"))
+            text = " ".join(str(row.get(key, "")) for key in ("sku", "barcode", "description", "location", "supplier", "alternate_part_number", "substitute_part_number"))
             for token in set(re.findall(r"[\w-]+", text.casefold())):
                 matches = index.setdefault(token, [])
                 if len(matches) < 256:
@@ -286,7 +286,7 @@ class InventoryService(QObject):
             if self._low_stock and float(row.get("quantity", 0)) > float(row.get("reorder_point", 0)):
                 continue
             if query and query not in " ".join(str(row.get(key, "")) for key in
-                    ("sku", "barcode", "description", "location", "supplier")).casefold():
+                    ("sku", "barcode", "description", "location", "supplier", "alternate_part_number", "substitute_part_number")).casefold():
                 continue
             matches.append(row)
         self.rows = matches[:1000]
@@ -406,7 +406,7 @@ class InventoryService(QObject):
             self._set_status("Confirm Part Number, Quantity and Location. The file is checked automatically.")
         self._submit(inspect, received, busy=True)
 
-    def prepare_import(self, mapping=None, sheet=None):
+    def prepare_import(self, mapping=None, sheet=None, include_zero=True):
         if not self._file or self.busy or not self.can_write:
             return
         path, store_path = self._file, self._path
@@ -414,7 +414,7 @@ class InventoryService(QObject):
         self._set_status("Checking spreadsheet rows…")
         def parse(cancel):
             from inventory import parse_excel, InventoryStore
-            plan = parse_excel(path, mapping=mapping, sheet=sheet or self._sheet, cancel=cancel,
+            plan = parse_excel(path, mapping=mapping, sheet=sheet or self._sheet, cancel=cancel, include_zero=include_zero,
                                progress=lambda value, total: self.progress.emit(int(value * 100 / max(1, total)), "Checking stock rows…"))
             if plan.valid:
                 store = InventoryStore(store_path)

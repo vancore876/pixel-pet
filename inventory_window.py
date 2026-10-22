@@ -10,14 +10,17 @@ from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDialog,
 from ui_style import apply_window_style
 
 FIELDS = ("sku", "description", "quantity", "location", "reorder_point",
-          "reorder_quantity", "target_stock", "supplier", "barcode")
+          "reorder_quantity", "target_stock", "supplier", "barcode",
+          "alternate_part_number", "substitute_part_number", "retail_price", "cost_price")
 LABELS = {"sku": "Part number / SKU", "description": "Description", "quantity": "Quantity on hand",
           "location": "Aisle / shelf / bin", "reorder_point": "Restock at or below",
-          "reorder_quantity": "Restock quantity", "target_stock": "Target stock", "supplier": "Supplier", "barcode": "Barcode"}
-IMPORT_FIELDS = ("sku", "quantity", "location")
+          "reorder_quantity": "Restock quantity", "target_stock": "Target stock", "supplier": "Supplier", "barcode": "Barcode", "alternate_part_number": "AlternatePartNumber",
+          "substitute_part_number": "SubstitutePartNumber", "retail_price": "Retail Price", "cost_price": "Cost Price"}
+IMPORT_FIELDS = ("sku", "quantity", "location", "alternate_part_number", "substitute_part_number", "retail_price", "cost_price")
 IMPORT_LABELS = {"sku": "Part Number", "quantity": "Quantity", "location": "Location"}
-TABLE_FIELDS = ("sku", "description", "quantity", "location", "reorder_point", "reorder_quantity", "supplier", "barcode")
-TABLE_LABELS = ("Part number", "Description", "Qty", "Location", "Restock at", "Order qty", "Supplier", "Barcode")
+TABLE_FIELDS = ("sku", "description", "quantity", "location", "reorder_point", "reorder_quantity", "supplier", "barcode",
+                "alternate_part_number", "substitute_part_number", "retail_price", "cost_price")
+TABLE_LABELS = ("Part number", "Description", "Qty", "Location", "Restock at", "Order qty", "Supplier", "Barcode", "AlternatePartNumber", "SubstitutePartNumber", "Retail Price", "Cost Price")
 
 
 def _label(text, name=""):
@@ -146,7 +149,7 @@ class InventoryWindow(QDialog):
         layout.addLayout(metrics)
         actions = QHBoxLayout()
         self.search = QLineEdit()
-        self.search.setPlaceholderText("Find a part number, description, shelf, bin, or supplier")
+        self.search.setPlaceholderText("Find a part, alternate or substitute number, description, location, or supplier")
         self.search.setClearButtonEnabled(True)
         self._search_timer = QTimer(self)
         self._search_timer.setSingleShot(True)
@@ -187,11 +190,14 @@ class InventoryWindow(QDialog):
         editor_layout.addWidget(self.edit_title)
         form = QGridLayout()
         self.editors = {}
-        for index, field in enumerate(("quantity", "location", "reorder_point", "reorder_quantity", "barcode")):
-            widget = QLineEdit() if field in ("location", "barcode") else QSpinBox()
+        for index, field in enumerate(("quantity", "location", "reorder_point", "reorder_quantity", "barcode",
+                                        "alternate_part_number", "substitute_part_number", "retail_price", "cost_price")):
+            widget = QSpinBox() if field in ("quantity", "reorder_point", "reorder_quantity") else QLineEdit()
             widget.setMinimumHeight(36)
-            if field == "barcode":
+            if field in ("barcode", "alternate_part_number", "substitute_part_number"):
                 widget.setMaxLength(128)
+            if field in ("retail_price", "cost_price"):
+                widget.setPlaceholderText("0.00")
             if isinstance(widget, QSpinBox):
                 widget.setRange(0, 2**31 - 1)
                 widget.setGroupSeparatorShown(True)
@@ -201,8 +207,9 @@ class InventoryWindow(QDialog):
                 widget.valueChanged.connect(self._editor_changed)
             else:
                 widget.textEdited.connect(self._editor_changed)
-            form.addWidget(_label(LABELS[field], "hint"), 0, index)
-            form.addWidget(widget, 1, index)
+            column, row = index % 3, index // 3
+            form.addWidget(_label(LABELS[field], "hint"), row * 2, column)
+            form.addWidget(widget, row * 2 + 1, column)
         editor_layout.addLayout(form)
         row = QHBoxLayout()
         row.addWidget(_label("Counts are manual. Customer orders do not change inventory automatically.", "hint"), 1)
@@ -220,7 +227,7 @@ class InventoryWindow(QDialog):
         page, layout = self._scroll_page()
         layout.addWidget(_label("Import an Excel or CSV stock list", "sectionTitle"))
         layout.addWidget(_label("Choose your file, confirm Part Number, Quantity and Location, then press Confirm import. "
-            "Columns are detected and rows checked automatically. Matching part numbers update existing stock; "
+            "Alternate/substitute part numbers and retail/cost prices are detected when present. Rows are checked automatically. Matching part numbers update existing stock; "
             "parts absent from the file remain unchanged.", "hint"))
         choose = QHBoxLayout()
         self.file_label = _label("No stock file selected", "hint")
@@ -238,6 +245,10 @@ class InventoryWindow(QDialog):
         self.review_button.setEnabled(False)
         self.review_button.hide()
         layout.addLayout(sheet_row)
+        self.include_zero = QCheckBox('Include zero-quantity parts')
+        self.include_zero.setChecked(True)
+        self.include_zero.toggled.connect(self._mapping_changed)
+        layout.addWidget(self.include_zero)
         mapping = QGridLayout()
         self.optional_import = QCheckBox('Include optional details')
         self.optional_import.setToolTip('Description, barcode, supplier and restock settings are optional.')
@@ -255,9 +266,11 @@ class InventoryWindow(QDialog):
             combo.currentIndexChanged.connect(self._mapping_changed)
             self.mapping[field] = combo
             if field in IMPORT_FIELDS:
-                column = IMPORT_FIELDS.index(field)
-                mapping.addWidget(_label(IMPORT_LABELS[field]), 0, column)
-                mapping.addWidget(combo, 1, column)
+                index = IMPORT_FIELDS.index(field)
+                column, row = index % 3, index // 3
+                label = IMPORT_LABELS.get(field, LABELS[field])
+                mapping.addWidget(_label(label), row * 2, column)
+                mapping.addWidget(combo, row * 2 + 1, column)
             else:
                 column, row = optional_index % 3, optional_index // 3
                 optional_layout.addWidget(_label(LABELS[field]), row * 2, column)
@@ -782,11 +795,13 @@ class InventoryWindow(QDialog):
     def _review(self):
         self._review_timer.stop()
         mapping = {field: combo.currentData() for field, combo in self.mapping.items() if combo.currentData() is not None}
-        self.service.prepare_import(mapping, sheet=self._preview.sheet if self._preview else None)
+        self.service.prepare_import(mapping, sheet=self._preview.sheet if self._preview else None,
+                                    include_zero=self.include_zero.isChecked())
 
     def _show_plan(self, result):
         plan, counts = result["plan"], result["preview"]
-        fields = FIELDS if self.optional_import.isChecked() else IMPORT_FIELDS
+        fields = FIELDS if self.optional_import.isChecked() else tuple(field for field in IMPORT_FIELDS
+            if field in ("sku", "quantity", "location") or field in plan.mapping)
         self.import_table.setColumnCount(len(fields))
         self.import_table.setHorizontalHeaderLabels([IMPORT_LABELS.get(field, LABELS[field]) for field in fields])
         self.import_table.setRowCount(min(len(plan.rows), 25))
@@ -829,6 +844,7 @@ class InventoryWindow(QDialog):
         self.choose_button.setEnabled(not busy and self.service.can_write)
         self.scope.setEnabled(not busy)
         self.optional_import.setEnabled(not busy)
+        self.include_zero.setEnabled(not busy)
         self.sheet.setEnabled(not busy and bool(self._preview and len(self._preview.sheet_names) > 1))
         for combo in self.mapping.values():
             combo.setEnabled(not busy and self._preview is not None)

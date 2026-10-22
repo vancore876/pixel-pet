@@ -26,8 +26,10 @@ MAX_ROWS = 100_000
 MAX_COLUMNS = 100
 MAX_HISTORY_BYTES = 768 * 1024
 FIELDS = ("sku", "description", "quantity", "location", "reorder_point",
-          "reorder_quantity", "target_stock", "supplier", "barcode")
-TEXT_LIMITS = {"sku": 128, "description": 2000, "location": 500, "supplier": 500, "barcode": 128}
+          "reorder_quantity", "target_stock", "supplier", "barcode",
+          "alternate_part_number", "substitute_part_number", "retail_price", "cost_price")
+TEXT_LIMITS = {"sku": 128, "description": 2000, "location": 500, "supplier": 500, "barcode": 128,
+               "alternate_part_number": 128, "substitute_part_number": 128}
 COUNT_LIMIT = 2**31 - 1
 ALIASES = {
     "sku": ("sku", "part", "partnumber", "partno", "partcode", "itemcode", "itemnumber", "itemno", "productcode", "stockcode"),
@@ -38,6 +40,10 @@ ALIASES = {
     "reorder_quantity": ("reorderquantity", "reorderqty", "orderquantity", "restockquantity", "restockqty"),
     "target_stock": ("targetstock", "targetquantity", "targetqty", "maximumstock", "maxstock"),
     "supplier": ("supplier", "vendor", "suppliername", "vendorname"),
+    "alternate_part_number": ("alternatepartnumber", "alternatepartno", "altpartnumber", "altpartno", "alternativepartnumber"),
+    "substitute_part_number": ("substitutepartnumber", "substitutepartno", "substitutepart", "replacementpartnumber", "replacementpartno"),
+    "retail_price": ("retailprice", "retail", "sellingprice", "sellprice", "saleprice"),
+    "cost_price": ("costprice", "cost", "purchaseprice", "buyprice", "unitcost"),
     "barcode": ("barcode", "barcodes", "upc", "upca", "ean", "ean13", "gtin", "gtin12", "gtin13", "gtin14"),
 }
 
@@ -139,6 +145,29 @@ def _code(value, *, optional=False):
     return value
 
 
+def _price(value, name):
+    label = name.replace('_', ' ').title()
+    if value is None or isinstance(value, str) and not value.strip():
+        return '0.00'
+    if isinstance(value, bool):
+        raise InventoryError(f'{label} must be a nonnegative amount with at most two decimal places.')
+    text = str(value).strip()
+    if text.startswith('$'):
+        text = text[1:].strip()
+    if ',' in text:
+        if not re.fullmatch(r'\d{1,3}(?:,\d{3})+(?:\.\d+)?', text):
+            raise InventoryError(f'{label} has an invalid number format.')
+        text = text.replace(',', '')
+    try:
+        amount = Decimal(text)
+        if (not amount.is_finite() or amount < 0 or amount > Decimal('999999999.99')
+                or amount != amount.quantize(Decimal('0.01'))):
+            raise InvalidOperation
+    except (InvalidOperation, ValueError):
+        raise InventoryError(f'{label} must be a nonnegative amount with at most two decimal places.') from None
+    return format((abs(amount) if amount == 0 else amount).quantize(Decimal('0.01')), '.2f')
+
+
 def validate_row(row):
     if not isinstance(row, dict) or any(key not in FIELDS for key in row):
         raise InventoryError("Inventory rows must contain only recognized stock fields.")
@@ -148,7 +177,8 @@ def validate_row(row):
     for name in FIELDS:
         if name in result or name not in row:
             continue
-        result[name] = (_code(row[name] if row[name] is not None else "", optional=True) if name == "barcode"
+        result[name] = (_price(row[name], name) if name in ("retail_price", "cost_price")
+                        else _code(row[name] if row[name] is not None else "", optional=True) if name == "barcode"
                         else _text(row[name], name) if name in TEXT_LIMITS
                         else _count(row[name], name, name == "target_stock"))
     return result
@@ -311,12 +341,13 @@ def inspect_spreadsheet(path, sheet=None, cancel=None):
                             max(0, len(rows) - 1), suggest_mapping(headers), Path(path).name, selected)
 
 
-def parse_excel(path, mapping=None, sheet=None, cancel=None, progress=None):
+def parse_excel(path, mapping=None, sheet=None, cancel=None, progress=None, include_zero=True):
     rows, _sheets, selected = _read_spreadsheet(path, sheet, cancel)
     headers = _headers(rows)
     mapping = suggest_mapping(headers) if mapping is None else dict(mapping)
     resolved = {}
     errors, warnings, result, seen, barcodes = [], [], [], {}, {}
+    skipped_zero = 0
     for name, column in mapping.items():
         if name not in FIELDS or column is None or column == "":
             continue
@@ -353,6 +384,9 @@ def parse_excel(path, mapping=None, sheet=None, cancel=None, progress=None):
                     raise InventoryError("Save this barcode as text in Excel; numeric cells can lose digits.")
                 source["barcode"] = str(int(barcode))
             item = validate_row(source)
+            if not include_zero and item["quantity"] == 0:
+                skipped_zero += 1
+                continue
             key = item["sku"].casefold()
             if key in seen:
                 raise InventoryError(f"Duplicate part number {item['sku']!r}; also appears on row {seen[key]}.")
@@ -368,8 +402,10 @@ def parse_excel(path, mapping=None, sheet=None, cancel=None, progress=None):
                 errors.append(f"Row {index}: {error}")
         if progress is not None and index % 250 == 0:
             progress(index - 1, len(rows) - 1)
+    if skipped_zero:
+        warnings.append(f"Skipped {skipped_zero:,} zero-quantity rows. Enable Include zero-quantity parts to import them.")
     if not result and not errors:
-        errors.append("The spreadsheet has no stock rows to import.")
+        errors.append("No stock rows remain after excluding zero quantities." if skipped_zero else "The spreadsheet has no stock rows to import.")
     return InventoryImportPlan(result, errors, warnings, Path(path).name, headers, resolved, selected)
 
 
@@ -414,6 +450,10 @@ class InventoryStore:
             columns = {row[1] for row in connection.execute("PRAGMA table_info(inventory_items)")}
             if "barcode" not in columns:
                 connection.execute("ALTER TABLE inventory_items ADD COLUMN barcode TEXT NOT NULL DEFAULT ''")
+            for name, default in (("alternate_part_number", ""), ("substitute_part_number", ""),
+                                  ("retail_price", "0.00"), ("cost_price", "0.00")):
+                if name not in columns:
+                    connection.execute(f"ALTER TABLE inventory_items ADD COLUMN {name} TEXT NOT NULL DEFAULT '{default}'")
             connection.execute("CREATE UNIQUE INDEX IF NOT EXISTS inventory_barcode ON inventory_items(barcode) WHERE barcode<>''")
 
     def _connect(self):
@@ -460,8 +500,8 @@ class InventoryStore:
         where, parameters = [], []
         for word in query.split():
             pattern = "%" + word.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
-            where.append("(sku LIKE ? ESCAPE '\\' OR description LIKE ? ESCAPE '\\' OR location LIKE ? ESCAPE '\\' OR supplier LIKE ? ESCAPE '\\' OR barcode LIKE ? ESCAPE '\\')")
-            parameters.extend([pattern] * 5)
+            where.append("(sku LIKE ? ESCAPE '\\' OR description LIKE ? ESCAPE '\\' OR location LIKE ? ESCAPE '\\' OR supplier LIKE ? ESCAPE '\\' OR barcode LIKE ? ESCAPE '\\' OR alternate_part_number LIKE ? ESCAPE '\\' OR substitute_part_number LIKE ? ESCAPE '\\')")
+            parameters.extend([pattern] * 7)
         if low_stock:
             where.append("quantity <= reorder_point")
         sql = "SELECT * FROM inventory_items" + (" WHERE " + " AND ".join(where) if where else "") + " ORDER BY sku COLLATE NOCASE LIMIT ? OFFSET ?"
@@ -698,9 +738,12 @@ class InventoryStore:
             if old is None:
                 created += 1
                 values = {"description": "", "location": "", "reorder_point": 0,
-                          "reorder_quantity": 0, "target_stock": None, "supplier": "", "barcode": "", **item}
-                connection.execute("""INSERT INTO inventory_items(key,sku,description,quantity,location,reorder_point,reorder_quantity,target_stock,supplier,barcode,revision,updated_at,source)
-                    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""", (key, *(values[name] for name in FIELDS), revision, timestamp, source))
+                          "reorder_quantity": 0, "target_stock": None, "supplier": "", "barcode": "",
+                          "alternate_part_number": "", "substitute_part_number": "",
+                          "retail_price": "0.00", "cost_price": "0.00", **item}
+                names = ("key", *FIELDS, "revision", "updated_at", "source")
+                connection.execute(f"INSERT INTO inventory_items({','.join(names)}) VALUES({','.join('?' for _ in names)})",
+                                   (key, *(values[name] for name in FIELDS), revision, timestamp, source))
             elif changes:
                 updated += 1
                 assignments = ",".join(f"{name}=?" for name in item)

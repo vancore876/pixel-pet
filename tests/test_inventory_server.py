@@ -50,6 +50,20 @@ class InventoryServerTests(unittest.TestCase):
     def commit(self, stage):
         return self.client.post(f"/api/inventory/imports/{stage}/commit", headers=self.headers[0], json={})
 
+    def test_zero_stock_and_prices_are_shared_with_other_employees(self):
+        stage = self.stage()
+        row = {'sku': 'PRICED-ZERO', 'quantity': 0, 'alternate_part_number': 'ALT-ZERO',
+               'substitute_part_number': 'SUB-ZERO', 'retail_price': '1250.50', 'cost_price': '800.25'}
+        self.assertEqual(self.upload(stage, [row]).status_code, 200)
+        response = self.commit(stage)
+        self.assertEqual(response.status_code, 200, response.text)
+        item = self.client.get('/api/inventory/items/PRICED-ZERO', headers=self.headers[1]).json()
+        for field, value in row.items():
+            self.assertEqual(item[field], value)
+        response = self.client.get('/api/inventory', params={'query': 'ALT-ZERO'}, headers=self.headers[1])
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(any(row['sku'] == 'PRICED-ZERO' for row in response.json()['items']))
+
     def test_all_inventory_routes_require_signin(self):
         for path in ("/api/inventory", "/api/inventory/summary", "/api/inventory/items/A"):
             self.assertEqual(self.client.get(path).status_code, 401)

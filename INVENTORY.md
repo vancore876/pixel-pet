@@ -14,12 +14,23 @@ action are described in [WORK_CHAT.md](WORK_CHAT.md#office-backups-and-recovery)
 
 1. Choose **Import stock list**, then select an `.xlsx`, `.xlsm`, `.xls`, or
    `.csv` file. Select the worksheet when the workbook has several sheets.
-2. Confirm just **Part Number**, **Quantity**, and **Location**. Jeffery detects
-   these columns and checks the file automatically. Correct a column choice only
+2. Confirm **Part Number**, **Quantity**, and **Location**. Jeffery also detects
+   **AlternatePartNumber**, **SubstitutePartNumber**, **Retail Price**, and
+   **Cost Price** when those columns are present, and checks the file
+   automatically. Correct a column choice only
    if its heading was not recognized. Location can be left unmapped when absent.
 3. Press **Confirm import**. There is no separate Review step. Invalid quantities
    or duplicate part numbers are shown before confirmation is enabled. Office
    imports become visible together after the server confirms the complete batch.
+
+**Include zero-quantity parts** is checked by default, so parts with no stock can
+still be imported and found in the catalogue. Uncheck it to skip those rows;
+negative or missing quantities remain invalid.
+
+Prices accept nonnegative amounts with up to two decimal places, including zero.
+They are saved exactly to two decimal places. Existing databases gain the new
+fields automatically without replacing stock. Update and restart both the office
+server and desktop clients before sharing imports with the new fields.
 
 Description, barcode, supplier, and restock settings are not required. Select
 **Include optional details** only when you want to import those extra columns;
@@ -28,7 +39,11 @@ otherwise existing values stay unchanged.
 | Field | Meaning |
 | --- | --- |
 | Part number / SKU | Required unique item code; use Excel text cells to retain leading zeros |
-| Quantity | Required current quantity, as a nonnegative whole number |
+| Quantity | Required current quantity, as a nonnegative whole number; zero is allowed |
+| AlternatePartNumber | Optional alternate part reference; stored as text to preserve leading zeros |
+| SubstitutePartNumber | Optional substitute part reference; stored as text to preserve leading zeros |
+| Retail Price | Optional retail amount, up to two decimal places |
+| Cost Price | Optional purchase cost, up to two decimal places |
 | Description | Item name or description |
 | Bin location | Shelf, aisle, rack, room, or other storage location |
 | Reorder point | Quantity at or below which the item needs restocking |
@@ -42,7 +57,7 @@ on existing items are preserved, and items absent from the spreadsheet remain
 in the inventory. A concurrent stock change requires a fresh review rather than
 silently overwriting another employee's work. Part numbers match without regard
 to letter case; duplicate codes in one import are rejected.
-Keep both barcodes and part numbers as text in Excel to preserve leading zeros.
+Keep barcodes, part numbers, alternate numbers and substitute numbers as text in Excel to preserve leading zeros. Inventory search also finds alternate and substitute numbers.
 An import cannot recover zeros that Excel has already removed.
 
 Each import supports up to 100,000 data rows, 100 columns, and a 50 MiB source

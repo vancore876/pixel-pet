@@ -105,6 +105,29 @@ class InventoryUiTests(unittest.TestCase):
         self.service.refresh()
         wait_for(lambda: len(self.service.catalog) == len(rows))
 
+    def test_zero_quantity_option_and_added_columns_import_without_extra_steps(self):
+        self.load('Part Number,Quantity,Location,AlternatePartNumber,SubstitutePartNumber,Retail Price,Cost Price\n00042,0,Rack A,ALT-9,SUB-9,1250.50,800.25\nP-2,3,Rack B,ALT-2,SUB-2,20,10\n')
+        wait_for(lambda: self.window.import_button.isEnabled())
+        self.assertTrue(self.window.include_zero.isChecked())
+        self.assertEqual(len(self.service.plan.rows), 2)
+        self.assertEqual(self.window.import_table.columnCount(), 7)
+        self.window.include_zero.setChecked(False)
+        wait_for(lambda: self.window.import_button.isEnabled())
+        self.assertEqual([row['sku'] for row in self.service.plan.rows], ['P-2'])
+        self.window.include_zero.setChecked(True)
+        wait_for(lambda: self.window.import_button.isEnabled())
+        self.window.import_button.click()
+        wait_for(lambda: not self.service.busy and self.service.summary['item_count'] == 2)
+        self.window.stock_table.selectRow(0)
+        self.assertEqual(self.window.editors['quantity'].value(), 0)
+        self.assertEqual(self.window.editors['retail_price'].text(), '1250.50')
+        self.window.editors['cost_price'].setText('825.75')
+        self.window.save_button.click()
+        wait_for(lambda: not self.service.busy and self.service.catalog[0]['cost_price'] == '825.75')
+        self.window.search.setText('SUB-9')
+        self.window.search.returnPressed.emit()
+        self.assertEqual(self.window.stock_table.item(0, 0).text(), '00042')
+
     def test_excel_import_needs_only_three_columns_and_one_confirmation(self):
         from openpyxl import Workbook
         path = self.root / 'parts.xlsx'
