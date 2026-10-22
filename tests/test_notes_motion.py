@@ -64,6 +64,39 @@ class NotesTests(unittest.TestCase):
         self.assertIsNone(store.next_notification(20001)[0])
         self.assertEqual(store.find(n["id"])["next_due"], 21800)
 
+    def test_stale_writer_cannot_erase_saved_notes(self):
+        stale = NoteStore(self.path)
+        saved = self.store.add('Keep', 'Saved by the first writer')
+        with self.assertRaisesRegex(OSError, 'changed outside'):
+            stale.add('Stale', 'Must not overwrite the notebook')
+        self.assertEqual(NoteStore(self.path).notes, self.store.notes)
+        self.assertIsNotNone(NoteStore(self.path).find(saved['id']))
+        self.assertEqual(stale.notes, [])
+
+    def test_unreadable_notebook_cannot_be_replaced_by_empty_state(self):
+        original = '{broken notebook'
+        self.path.write_text(original, encoding='utf-8')
+        damaged = NoteStore(self.path)
+        with self.assertRaises(OSError):
+            damaged.add('New', 'Do not replace existing data')
+        self.assertEqual(self.path.read_text(encoding='utf-8'), original)
+        self.assertEqual(self.path.with_suffix('.corrupt.json').read_text(encoding='utf-8'), original)
+
+    def test_explicit_backup_import_recovers_blocked_notebook(self):
+        note = self.store.add('Keep', 'Restore this text')
+        payload = self.store.export_json()
+        self.path.write_text('{broken', encoding='utf-8')
+        damaged = NoteStore(self.path)
+        damaged.import_backup(payload)
+        self.assertFalse(damaged.blocked_write)
+        self.assertEqual(NoteStore(self.path).find(note['id'])['body'], 'Restore this text')
+
+    def test_previous_notebook_survives_deletion(self):
+        saved = self.store.add('Keep', 'Recoverable text')
+        self.store.delete(saved['id'])
+        previous = NoteStore(self.path.with_suffix('.previous.json'))
+        self.assertEqual(previous.find(saved['id'])['body'], 'Recoverable text')
+
     def test_atomic_failure_rolls_back_in_memory(self):
         self.store.add("Existing", "Keep me", now=100)
         with patch.object(self.store, "save", side_effect=OSError("Read-only")):

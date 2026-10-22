@@ -1,5 +1,6 @@
 """Real independent PC caches recover ancestry without dropping local writing."""
 import copy
+from contextlib import closing
 import os
 import json
 import sqlite3
@@ -255,7 +256,7 @@ class TeamRevisionRecoveryTests(unittest.TestCase):
     def test_missing_baseline_preserves_local_text_after_remote_deletion(self):
         alice, bob, carol, identifier = self.create_three()
         alice[0].edit(identifier, 'Customer notebook', 'Writing after baseline loss', 0)
-        with sqlite3.connect(alice[2].profile_path.with_suffix('.bridge.sqlite')) as db:
+        with closing(sqlite3.connect(alice[2].profile_path.with_suffix('.bridge.sqlite'))) as db, db:
             db.execute('DELETE FROM notes WHERE local_id=?', (identifier,))
         bob[1].delete(identifier)
         self.sync(bob[2])
@@ -269,7 +270,7 @@ class TeamRevisionRecoveryTests(unittest.TestCase):
         alice, bob, carol, identifier = self.create_three()
         alice[0].state['notes'] = []
         alice[0].save()
-        with sqlite3.connect(alice[2].profile_path.with_suffix('.bridge.sqlite')) as db:
+        with closing(sqlite3.connect(alice[2].profile_path.with_suffix('.bridge.sqlite'))) as db, db:
             db.execute('UPDATE notes SET revisions=? WHERE local_id=?', (json.dumps([uuid.uuid4().hex]), identifier))
         outgoing = alice[0].add('Separate outgoing', 'Unaffected outgoing writing', 0)
         incoming = bob[1].save_note(None, 'Separate incoming', 'Unaffected incoming writing', 0)

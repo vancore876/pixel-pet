@@ -9,10 +9,11 @@ import math
 import os
 from pathlib import Path
 import sqlite3
+import shutil
 import tempfile
 import time
 import uuid
-from PySide6.QtCore import QObject, QTimer, Signal, QFileSystemWatcher
+from PySide6.QtCore import QObject, QTimer, Signal, QFileSystemWatcher, QLockFile
 
 from fuzzy_search import search_words, typo_score
 from memory import contains_secret
@@ -179,6 +180,8 @@ class NoteStore:
         self.state = {"version": 2, "notes": [], "linked_file": "", "linked_lines": []}
         self.warning = ""
         self.blocked_write = False
+        self._corrupt_backed_up = False
+        self._disk_digest = self._file_digest()
         self._documents = None
         self._restore_recovery_pending = False
         self._restore_recovery_allowed = True
@@ -215,7 +218,10 @@ class NoteStore:
                     backup = self.path.with_suffix('.corrupt.json')
                     if backup.exists():
                         backup = self.path.with_suffix(f'.corrupt-{uuid.uuid4().hex}.json')
-                    self.path.replace(backup)
+                    shutil.copy2(self.path, backup)
+                    self._corrupt_backed_up = True
+                    self.blocked_write = True
+                    self.warning = "Notes could not be read. The original and a recovery copy were preserved; restore a notebook backup before saving."
                 except OSError:
                     self.warning = "Notes could not be read or backed up. Check file permissions."
                     self.blocked_write = True
@@ -395,9 +401,29 @@ class NoteStore:
     def find(self, identifier):
         return next((n for n in self.notes if n["id"] == identifier), None)
 
+    def _file_digest(self):
+        try:
+            return hashlib.sha256(self.path.read_bytes()).digest()
+        except FileNotFoundError:
+            return None
+
     def save(self):
+        # Serialise the check and replacement across processes, including profiles
+        # that accidentally point to the same notebook.
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        lock = QLockFile(str(self.path) + '.write.lock')
+        if not lock.tryLock(100):
+            raise OSError('The notebook is being saved elsewhere. Try again shortly.')
+        try:
+            self._save_locked()
+        finally:
+            lock.unlock()
+
+    def _save_locked(self):
         if self.blocked_write:
-            raise OSError("The original notebook could not be backed up; it has been left intact.")
+            raise OSError("The notebook could not be read safely. Its original was preserved; restore a backup before saving.")
+        if self._file_digest() != self._disk_digest:
+            raise OSError('The notebook changed outside this window. Reopen Jeffery before saving; your draft is preserved.')
         self._check_capacity()
         if self._documents is not None and self._restore_recovery_allowed:
             self._documents.finish_restore(self._document_manifest(), self.inline_character_count(), validate_only=True)
@@ -411,7 +437,21 @@ class NoteStore:
                 output.write('\n')
                 output.flush()
                 os.fsync(output.fileno())
+            # Keep the previous complete notebook before any destructive change.
+            if self.path.exists():
+                backup = self.path.with_suffix('.previous.json')
+                backup_temp = backup.with_suffix('.tmp')
+                try:
+                    with self.path.open('rb') as source, backup_temp.open('wb') as target:
+                        shutil.copyfileobj(source, target)
+                        target.flush()
+                        os.fsync(target.fileno())
+                    os.replace(backup_temp, backup)
+                finally:
+                    backup_temp.unlink(missing_ok=True)
+            digest = hashlib.sha256(temporary.read_bytes()).digest()
             os.replace(temporary, self.path)
+            self._disk_digest = digest
             self._finish_committed_restore()
         finally:
             if temporary is not None:
@@ -663,7 +703,16 @@ class NoteStore:
                     current.update(replacement)
                     count += 1
             return count
-        count = self.transaction(change)
+        # A reviewed backup import is the explicit recovery action. Ordinary
+        # saves must never silently replace an unreadable notebook.
+        was_blocked = self.blocked_write
+        if self._corrupt_backed_up and incoming:
+            self.blocked_write = False
+        try:
+            count = self.transaction(change)
+        except Exception:
+            self.blocked_write = was_blocked
+            raise
         self._finish_committed_restore(recover=False)
         self._discard_unreferenced(previous_documents)
         return count

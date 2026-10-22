@@ -366,6 +366,7 @@ def _ensure_restore_baseline(store):
             # after our snapshot. Linking an already complete file is atomic on
             # Windows NTFS and never overwrites that newer manifest.
             os.link(temporary, store.path)
+            store._disk_digest = hashlib.sha256(temporary.read_bytes()).digest()
         except FileExistsError:
             pass
         except OSError as exc:
@@ -377,7 +378,9 @@ def _ensure_restore_baseline(store):
                 # FAT/exFAT cannot hard-link. Windows rename also refuses an
                 # existing destination, so it preserves a concurrent GUI save.
                 # POSIX rename replaces destinations and must never be used.
+                digest = hashlib.sha256(temporary.read_bytes()).digest()
                 os.rename(temporary, store.path)
+                store._disk_digest = digest
             except FileExistsError:
                 pass
     finally:

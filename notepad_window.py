@@ -8,7 +8,7 @@ import shutil
 import tempfile
 from pathlib import Path
 from PySide6.QtCore import Qt, Signal, QDateTime, QTimer, QSignalBlocker, QEvent, QSize
-from PySide6.QtGui import QKeySequence, QShortcut
+from PySide6.QtGui import QKeySequence, QShortcut, QTextCursor
 from PySide6.QtWidgets import (QApplication, QDialog, QWidget, QVBoxLayout, QHBoxLayout,
     QFormLayout, QSplitter, QListWidget, QListWidgetItem, QLabel, QLineEdit,
     QPlainTextEdit, QPushButton, QCheckBox, QSpinBox, QDateTimeEdit, QFileDialog,
@@ -263,6 +263,21 @@ class NotepadWindow(QDialog):
         self.body.setPlaceholderText('Write freely here. Use Schedule for reminders or Files to import a document.')
         self.body.setMinimumHeight(180)
         form.addWidget(self.body, 1)
+        self.find_bar = QWidget()
+        find_layout = QHBoxLayout(self.find_bar)
+        find_layout.setContentsMargins(0, 0, 0, 0)
+        self.find_text = QLineEdit()
+        self.find_text.setPlaceholderText('Find in this note (Enter for next match)')
+        self.find_text.textChanged.connect(lambda: self.find_in_note(restart=True))
+        self.find_text.returnPressed.connect(self.find_in_note)
+        find_layout.addWidget(self.find_text, 1)
+        for label, callback in (('Previous', lambda: self.find_in_note(backward=True)),
+                                ('Next', self.find_in_note), ('Close', self.find_bar.hide)):
+            button = QPushButton(label)
+            button.clicked.connect(callback)
+            find_layout.addWidget(button)
+        self.find_bar.hide()
+        form.addWidget(self.find_bar)
         self.document_pages = QWidget()
         page_row = QHBoxLayout(self.document_pages)
         page_row.setContentsMargins(0, 0, 0, 0)
@@ -336,6 +351,10 @@ class NotepadWindow(QDialog):
         self.shortcuts = [QShortcut(QKeySequence.Save, self), QShortcut(QKeySequence.New, self)]
         self.shortcuts[0].activated.connect(self.save_current_tab)
         self.shortcuts[1].activated.connect(self.new_note)
+        self.find_shortcut = QShortcut(QKeySequence.Find, self)
+        self.find_shortcut.activated.connect(self.open_find)
+        self.next_match_shortcut = QShortcut(QKeySequence('F3'), self)
+        self.next_match_shortcut.activated.connect(self.find_in_note)
         for signal in (self.title.textChanged, self.body.textChanged, self.repeat.valueChanged,
                        self.scheduled.toggled, self.due.dateTimeChanged, self.kind.currentIndexChanged,
                        self.customer.textChanged, self.contact.textChanged, self.order_ref.textChanged,
@@ -1966,6 +1985,46 @@ class NotepadWindow(QDialog):
             except (OSError, ValueError) as exc:
                 self.status.setText('The note is open. Its read receipt will need another sync: ' + str(exc))
         self.refresh_team_status()
+
+    def open_find(self):
+        self.sections.setCurrentRow(self.section_indices['writing'])
+        self.find_bar.show()
+        self.find_text.setFocus()
+        self.find_text.selectAll()
+        self.status.setText('Find in this note. Use Search entries to search all saved notes.')
+
+    def find_in_note(self, backward=False, restart=False):
+        from PySide6.QtGui import QTextDocument
+        query = self.find_text.text()
+        if not query:
+            return
+        flags = QTextDocument.FindBackward if backward else QTextDocument.FindFlags()
+        if restart:
+            self.body.moveCursor(QTextCursor.Start)
+        if self.body.find(query, flags):
+            self.status.setText('Match found. Enter or F3 finds the next match.')
+            return
+        note = self.service.store.find(self.editing_id)
+        if note and note.get('document_id'):
+            # Search one bounded page at a time so full documents stay out of RAM.
+            current, total = self.document_page.value(), self.document_page.maximum()
+            step = -1 if backward else 1
+            for offset in range(1, total + 1):
+                page = (current - 1 + step * offset) % total + 1
+                try:
+                    text = self.service.store.documents.read_page(note['document_id'], page - 1)
+                except (OSError, ValueError) as exc:
+                    self.status.setText('Document could not be searched: ' + str(exc))
+                    return
+                if query.casefold() in text.casefold():
+                    self.document_page.setValue(page)
+                    self.body.moveCursor(QTextCursor.End if backward else QTextCursor.Start)
+                    if self.body.find(query, flags):
+                        self.status.setText(f'Match found on text page {page}.')
+                        return
+        self.body.moveCursor(QTextCursor.End if backward else QTextCursor.Start)
+        found = self.body.find(query, flags)
+        self.status.setText('Search wrapped to the next match.' if found else 'No matches in this note.')
 
     def show_document_page(self, value):
         note = self.service.store.find(self.editing_id)

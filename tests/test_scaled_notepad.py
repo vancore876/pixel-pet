@@ -91,6 +91,29 @@ class ScaledNotepadTests(unittest.TestCase):
         self.assertFalse(self.store.notes[0].get('document_id'))
         self.assertFalse(Path(result['text_file']).exists())
 
+    def test_find_in_note_highlights_and_wraps_without_editing(self):
+        note = self.store.add('Find me', 'First aurora, then AURORA.')
+        self.window.load_note(note['id'])
+        self.window.open_find()
+        self.window.find_text.setText('aurora')
+        self.assertEqual(self.window.body.textCursor().selectedText(), 'aurora')
+        self.window.find_in_note()
+        self.assertEqual(self.window.body.textCursor().selectedText(), 'AURORA')
+        self.window.find_in_note()
+        self.assertEqual(self.window.body.textCursor().selectedText(), 'aurora')
+        self.assertFalse(self.window.dirty)
+        self.window.find_text.setText('missing phrase')
+        self.assertEqual(self.window.status.text(), 'No matches in this note.')
+
+    def test_find_reaches_full_document_pages(self):
+        note = self.save_large_import()
+        self.window.load_note(note['id'])
+        self.window.open_find()
+        self.window.find_text.setText('Aurora appointment')
+        self.assertEqual(self.window.body.textCursor().selectedText(), 'Aurora appointment')
+        self.assertGreater(self.window.document_page.value(), 1)
+        self.assertFalse(self.window.dirty)
+
     def test_search_finds_text_beyond_preview(self):
         note = self.save_large_import()
         self.assertNotIn('Aurora appointment', note['body'])

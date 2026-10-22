@@ -1,4 +1,5 @@
 import copy
+from contextlib import closing
 import errno
 import hashlib
 import json
@@ -289,7 +290,7 @@ class NotebookBackupTests(unittest.TestCase):
                 prepare_backup({"store": self.store, "path": path}, cancel)
         self.assertEqual(self.store.documents.total_characters(), 150)
         self.assertEqual("".join(self.store.documents.iter_text(original["document_id"])), "a" * 150)
-        with sqlite3.connect(self.store.documents.path) as connection:
+        with closing(sqlite3.connect(self.store.documents.path)) as connection:
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM restore_batches").fetchone()[0], 0)
 
     def test_json_write_failure_rolls_back_notes_and_cleanup_keeps_original(self):
@@ -450,7 +451,8 @@ class NotebookBackupTests(unittest.TestCase):
         replace = notes.os.replace
         def lock_after_json_replacement(source, destination):
             replace(source, destination)
-            writer.execute("BEGIN IMMEDIATE")
+            if Path(destination) == self.store.path:
+                writer.execute("BEGIN IMMEDIATE")
         try:
             with patch.object(documents, "MAX_NOTEBOOK_CHARACTERS", 200):
                 result = prepare_backup({"store": self.store, "path": path})
@@ -486,7 +488,8 @@ class NotebookBackupTests(unittest.TestCase):
         self.targets.append(reopened)
         self.assertTrue(reopened.documents.exists(original["document_id"]))
         self.assertTrue(reopened.documents.exists(staged_id))
-        reopened.add("Fresh note", "Unrelated", 0, now=300)
+        with self.assertRaises(OSError):
+            reopened.add("Fresh note", "Unrelated", 0, now=300)
         self.assertTrue(reopened.documents.exists(original["document_id"]))
         self.assertTrue(reopened.documents.exists(staged_id))
 
