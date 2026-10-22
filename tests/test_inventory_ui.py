@@ -105,7 +105,50 @@ class InventoryUiTests(unittest.TestCase):
         self.service.refresh()
         wait_for(lambda: len(self.service.catalog) == len(rows))
 
+    def test_excel_import_needs_only_three_columns_and_one_confirmation(self):
+        from openpyxl import Workbook
+        path = self.root / 'parts.xlsx'
+        book = Workbook()
+        book.active.append(['Part Number', 'Quantity', 'Location', 'Barcode', 'Minimum'])
+        book.active.append(['00042', 7, 'Rack 9', 'ignored optional code', 'not a number'])
+        book.save(path)
+        book.close()
+        self.seed([stock()])
+        self.window.tabs.setCurrentIndex(1)
+        self.window.load_file(path)
+        wait_for(lambda: self.window.import_button.isEnabled())
+        self.assertTrue(self.window.optional_mapping.isHidden())
+        self.assertTrue(self.window.review_button.isHidden())
+        self.assertEqual(self.window.import_table.columnCount(), 3)
+        self.assertEqual(set(self.service.plan.mapping), {'sku', 'quantity', 'location'})
+        self.assertEqual(self.service.catalog[0]['quantity'], 1)
+        self.window.import_button.click()
+        wait_for(lambda: not self.service.busy and self.service.catalog[0]['quantity'] == 7)
+        row = self.service.catalog[0]
+        self.assertEqual(row['sku'], '00042')
+        self.assertEqual(row['location'], 'Rack 9')
+        self.assertEqual(row['description'], 'Brake pads')
+        self.assertEqual(row['supplier'], 'Parts Co')
+        self.assertEqual(row['reorder_point'], 2)
+
+    def test_custom_three_column_mapping_checks_automatically(self):
+        self.load('Our code,Available units,Rack detail\nP-7,5,Rack 8\n')
+        for field, column in [('sku', 0), ('quantity', 1), ('location', 2)]:
+            combo = self.window.mapping[field]
+            combo.setCurrentIndex(combo.findData(column))
+        wait_for(lambda: self.window.import_button.isEnabled())
+        self.assertEqual(self.service.plan.rows[0], {'sku': 'P-7', 'quantity': 5, 'location': 'Rack 8'})
+        self.assertEqual(self.service.summary['item_count'], 0)
+
+    def test_automatic_check_blocks_invalid_rows(self):
+        self.load('SKU,Qty,Location\nP-7,-1,Rack 8\n')
+        wait_for(lambda: self.service.plan is not None and not self.service.busy)
+        self.assertFalse(self.window.import_button.isEnabled())
+        self.assertIn('nonnegative', self.window.review_text.toPlainText())
+        self.assertEqual(self.service.summary['item_count'], 0)
+
     def test_file_review_is_explicit_and_stock_search_keeps_leading_zeroes(self):
+        self.window.optional_import.setChecked(True)
         self.load("Part Number,Description,Qty,Bin,Minimum,Restock Qty\n00042,Brake pads,1,Shelf A,2,12\n00051,Oil filter,8,Shelf C,2,6\n")
         self.assertEqual(self.service.summary["item_count"], 0)
         self.assertEqual(self.window.mapping["sku"].currentData(), 0)
@@ -149,8 +192,8 @@ class InventoryUiTests(unittest.TestCase):
         path = self.load("SKU,Qty,Location\nP-7,5,Old shelf\n")
         path.write_text("SKU,Qty,Location\nP-7,9,Reviewed shelf\n", encoding="utf-8")
         self.review()
-        self.assertEqual(self.window.import_table.item(0, 2).text(), "9")
-        self.assertEqual(self.window.import_table.item(0, 3).text(), "Reviewed shelf")
+        self.assertEqual(self.window.import_table.item(0, 1).text(), "9")
+        self.assertEqual(self.window.import_table.item(0, 2).text(), "Reviewed shelf")
         path.write_text("SKU,Qty,Location\nP-7,99,Changed after review\n", encoding="utf-8")
         self.save_plan()
         self.assertEqual(self.service.catalog[0]["quantity"], 9)

@@ -178,6 +178,7 @@ class BarcodeStockUiTests(unittest.TestCase):
         self.assertIn("allowed range", self.window.movement_status.text())
 
     def test_barcode_column_maps_and_preserves_zeroes_in_csv(self):
+        self.window.optional_import.setChecked(True)
         path = self.root / "new.csv"
         path.write_text("SKU,Qty,Barcode\nP-2,3,000000002\n", encoding="utf-8")
         self.window.load_file(path)

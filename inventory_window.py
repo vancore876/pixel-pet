@@ -14,6 +14,8 @@ FIELDS = ("sku", "description", "quantity", "location", "reorder_point",
 LABELS = {"sku": "Part number / SKU", "description": "Description", "quantity": "Quantity on hand",
           "location": "Aisle / shelf / bin", "reorder_point": "Restock at or below",
           "reorder_quantity": "Restock quantity", "target_stock": "Target stock", "supplier": "Supplier", "barcode": "Barcode"}
+IMPORT_FIELDS = ("sku", "quantity", "location")
+IMPORT_LABELS = {"sku": "Part Number", "quantity": "Quantity", "location": "Location"}
 TABLE_FIELDS = ("sku", "description", "quantity", "location", "reorder_point", "reorder_quantity", "supplier", "barcode")
 TABLE_LABELS = ("Part number", "Description", "Qty", "Location", "Restock at", "Order qty", "Supplier", "Barcode")
 
@@ -53,6 +55,10 @@ class InventoryWindow(QDialog):
         self._edit_revision = 0
         self._scope_stamp = self._current_scope()
         self._preview = None
+        self._review_timer = QTimer(self)
+        self._review_timer.setSingleShot(True)
+        self._review_timer.setInterval(150)
+        self._review_timer.timeout.connect(self._review)
         self._building = False
         self._scan_item = None
         self._scan_cached = False
@@ -105,6 +111,7 @@ class InventoryWindow(QDialog):
         service.movement_finished.connect(self._movement_finished)
         service.history_ready.connect(self._show_history)
         service.scope_reset.connect(self._clear_scanner)
+        service.scope_reset.connect(self._clear_import)
         self.configure()
         self.refresh()
 
@@ -212,9 +219,9 @@ class InventoryWindow(QDialog):
     def _build_import(self):
         page, layout = self._scroll_page()
         layout.addWidget(_label("Import an Excel or CSV stock list", "sectionTitle"))
-        layout.addWidget(_label("Choose a worksheet, match its columns, and review every error before confirming. "
-            "Matching part numbers update existing parts; parts absent from the file remain in stock. "
-            "Excel macros and formulas are never executed. Maximum 50 MiB and 100,000 rows.", "hint"))
+        layout.addWidget(_label("Choose your file, confirm Part Number, Quantity and Location, then press Confirm import. "
+            "Columns are detected and rows checked automatically. Matching part numbers update existing stock; "
+            "parts absent from the file remain unchanged.", "hint"))
         choose = QHBoxLayout()
         self.file_label = _label("No stock file selected", "hint")
         choose.addWidget(self.file_label, 1)
@@ -227,22 +234,39 @@ class InventoryWindow(QDialog):
         self.sheet.setEnabled(False)
         self.sheet.currentTextChanged.connect(self._sheet_changed)
         sheet_row.addWidget(self.sheet, 1)
-        self.review_button = _button("Review import", self._review, "primary")
+        self.review_button = _button("Check file again", self._review)
         self.review_button.setEnabled(False)
-        sheet_row.addWidget(self.review_button)
+        self.review_button.hide()
         layout.addLayout(sheet_row)
         mapping = QGridLayout()
+        self.optional_import = QCheckBox('Include optional details')
+        self.optional_import.setToolTip('Description, barcode, supplier and restock settings are optional.')
+        self.optional_import.toggled.connect(self._optional_import_changed)
+        self.optional_mapping = QWidget()
+        optional_layout = QGridLayout(self.optional_mapping)
+        optional_layout.setContentsMargins(0, 0, 0, 0)
+        self.optional_mapping.hide()
         self.mapping = {}
-        for index, field in enumerate(FIELDS):
+        optional_index = 0
+        for field in FIELDS:
             combo = QComboBox()
             combo.addItem("Not mapped", None)
             combo.setEnabled(False)
             combo.currentIndexChanged.connect(self._mapping_changed)
             self.mapping[field] = combo
-            column, row = (index % 4) * 2, index // 4
-            mapping.addWidget(_label(LABELS[field] + (" *" if field in ("sku", "quantity") else "")), row * 2, column, 1, 2)
-            mapping.addWidget(combo, row * 2 + 1, column, 1, 2)
+            if field in IMPORT_FIELDS:
+                column = IMPORT_FIELDS.index(field)
+                mapping.addWidget(_label(IMPORT_LABELS[field]), 0, column)
+                mapping.addWidget(combo, 1, column)
+            else:
+                column, row = optional_index % 3, optional_index // 3
+                optional_layout.addWidget(_label(LABELS[field]), row * 2, column)
+                optional_layout.addWidget(combo, row * 2 + 1, column)
+                optional_index += 1
         layout.addLayout(mapping)
+        layout.addWidget(self.optional_import)
+        layout.addWidget(self.optional_mapping)
+        layout.addWidget(self.review_button)
         self.import_table = QTableWidget()
         self.import_table.setMinimumHeight(150)
         self.import_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
@@ -685,6 +709,7 @@ class InventoryWindow(QDialog):
         self.service.inspect_file(path)
 
     def _clear_import(self):
+        self._review_timer.stop()
         self._preview = None
         self.import_button.setEnabled(False)
         self.review_button.setEnabled(False)
@@ -711,7 +736,7 @@ class InventoryWindow(QDialog):
                 combo.addItem("Not mapped", None)
                 for index, header in enumerate(preview.headers):
                     combo.addItem(header or f"Column {index + 1}", index)
-                selected = preview.mapping.get(field)
+                selected = preview.mapping.get(field) if field in IMPORT_FIELDS or self.optional_import.isChecked() else None
                 combo.setCurrentIndex(combo.findData(selected) if selected is not None else 0)
             combo.setEnabled(True)
         self.import_table.setColumnCount(len(preview.headers))
@@ -722,16 +747,32 @@ class InventoryWindow(QDialog):
                 value = row[column] if column < len(row) else ""
                 self.import_table.setItem(row_index, column, QTableWidgetItem("" if value is None else str(value)))
         self._building = False
-        self.review_text.setPlainText(f"{preview.total_rows:,} spreadsheet rows found. Match the required part number and quantity columns.")
+        self.review_text.setPlainText(f"{preview.total_rows:,} rows found. Confirm Part Number, Quantity and Location. Checking the file automatically...")
+        self._mapping_changed()
+
+    def _optional_import_changed(self, enabled):
+        self.optional_mapping.setVisible(enabled)
+        self.review_button.setVisible(enabled)
+        for field, combo in self.mapping.items():
+            if field not in IMPORT_FIELDS:
+                with QSignalBlocker(combo):
+                    selected = self._preview.mapping.get(field) if enabled and self._preview else None
+                    combo.setCurrentIndex(combo.findData(selected) if selected is not None else 0)
         self._mapping_changed()
 
     def _mapping_changed(self):
         if self._building:
             return
+        self._review_timer.stop()
         self.import_button.setEnabled(False)
         self.service.plan = None
         required = all(self.mapping[field].currentData() is not None for field in ("sku", "quantity"))
-        self.review_button.setEnabled(bool(self._preview and required and not self.service.busy and self.service.can_write))
+        ready = bool(self._preview and required and not self.service.busy and self.service.can_write)
+        self.review_button.setEnabled(ready)
+        if ready:
+            self._review_timer.start()
+        elif self._preview and not required:
+            self.review_text.setPlainText('Choose the Part Number and Quantity columns. Location can be left unmapped if it is not in this file.')
 
     def _sheet_changed(self, sheet):
         if self._preview and sheet and sheet != self._preview.sheet:
@@ -739,26 +780,30 @@ class InventoryWindow(QDialog):
             self.service.inspect_file(self.service._file, sheet=sheet)
 
     def _review(self):
+        self._review_timer.stop()
         mapping = {field: combo.currentData() for field, combo in self.mapping.items() if combo.currentData() is not None}
         self.service.prepare_import(mapping, sheet=self._preview.sheet if self._preview else None)
 
     def _show_plan(self, result):
         plan, counts = result["plan"], result["preview"]
-        self.import_table.setColumnCount(len(FIELDS))
-        self.import_table.setHorizontalHeaderLabels([LABELS[field] for field in FIELDS])
+        fields = FIELDS if self.optional_import.isChecked() else IMPORT_FIELDS
+        self.import_table.setColumnCount(len(fields))
+        self.import_table.setHorizontalHeaderLabels([IMPORT_LABELS.get(field, LABELS[field]) for field in fields])
         self.import_table.setRowCount(min(len(plan.rows), 25))
         for row_index, row in enumerate(plan.rows[:25]):
-            for column, field in enumerate(FIELDS):
+            for column, field in enumerate(fields):
                 value = row.get(field, "")
                 self.import_table.setItem(row_index, column, QTableWidgetItem("" if value is None else str(value)))
         rows = [f"{len(plan.rows):,} valid part rows · {counts.get('created', counts.get('inserted', 0)):,} new · "
                 f"{counts.get('updated', 0):,} existing updates."]
         if plan.errors:
-            rows.append("Fix these errors in the spreadsheet and review again:")
+            rows.append("Fix these errors in the spreadsheet, then choose the file again:")
             rows.extend(plan.errors[:50])
-        if plan.warnings:
+        warnings = [warning for warning in plan.warnings
+                    if self.optional_import.isChecked() or not warning.startswith('Columns not mapped:')]
+        if warnings:
             rows.append("Warnings:")
-            rows.extend(plan.warnings[:25])
+            rows.extend(warnings[:25])
         self.review_text.setPlainText("\n".join(rows))
         self.import_button.setEnabled(bool(plan.valid and self.service.can_write and not self.service.busy))
 
@@ -783,6 +828,10 @@ class InventoryWindow(QDialog):
         self.cancel_button.setVisible(bool(busy))
         self.choose_button.setEnabled(not busy and self.service.can_write)
         self.scope.setEnabled(not busy)
+        self.optional_import.setEnabled(not busy)
+        self.sheet.setEnabled(not busy and bool(self._preview and len(self._preview.sheet_names) > 1))
+        for combo in self.mapping.values():
+            combo.setEnabled(not busy and self._preview is not None)
         self.review_button.setEnabled(not busy and self.service.can_write and bool(self._preview) and
             all(self.mapping[field].currentData() is not None for field in ("sku", "quantity")))
         self.import_button.setEnabled(not busy and self.service.can_write and bool(self.service.plan and self.service.plan.valid))
@@ -807,5 +856,6 @@ class InventoryWindow(QDialog):
         super().hideEvent(event)
 
     def shutdown(self):
+        self._review_timer.stop()
         self._search_timer.stop()
         self.hide()

@@ -14,12 +14,16 @@ action are described in [WORK_CHAT.md](WORK_CHAT.md#office-backups-and-recovery)
 
 1. Choose **Import stock list**, then select an `.xlsx`, `.xlsm`, `.xls`, or
    `.csv` file. Select the worksheet when the workbook has several sheets.
-2. Match the spreadsheet columns to the fields below. Jeffery suggests matches,
-   and lets you correct them before reading the complete list.
-3. Review the proposed new and updated items and any row errors. Stock has not
-   changed yet. Correct duplicate part numbers or invalid quantities in the file.
-4. Confirm the import. Office imports become visible together after the server
-   confirms the complete batch; uploading a partial batch does not change stock.
+2. Confirm just **Part Number**, **Quantity**, and **Location**. Jeffery detects
+   these columns and checks the file automatically. Correct a column choice only
+   if its heading was not recognized. Location can be left unmapped when absent.
+3. Press **Confirm import**. There is no separate Review step. Invalid quantities
+   or duplicate part numbers are shown before confirmation is enabled. Office
+   imports become visible together after the server confirms the complete batch.
+
+Description, barcode, supplier, and restock settings are not required. Select
+**Include optional details** only when you want to import those extra columns;
+otherwise existing values stay unchanged.
 
 | Field | Meaning |
 | --- | --- |

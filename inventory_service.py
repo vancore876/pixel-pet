@@ -403,7 +403,7 @@ class InventoryService(QObject):
         def received(preview):
             self.preview = preview
             self.preview_ready.emit(preview)
-            self._set_status("Choose the worksheet and columns, then review the import.")
+            self._set_status("Confirm Part Number, Quantity and Location. The file is checked automatically.")
         self._submit(inspect, received, busy=True)
 
     def prepare_import(self, mapping=None, sheet=None):
@@ -429,7 +429,8 @@ class InventoryService(QObject):
             self.plan, self.import_preview = result
             self._pending_import = None
             self.import_ready.emit({"plan": self.plan, "preview": self.import_preview})
-            self._set_status("Review the rows below. Existing stock is unchanged until you confirm Import.")
+            self._set_status("Ready to confirm import. Existing stock stays unchanged until you press Confirm import."
+                             if self.plan.valid else "Fix the row errors shown below before confirming import.")
         self._submit(parse, received, busy=True)
 
     def commit_import(self):
