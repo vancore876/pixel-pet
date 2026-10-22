@@ -105,6 +105,21 @@ class InventoryUiTests(unittest.TestCase):
         self.service.refresh()
         wait_for(lambda: len(self.service.catalog) == len(rows))
 
+    def test_quantity_errors_can_be_bypassed_explicitly_and_valid_rows_saved(self):
+        self.seed([stock()])
+        self.load('SKU,Qty,Location\n00042,-5,Do not overwrite\nGOOD,3,Rack A\n')
+        wait_for(lambda: self.service.plan is not None and not self.service.busy)
+        self.assertFalse(self.window.import_button.isEnabled())
+        self.window.skip_invalid_quantities.setChecked(True)
+        wait_for(lambda: self.window.import_button.isEnabled())
+        self.assertIn('Skipped 1 rows with invalid quantities', self.window.review_text.toPlainText())
+        self.assertEqual([row['sku'] for row in self.service.plan.rows], ['GOOD'])
+        self.window.import_button.click()
+        wait_for(lambda: not self.service.busy and self.service.summary['item_count'] == 2)
+        old = next(row for row in self.service.catalog if row['sku'] == '00042')
+        self.assertEqual(old['quantity'], 1)
+        self.assertEqual(old['location'], 'Aisle 3 / Bin B')
+
     def test_zero_quantity_option_and_added_columns_import_without_extra_steps(self):
         self.load('Part Number,Quantity,Location,AlternatePartNumber,SubstitutePartNumber,Retail Price,Cost Price\n00042,0,Rack A,ALT-9,SUB-9,1250.50,800.25\nP-2,3,Rack B,ALT-2,SUB-2,20,10\n')
         wait_for(lambda: self.window.import_button.isEnabled())

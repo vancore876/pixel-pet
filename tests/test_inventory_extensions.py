@@ -63,6 +63,35 @@ class InventoryExtensionTests(unittest.TestCase):
         self.assertEqual(validate_row({'sku': 'P-1', 'quantity': 0,
             'retail_price': '$1,234.50', 'cost_price': 0})['retail_price'], '1234.50')
 
+    def test_quantity_bypass_skips_bad_rows_without_changing_existing_stock(self):
+        path = self.root / 'bad-quantities.csv'
+        path.write_text('SKU,Quantity,Location\nGOOD,2,New bin\nNEG,-1,Wrong bin\nFRACTION,2.5,Wrong bin\nHUGE,2147483648,Wrong bin\nEMPTY,,Wrong bin\nTEXT,unknown,Wrong bin\nZERO,0,Zero bin\n', encoding='utf-8')
+        self.assertFalse(parse_excel(path).valid)
+        plan = parse_excel(path, skip_invalid_quantities=True)
+        self.assertTrue(plan.valid, plan.errors)
+        self.assertEqual([row['sku'] for row in plan.rows], ['GOOD', 'ZERO'])
+        self.assertIn('Skipped 5 rows with invalid quantities', ' '.join(plan.warnings))
+        self.assertIn('Row 3:', ' '.join(plan.warnings))
+        store = InventoryStore(self.root / 'bypass.sqlite')
+        store.import_rows([{'sku': 'NEG', 'quantity': 12, 'location': 'Keep bin'}])
+        store.import_rows(plan.rows)
+        self.assertEqual(store.get('NEG')['quantity'], 12)
+        self.assertEqual(store.get('NEG')['location'], 'Keep bin')
+        self.assertEqual(store.get('ZERO')['quantity'], 0)
+
+    def test_quantity_bypass_does_not_hide_price_or_duplicate_errors(self):
+        path = self.root / 'other-errors.csv'
+        path.write_text('SKU,Qty,Cost Price\nA,2,1.234\nB,1,10\nB,1,10\n', encoding='utf-8')
+        plan = parse_excel(path, skip_invalid_quantities=True)
+        self.assertFalse(plan.valid)
+        self.assertTrue(any('Cost Price' in error for error in plan.errors))
+        self.assertTrue(any('Duplicate part number' in error for error in plan.errors))
+        path.write_text('SKU,Qty\nA,-1\n', encoding='utf-8')
+        plan = parse_excel(path, skip_invalid_quantities=True)
+        self.assertFalse(plan.valid)
+        self.assertEqual(plan.rows, [])
+        self.assertIn('No valid stock rows remain', plan.errors[0])
+
     def test_existing_database_upgrade_preserves_original_stock(self):
         path = self.root / 'legacy.sqlite'
         with closing(sqlite3.connect(path)) as connection, connection:

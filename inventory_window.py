@@ -249,6 +249,10 @@ class InventoryWindow(QDialog):
         self.include_zero.setChecked(True)
         self.include_zero.toggled.connect(self._mapping_changed)
         layout.addWidget(self.include_zero)
+        self.skip_invalid_quantities = QCheckBox('Skip rows with invalid quantities')
+        self.skip_invalid_quantities.setToolTip('Import the valid rows and leave skipped parts unchanged. Negative, fractional, missing and oversized quantities are listed below.')
+        self.skip_invalid_quantities.toggled.connect(self._mapping_changed)
+        layout.addWidget(self.skip_invalid_quantities)
         mapping = QGridLayout()
         self.optional_import = QCheckBox('Include optional details')
         self.optional_import.setToolTip('Description, barcode, supplier and restock settings are optional.')
@@ -796,7 +800,8 @@ class InventoryWindow(QDialog):
         self._review_timer.stop()
         mapping = {field: combo.currentData() for field, combo in self.mapping.items() if combo.currentData() is not None}
         self.service.prepare_import(mapping, sheet=self._preview.sheet if self._preview else None,
-                                    include_zero=self.include_zero.isChecked())
+                                    include_zero=self.include_zero.isChecked(),
+                                    skip_invalid_quantities=self.skip_invalid_quantities.isChecked())
 
     def _show_plan(self, result):
         plan, counts = result["plan"], result["preview"]
@@ -814,6 +819,8 @@ class InventoryWindow(QDialog):
         if plan.errors:
             rows.append("Fix these errors in the spreadsheet, then choose the file again:")
             rows.extend(plan.errors[:50])
+            if not self.skip_invalid_quantities.isChecked() and any(error.split(': ', 1)[-1].startswith('Quantity ') for error in plan.errors):
+                rows.append('To import the valid rows now, enable Skip rows with invalid quantities above.')
         warnings = [warning for warning in plan.warnings
                     if self.optional_import.isChecked() or not warning.startswith('Columns not mapped:')]
         if warnings:
@@ -845,6 +852,7 @@ class InventoryWindow(QDialog):
         self.scope.setEnabled(not busy)
         self.optional_import.setEnabled(not busy)
         self.include_zero.setEnabled(not busy)
+        self.skip_invalid_quantities.setEnabled(not busy)
         self.sheet.setEnabled(not busy and bool(self._preview and len(self._preview.sheet_names) > 1))
         for combo in self.mapping.values():
             combo.setEnabled(not busy and self._preview is not None)

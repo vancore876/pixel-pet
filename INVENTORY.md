@@ -27,6 +27,12 @@ action are described in [WORK_CHAT.md](WORK_CHAT.md#office-backups-and-recovery)
 still be imported and found in the catalogue. Uncheck it to skip those rows;
 negative or missing quantities remain invalid.
 
+If quantity errors block the file, enable **Skip rows with invalid quantities**.
+Jeffery rechecks automatically and lets you confirm the valid rows. Skipped rows
+are counted and listed; their existing stock stays unchanged. Quantities are never
+silently rounded or replaced with zero. Other errors, such as duplicate part
+numbers or invalid prices, still need correction.
+
 Prices accept nonnegative amounts with up to two decimal places, including zero.
 They are saved exactly to two decimal places. Existing databases gain the new
 fields automatically without replacing stock. Update and restart both the office

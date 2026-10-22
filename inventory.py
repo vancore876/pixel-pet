@@ -341,13 +341,15 @@ def inspect_spreadsheet(path, sheet=None, cancel=None):
                             max(0, len(rows) - 1), suggest_mapping(headers), Path(path).name, selected)
 
 
-def parse_excel(path, mapping=None, sheet=None, cancel=None, progress=None, include_zero=True):
+def parse_excel(path, mapping=None, sheet=None, cancel=None, progress=None, include_zero=True, skip_invalid_quantities=False):
     rows, _sheets, selected = _read_spreadsheet(path, sheet, cancel)
     headers = _headers(rows)
     mapping = suggest_mapping(headers) if mapping is None else dict(mapping)
     resolved = {}
     errors, warnings, result, seen, barcodes = [], [], [], {}, {}
     skipped_zero = 0
+    skipped_quantities = 0
+    skipped_quantity_details = []
     for name, column in mapping.items():
         if name not in FIELDS or column is None or column == "":
             continue
@@ -374,6 +376,18 @@ def parse_excel(path, mapping=None, sheet=None, cancel=None, progress=None, incl
         if all(value is None or str(value).strip() == "" for value in values):
             continue
         source = {name: values[column] if column < len(values) else None for name, column in resolved.items()}
+        if skip_invalid_quantities:
+            try:
+                if source.get('quantity') is None or source.get('quantity') == '':
+                    raise InventoryError('Quantity is missing.')
+                _count(source['quantity'], 'quantity')
+            except InventoryError as error:
+                skipped_quantities += 1
+                if len(skipped_quantity_details) < 50:
+                    skipped_quantity_details.append(f'Row {index}: {error}')
+                if progress is not None and index % 250 == 0:
+                    progress(index - 1, len(rows) - 1)
+                continue
         try:
             barcode = source.get("barcode")
             # Numeric Excel cells with a simple zero-padding format have already
@@ -402,10 +416,17 @@ def parse_excel(path, mapping=None, sheet=None, cancel=None, progress=None, incl
                 errors.append(f"Row {index}: {error}")
         if progress is not None and index % 250 == 0:
             progress(index - 1, len(rows) - 1)
+    if skipped_quantities:
+        detail = f'Skipped {skipped_quantities:,} rows with invalid quantities. Their existing stock stays unchanged.'
+        if skipped_quantities > len(skipped_quantity_details):
+            detail += f' Showing the first {len(skipped_quantity_details)} skipped rows.'
+        warnings.append(detail + '\n' + '\n'.join(skipped_quantity_details))
     if skipped_zero:
         warnings.append(f"Skipped {skipped_zero:,} zero-quantity rows. Enable Include zero-quantity parts to import them.")
     if not result and not errors:
-        errors.append("No stock rows remain after excluding zero quantities." if skipped_zero else "The spreadsheet has no stock rows to import.")
+        errors.append("No valid stock rows remain after skipping invalid quantities." if skipped_quantities
+                      else "No stock rows remain after excluding zero quantities." if skipped_zero
+                      else "The spreadsheet has no stock rows to import.")
     return InventoryImportPlan(result, errors, warnings, Path(path).name, headers, resolved, selected)
 
 
