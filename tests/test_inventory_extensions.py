@@ -92,6 +92,36 @@ class InventoryExtensionTests(unittest.TestCase):
         self.assertEqual(plan.rows, [])
         self.assertIn('No valid stock rows remain', plan.errors[0])
 
+    def test_invalid_price_bypass_imports_parts_and_preserves_existing_prices(self):
+        path = self.root / 'bad-prices.csv'
+        path.write_text('SKU,Qty,Location,Retail Price,Cost Price\nOLD,4,New bin,12.345,5.25\nNEW,0,Rack B,-1,NaN\nBADQ,-2,Ignored,-1,-1\n', encoding='utf-8')
+        plan = parse_excel(path, skip_invalid_quantities=True, skip_invalid_prices=True)
+        self.assertTrue(plan.valid, plan.errors)
+        self.assertEqual(len(plan.rows), 2)
+        self.assertNotIn('retail_price', plan.rows[0])
+        self.assertEqual(plan.rows[0]['cost_price'], '5.25')
+        self.assertNotIn('cost_price', plan.rows[1])
+        self.assertIn('Skipped 3 invalid price values', ' '.join(plan.warnings))
+        self.assertIn('Row 2:', ' '.join(plan.warnings))
+        store = InventoryStore(self.root / 'prices.sqlite')
+        store.import_rows([{'sku': 'OLD', 'quantity': 10, 'retail_price': '25.50', 'cost_price': '4.00'}])
+        store.import_rows(plan.rows)
+        self.assertEqual(store.get('OLD')['retail_price'], '25.50')
+        self.assertEqual(store.get('OLD')['cost_price'], '5.25')
+        self.assertEqual(store.get('OLD')['quantity'], 4)
+        self.assertEqual(store.get('NEW')['retail_price'], '0.00')
+        self.assertEqual(store.get('NEW')['quantity'], 0)
+
+    def test_price_bypass_keeps_other_errors_and_strict_mode_available(self):
+        path = self.root / 'price-errors.csv'
+        path.write_text('SKU,Qty,Retail Price\nA,2,1.234\n', encoding='utf-8')
+        self.assertFalse(parse_excel(path).valid)
+        self.assertTrue(parse_excel(path, skip_invalid_prices=True).valid)
+        path.write_text('SKU,Qty,Retail Price\nA,2,1.234\nA,3,-1\n', encoding='utf-8')
+        plan = parse_excel(path, skip_invalid_prices=True)
+        self.assertFalse(plan.valid)
+        self.assertTrue(any('Duplicate part number' in error for error in plan.errors))
+
     def test_existing_database_upgrade_preserves_original_stock(self):
         path = self.root / 'legacy.sqlite'
         with closing(sqlite3.connect(path)) as connection, connection:

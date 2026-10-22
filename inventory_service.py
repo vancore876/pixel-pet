@@ -408,7 +408,7 @@ class InventoryService(QObject):
             self._set_status("Confirm Part Number, Quantity and Location. The file is checked automatically.")
         self._submit(inspect, received, busy=True)
 
-    def prepare_import(self, mapping=None, sheet=None, include_zero=True, skip_invalid_quantities=False):
+    def prepare_import(self, mapping=None, sheet=None, include_zero=True, skip_invalid_quantities=False, skip_invalid_prices=False):
         if not self._file or self.busy or not self.can_write:
             return
         path, store_path = self._file, self._path
@@ -417,7 +417,7 @@ class InventoryService(QObject):
         def parse(cancel):
             from inventory import parse_excel, InventoryStore
             plan = parse_excel(path, mapping=mapping, sheet=sheet or self._sheet, cancel=cancel, include_zero=include_zero,
-                               skip_invalid_quantities=skip_invalid_quantities,
+                               skip_invalid_quantities=skip_invalid_quantities, skip_invalid_prices=skip_invalid_prices,
                                progress=lambda value, total: self.progress.emit(int(value * 100 / max(1, total)), "Checking stock rows…"))
             if plan.valid:
                 store = InventoryStore(store_path)

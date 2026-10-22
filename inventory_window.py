@@ -255,6 +255,11 @@ class InventoryWindow(QDialog):
         self.skip_invalid_quantities.setToolTip('Import the valid rows and leave skipped parts unchanged. Negative, fractional, missing and oversized quantities are listed below.')
         self.skip_invalid_quantities.toggled.connect(self._mapping_changed)
         layout.addWidget(self.skip_invalid_quantities)
+        self.skip_invalid_prices = QCheckBox('Skip invalid price values')
+        self.skip_invalid_prices.setChecked(True)
+        self.skip_invalid_prices.setToolTip('Import the part but omit an invalid retail or cost price. Existing prices stay unchanged; new parts use 0.00 for omitted prices.')
+        self.skip_invalid_prices.toggled.connect(self._mapping_changed)
+        layout.addWidget(self.skip_invalid_prices)
         mapping = QGridLayout()
         self.optional_import = QCheckBox('Include optional details')
         self.optional_import.setToolTip('Description, barcode, supplier and restock settings are optional.')
@@ -851,7 +856,8 @@ class InventoryWindow(QDialog):
         mapping = {field: combo.currentData() for field, combo in self.mapping.items() if combo.currentData() is not None}
         self.service.prepare_import(mapping, sheet=self._preview.sheet if self._preview else None,
                                     include_zero=self.include_zero.isChecked(),
-                                    skip_invalid_quantities=self.skip_invalid_quantities.isChecked())
+                                    skip_invalid_quantities=self.skip_invalid_quantities.isChecked(),
+                                    skip_invalid_prices=self.skip_invalid_prices.isChecked())
 
     def _show_plan(self, result):
         plan, counts = result["plan"], result["preview"]
@@ -912,6 +918,7 @@ class InventoryWindow(QDialog):
         self.optional_import.setEnabled(not busy)
         self.include_zero.setEnabled(not busy)
         self.skip_invalid_quantities.setEnabled(not busy)
+        self.skip_invalid_prices.setEnabled(not busy)
         self.sheet.setEnabled(not busy and bool(self._preview and len(self._preview.sheet_names) > 1))
         for combo in self.mapping.values():
             combo.setEnabled(not busy and self._preview is not None)

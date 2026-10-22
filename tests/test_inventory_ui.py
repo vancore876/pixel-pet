@@ -175,6 +175,35 @@ class InventoryUiTests(unittest.TestCase):
         self.assertFalse(self.window._review_timer.isActive())
         self.assertEqual(self.service.summary['item_count'], 0)
 
+    def test_invalid_retail_price_does_not_block_confirmation_by_default(self):
+        self.seed([stock(retail_price='25.50', cost_price='5.00')])
+        self.load('SKU,Qty,Location,Retail Price,Cost Price\n00042,4,New bin,12.345,5.25\nNEW,0,Rack B,-1,8.00\n')
+        wait_for(lambda: self.service.plan is not None and not self.service.busy)
+        self.assertTrue(self.service.plan.valid)
+        self.assertTrue(self.window.skip_invalid_prices.isChecked())
+        self.assertIn('Skipped 2 invalid price values', self.window.review_text.toPlainText())
+        self.window.import_button.click()
+        wait_for(lambda: not self.service.busy and self.service.summary['item_count'] == 2)
+        old = next(row for row in self.service.catalog if row['sku'] == '00042')
+        self.assertEqual(old['retail_price'], '25.50')
+        self.assertEqual(old['cost_price'], '5.25')
+        self.assertEqual(old['location'], 'New bin')
+        self.assertEqual(old['quantity'], 4)
+
+    def test_price_bypass_can_be_disabled_and_reenabled(self):
+        self.load('SKU,Qty,Retail Price\nA,2,1.234\n')
+        wait_for(lambda: self.service.plan is not None and not self.service.busy)
+        self.assertTrue(self.service.plan.valid)
+        self.window.skip_invalid_prices.setChecked(False)
+        wait_for(lambda: self.service.plan is not None and not self.service.busy)
+        self.assertFalse(self.service.plan.valid)
+        self.window.import_button.click()
+        self.assertIn('Retail Price', self.window.import_hint.text())
+        self.assertEqual(self.service.summary['item_count'], 0)
+        self.window.skip_invalid_prices.setChecked(True)
+        wait_for(lambda: self.service.plan is not None and not self.service.busy)
+        self.assertTrue(self.service.plan.valid)
+
     def test_quantity_errors_can_be_bypassed_explicitly_and_valid_rows_saved(self):
         self.seed([stock()])
         self.window.skip_invalid_quantities.setChecked(False)

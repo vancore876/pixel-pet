@@ -33,8 +33,13 @@ want quantity errors to block the whole import. Jeffery checks automatically;
 If another error or a lost office connection blocks import, the reason appears
 beside Confirm instead of leaving an unexplained disabled button. Skipped rows
 are counted and listed; their existing stock stays unchanged. Quantities are never
-silently rounded or replaced with zero. Other errors, such as duplicate part
-numbers or invalid prices, still need correction.
+silently rounded or replaced with zero. Duplicate part numbers still need correction.
+
+**Skip invalid price values** is also enabled by default. An invalid Retail Price
+or Cost Price is omitted while the part's quantity, location and other valid
+fields still import. Existing prices stay unchanged; new parts use 0.00 for an
+omitted price. Warnings identify the affected spreadsheet rows. Uncheck this
+option to require every imported price to be valid.
 
 Prices accept nonnegative amounts with up to two decimal places, including zero.
 They are saved exactly to two decimal places. Existing databases gain the new

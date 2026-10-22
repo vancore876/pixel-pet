@@ -341,7 +341,7 @@ def inspect_spreadsheet(path, sheet=None, cancel=None):
                             max(0, len(rows) - 1), suggest_mapping(headers), Path(path).name, selected)
 
 
-def parse_excel(path, mapping=None, sheet=None, cancel=None, progress=None, include_zero=True, skip_invalid_quantities=False):
+def parse_excel(path, mapping=None, sheet=None, cancel=None, progress=None, include_zero=True, skip_invalid_quantities=False, skip_invalid_prices=False):
     rows, _sheets, selected = _read_spreadsheet(path, sheet, cancel)
     headers = _headers(rows)
     mapping = suggest_mapping(headers) if mapping is None else dict(mapping)
@@ -350,6 +350,8 @@ def parse_excel(path, mapping=None, sheet=None, cancel=None, progress=None, incl
     skipped_zero = 0
     skipped_quantities = 0
     skipped_quantity_details = []
+    skipped_prices = 0
+    skipped_price_details = []
     for name, column in mapping.items():
         if name not in FIELDS or column is None or column == "":
             continue
@@ -388,6 +390,17 @@ def parse_excel(path, mapping=None, sheet=None, cancel=None, progress=None, incl
                 if progress is not None and index % 250 == 0:
                     progress(index - 1, len(rows) - 1)
                 continue
+        if skip_invalid_prices:
+            for field in ('retail_price', 'cost_price'):
+                if field not in source:
+                    continue
+                try:
+                    source[field] = _price(source[field], field)
+                except InventoryError as error:
+                    source.pop(field)
+                    skipped_prices += 1
+                    if len(skipped_price_details) < 50:
+                        skipped_price_details.append(f'Row {index}: {error} Price value omitted.')
         try:
             barcode = source.get("barcode")
             # Numeric Excel cells with a simple zero-padding format have already
@@ -416,6 +429,11 @@ def parse_excel(path, mapping=None, sheet=None, cancel=None, progress=None, incl
                 errors.append(f"Row {index}: {error}")
         if progress is not None and index % 250 == 0:
             progress(index - 1, len(rows) - 1)
+    if skipped_prices:
+        detail = f'Skipped {skipped_prices:,} invalid price values. Part quantities and locations still import. Existing prices stay unchanged; new parts use 0.00 for omitted prices.'
+        if skipped_prices > len(skipped_price_details):
+            detail += f' Showing the first {len(skipped_price_details)} invalid prices.'
+        warnings.append(detail + '\n' + '\n'.join(skipped_price_details))
     if skipped_quantities:
         detail = f'Skipped {skipped_quantities:,} rows with invalid quantities. Their existing stock stays unchanged.'
         if skipped_quantities > len(skipped_quantity_details):
