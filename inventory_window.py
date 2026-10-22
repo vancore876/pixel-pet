@@ -58,6 +58,7 @@ class InventoryWindow(QDialog):
         self._edit_revision = 0
         self._scope_stamp = self._current_scope()
         self._preview = None
+        self._confirm_after_review = False
         self._review_timer = QTimer(self)
         self._review_timer.setSingleShot(True)
         self._review_timer.setInterval(150)
@@ -98,7 +99,7 @@ class InventoryWindow(QDialog):
         self.progress.setRange(0, 100)
         self.progress.hide()
         footer.addWidget(self.progress, 1)
-        self.cancel_button = _button("Cancel operation", service.cancel)
+        self.cancel_button = _button("Cancel operation", self._cancel_operation)
         self.cancel_button.hide()
         footer.addWidget(self.cancel_button)
         layout.addLayout(footer)
@@ -250,6 +251,7 @@ class InventoryWindow(QDialog):
         self.include_zero.toggled.connect(self._mapping_changed)
         layout.addWidget(self.include_zero)
         self.skip_invalid_quantities = QCheckBox('Skip rows with invalid quantities')
+        self.skip_invalid_quantities.setChecked(True)
         self.skip_invalid_quantities.setToolTip('Import the valid rows and leave skipped parts unchanged. Negative, fractional, missing and oversized quantities are listed below.')
         self.skip_invalid_quantities.toggled.connect(self._mapping_changed)
         layout.addWidget(self.skip_invalid_quantities)
@@ -296,9 +298,11 @@ class InventoryWindow(QDialog):
         self.review_text.setMaximumHeight(135)
         self.review_text.setPlaceholderText("Import results and row errors will appear here.")
         layout.addWidget(self.review_text)
-        self.import_button = _button("Confirm import into office inventory", self.service.commit_import, "primary")
+        self.import_button = _button("Confirm import into office inventory", self._confirm_import, "primary")
         self.import_button.setEnabled(False)
         layout.addWidget(self.import_button)
+        self.import_hint = _label('Choose a stock file to start.', 'hint')
+        layout.addWidget(self.import_hint)
         self.tabs.addTab(page, "Import stock list")
 
     def _build_scanner(self):
@@ -727,8 +731,10 @@ class InventoryWindow(QDialog):
 
     def _clear_import(self):
         self._review_timer.stop()
+        self._confirm_after_review = False
         self._preview = None
         self.import_button.setEnabled(False)
+        self.import_hint.setText('Choose a stock file to start.')
         self.review_button.setEnabled(False)
         self.review_text.clear()
         self.import_table.setRowCount(0)
@@ -781,8 +787,9 @@ class InventoryWindow(QDialog):
         if self._building:
             return
         self._review_timer.stop()
-        self.import_button.setEnabled(False)
+        self._confirm_after_review = False
         self.service.plan = None
+        self._update_import_button()
         required = all(self.mapping[field].currentData() is not None for field in ("sku", "quantity"))
         ready = bool(self._preview and required and not self.service.busy and self.service.can_write)
         self.review_button.setEnabled(ready)
@@ -795,6 +802,49 @@ class InventoryWindow(QDialog):
         if self._preview and sheet and sheet != self._preview.sheet:
             self._clear_import()
             self.service.inspect_file(self.service._file, sheet=sheet)
+
+    def _update_import_button(self):
+        self.import_button.setEnabled(bool(self._preview and not self.service.busy))
+        if self.service.busy:
+            reason = 'Checking or saving inventory. Please wait...'
+        elif not self._preview:
+            reason = 'Choose a stock file to start.'
+        elif not self.service.can_write:
+            reason = ('Sign in to Work Chat before importing office stock.' if not self.service.token or not self.service.user
+                      else 'Reconnect to the office server before confirming this import.')
+        elif not all(self.mapping[field].currentData() is not None for field in ('sku', 'quantity')):
+            reason = 'Choose the Part Number and Quantity columns above, then confirm.'
+        elif self.service.plan is None:
+            reason = 'Press Confirm import to check the file and import its valid rows.'
+        elif not self.service.plan.valid:
+            reason = 'Import blocked: ' + (self.service.plan.errors[0] if self.service.plan.errors else 'No valid stock rows remain.')
+        else:
+            reason = f'Ready to import {len(self.service.plan.rows):,} valid rows. Press Confirm import.'
+        self.import_hint.setText(reason)
+        self.import_button.setToolTip(reason)
+
+    def _cancel_operation(self):
+        self._confirm_after_review = False
+        self._review_timer.stop()
+        self.service.cancel()
+
+    def _confirm_import(self):
+        if self.service.busy or not self._preview:
+            return
+        self._update_import_button()
+        if not self.service.can_write or not all(self.mapping[field].currentData() is not None for field in ('sku', 'quantity')):
+            self.status.setText(self.import_hint.text())
+            return
+        if self.service.plan is not None:
+            if self.service.plan.valid:
+                self._confirm_after_review = False
+                self.service.commit_import()
+            else:
+                self.status.setText(self.import_hint.text())
+            return
+        # A click is also a retry if the background check was cancelled or busy.
+        self._confirm_after_review = True
+        self._review()
 
     def _review(self):
         self._review_timer.stop()
@@ -827,16 +877,25 @@ class InventoryWindow(QDialog):
             rows.append("Warnings:")
             rows.extend(warnings[:25])
         self.review_text.setPlainText("\n".join(rows))
-        self.import_button.setEnabled(bool(plan.valid and self.service.can_write and not self.service.busy))
+        self._update_import_button()
+        confirm, self._confirm_after_review = self._confirm_after_review, False
+        if confirm and plan.valid:
+            QTimer.singleShot(0, lambda: self._confirm_import() if self.service.plan is plan else None)
 
     def _import_finished(self, result):
         self._editor_dirty = False
-        self.import_button.setEnabled(False)
+        self._confirm_after_review = False
+        self._preview = None
+        self._review_timer.stop()
+        self._update_import_button()
+        self.import_hint.setText('Import saved. Choose another file to import more stock.')
         self.review_text.setPlainText("Stock import saved. " +
             f"{result.get('created', 0):,} new parts, {result.get('updated', 0):,} updated, {result.get('unchanged', 0):,} unchanged.")
         self.tabs.setCurrentIndex(0)
 
     def _error(self, message):
+        self._confirm_after_review = False
+        self._update_import_button()
         self.status.setText(str(message))
         if self.tabs.currentIndex() == 1:
             self.review_text.setPlainText(str(message))
@@ -848,7 +907,7 @@ class InventoryWindow(QDialog):
     def _busy_changed(self, busy):
         self.progress.setVisible(bool(busy))
         self.cancel_button.setVisible(bool(busy))
-        self.choose_button.setEnabled(not busy and self.service.can_write)
+        self.choose_button.setEnabled(not busy)
         self.scope.setEnabled(not busy)
         self.optional_import.setEnabled(not busy)
         self.include_zero.setEnabled(not busy)
@@ -858,7 +917,7 @@ class InventoryWindow(QDialog):
             combo.setEnabled(not busy and self._preview is not None)
         self.review_button.setEnabled(not busy and self.service.can_write and bool(self._preview) and
             all(self.mapping[field].currentData() is not None for field in ("sku", "quantity")))
-        self.import_button.setEnabled(not busy and self.service.can_write and bool(self.service.plan and self.service.plan.valid))
+        self._update_import_button()
         self.save_button.setEnabled(not busy and self.service.can_write and self._selected is not None)
         for widget in self.editors.values():
             widget.setEnabled(not busy and self.service.can_write and self._selected is not None)

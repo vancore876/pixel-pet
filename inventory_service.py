@@ -392,7 +392,9 @@ class InventoryService(QObject):
                          None, received, self.token)
 
     def inspect_file(self, path, sheet=None):
-        if self.busy or not self.can_write:
+        # Reading a user-selected file does not require office write access.
+        # Confirmation still checks the live session before changing stock.
+        if self.busy:
             return
         self._file, self._sheet = str(path), sheet
         self.plan = self.preview = None

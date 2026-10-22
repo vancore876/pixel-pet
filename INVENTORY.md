@@ -27,8 +27,11 @@ action are described in [WORK_CHAT.md](WORK_CHAT.md#office-backups-and-recovery)
 still be imported and found in the catalogue. Uncheck it to skip those rows;
 negative or missing quantities remain invalid.
 
-If quantity errors block the file, enable **Skip rows with invalid quantities**.
-Jeffery rechecks automatically and lets you confirm the valid rows. Skipped rows
+**Skip rows with invalid quantities** is enabled by default. Uncheck it if you
+want quantity errors to block the whole import. Jeffery checks automatically;
+**Confirm import** can also start or retry the check and import the valid rows.
+If another error or a lost office connection blocks import, the reason appears
+beside Confirm instead of leaving an unexplained disabled button. Skipped rows
 are counted and listed; their existing stock stays unchanged. Quantities are never
 silently rounded or replaced with zero. Other errors, such as duplicate part
 numbers or invalid prices, still need correction.

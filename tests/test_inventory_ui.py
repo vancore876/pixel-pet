@@ -7,7 +7,7 @@ import tempfile
 import threading
 import time
 import unittest
-from unittest.mock import patch
+from unittest.mock import PropertyMock, patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -105,13 +105,84 @@ class InventoryUiTests(unittest.TestCase):
         self.service.refresh()
         wait_for(lambda: len(self.service.catalog) == len(rows))
 
+    def test_confirm_click_before_background_check_imports_once(self):
+        self.load('SKU,Qty,Location\nGOOD,3,Rack A\nBAD,-1,Skipped bin\n')
+        self.window._review_timer.stop()
+        self.assertTrue(self.window.skip_invalid_quantities.isChecked())
+        self.assertTrue(self.window.import_button.isEnabled())
+        with patch.object(self.service, 'commit_import', wraps=self.service.commit_import) as commit:
+            self.window.import_button.click()
+            wait_for(lambda: not self.service.busy and self.service.summary['item_count'] == 1)
+            self.assertEqual(commit.call_count, 1)
+        self.assertEqual(self.service.catalog[0]['sku'], 'GOOD')
+
+    def test_confirm_retries_a_background_check_interrupted_by_busy_operation(self):
+        self.load('SKU,Qty\nGOOD,3\n')
+        self.window._review_timer.stop()
+        self.service._busy(True)
+        self.window._review()
+        self.assertIsNone(self.service.plan)
+        self.service._busy(False)
+        self.assertTrue(self.window.import_button.isEnabled())
+        self.window.import_button.click()
+        wait_for(lambda: not self.service.busy and self.service.summary['item_count'] == 1)
+
+    def test_file_can_be_selected_without_office_access_and_confirm_explains_signin(self):
+        self.service.shared = True
+        self.service.online = False
+        self.service.token, self.service.user = '', None
+        self.load('SKU,Qty\nGOOD,3\n')
+        self.assertTrue(self.window.choose_button.isEnabled())
+        self.assertTrue(self.window.import_button.isEnabled())
+        self.window.import_button.click()
+        self.assertIn('Sign in to Work Chat', self.window.import_hint.text())
+        self.assertIsNone(self.service.plan)
+        self.assertEqual(self.service.summary['item_count'], 0)
+
+    def test_confirm_explains_missing_columns_and_does_not_write(self):
+        self.load('Our code,Our quantity\nGOOD,3\n')
+        self.assertTrue(self.window.import_button.isEnabled())
+        self.window.import_button.click()
+        self.assertIn('Part Number and Quantity', self.window.import_hint.text())
+        self.assertEqual(self.service.summary['item_count'], 0)
+
+    def test_confirm_explains_offline_access_without_bypassing_authorization(self):
+        self.load('SKU,Qty\nGOOD,3\n')
+        self.window._review_timer.stop()
+        with patch.object(type(self.service), 'can_write', new_callable=PropertyMock, return_value=False):
+            with patch.object(self.service, 'commit_import') as commit:
+                self.window.import_button.click()
+                commit.assert_not_called()
+                self.assertIn('Sign in', self.window.import_hint.text())
+        self.assertEqual(self.service.summary['item_count'], 0)
+
+    def test_changing_columns_cancels_a_queued_confirmation(self):
+        self.load('SKU,Qty,Location\nGOOD,3,Rack A\n')
+        self.review()
+        self.window._confirm_after_review = True
+        self.window._show_plan({'plan': self.service.plan, 'preview': self.service.import_preview})
+        self.window.mapping['location'].setCurrentIndex(0)
+        self.window._review_timer.stop()
+        APP.processEvents()
+        self.assertFalse(self.window._confirm_after_review)
+        self.assertEqual(self.service.summary['item_count'], 0)
+
+    def test_cancel_button_clears_pending_confirmation(self):
+        self.load('SKU,Qty\nGOOD,3\n')
+        self.window._confirm_after_review = True
+        self.window._cancel_operation()
+        self.assertFalse(self.window._confirm_after_review)
+        self.assertFalse(self.window._review_timer.isActive())
+        self.assertEqual(self.service.summary['item_count'], 0)
+
     def test_quantity_errors_can_be_bypassed_explicitly_and_valid_rows_saved(self):
         self.seed([stock()])
+        self.window.skip_invalid_quantities.setChecked(False)
         self.load('SKU,Qty,Location\n00042,-5,Do not overwrite\nGOOD,3,Rack A\n')
         wait_for(lambda: self.service.plan is not None and not self.service.busy)
-        self.assertFalse(self.window.import_button.isEnabled())
+        self.assertTrue(self.window.import_button.isEnabled())
         self.window.skip_invalid_quantities.setChecked(True)
-        wait_for(lambda: self.window.import_button.isEnabled())
+        wait_for(lambda: self.service.plan is not None and not self.service.busy and self.window.import_button.isEnabled())
         self.assertIn('Skipped 1 rows with invalid quantities', self.window.review_text.toPlainText())
         self.assertEqual([row['sku'] for row in self.service.plan.rows], ['GOOD'])
         self.window.import_button.click()
@@ -122,15 +193,15 @@ class InventoryUiTests(unittest.TestCase):
 
     def test_zero_quantity_option_and_added_columns_import_without_extra_steps(self):
         self.load('Part Number,Quantity,Location,AlternatePartNumber,SubstitutePartNumber,Retail Price,Cost Price\n00042,0,Rack A,ALT-9,SUB-9,1250.50,800.25\nP-2,3,Rack B,ALT-2,SUB-2,20,10\n')
-        wait_for(lambda: self.window.import_button.isEnabled())
+        wait_for(lambda: self.service.plan is not None and not self.service.busy and self.window.import_button.isEnabled())
         self.assertTrue(self.window.include_zero.isChecked())
         self.assertEqual(len(self.service.plan.rows), 2)
         self.assertEqual(self.window.import_table.columnCount(), 7)
         self.window.include_zero.setChecked(False)
-        wait_for(lambda: self.window.import_button.isEnabled())
+        wait_for(lambda: self.service.plan is not None and not self.service.busy and self.window.import_button.isEnabled())
         self.assertEqual([row['sku'] for row in self.service.plan.rows], ['P-2'])
         self.window.include_zero.setChecked(True)
-        wait_for(lambda: self.window.import_button.isEnabled())
+        wait_for(lambda: self.service.plan is not None and not self.service.busy and self.window.import_button.isEnabled())
         self.window.import_button.click()
         wait_for(lambda: not self.service.busy and self.service.summary['item_count'] == 2)
         self.window.stock_table.selectRow(0)
@@ -154,7 +225,7 @@ class InventoryUiTests(unittest.TestCase):
         self.seed([stock()])
         self.window.tabs.setCurrentIndex(1)
         self.window.load_file(path)
-        wait_for(lambda: self.window.import_button.isEnabled())
+        wait_for(lambda: self.service.plan is not None and not self.service.busy and self.window.import_button.isEnabled())
         self.assertTrue(self.window.optional_mapping.isHidden())
         self.assertTrue(self.window.review_button.isHidden())
         self.assertEqual(self.window.import_table.columnCount(), 3)
@@ -174,15 +245,18 @@ class InventoryUiTests(unittest.TestCase):
         for field, column in [('sku', 0), ('quantity', 1), ('location', 2)]:
             combo = self.window.mapping[field]
             combo.setCurrentIndex(combo.findData(column))
-        wait_for(lambda: self.window.import_button.isEnabled())
+        wait_for(lambda: self.service.plan is not None and not self.service.busy and self.window.import_button.isEnabled())
         self.assertEqual(self.service.plan.rows[0], {'sku': 'P-7', 'quantity': 5, 'location': 'Rack 8'})
         self.assertEqual(self.service.summary['item_count'], 0)
 
     def test_automatic_check_blocks_invalid_rows(self):
+        self.window.skip_invalid_quantities.setChecked(False)
         self.load('SKU,Qty,Location\nP-7,-1,Rack 8\n')
         wait_for(lambda: self.service.plan is not None and not self.service.busy)
-        self.assertFalse(self.window.import_button.isEnabled())
+        self.assertTrue(self.window.import_button.isEnabled())
         self.assertIn('nonnegative', self.window.review_text.toPlainText())
+        self.window.import_button.click()
+        self.assertIn('Import blocked:', self.window.import_hint.text())
         self.assertEqual(self.service.summary['item_count'], 0)
 
     def test_file_review_is_explicit_and_stock_search_keeps_leading_zeroes(self):
@@ -205,13 +279,14 @@ class InventoryUiTests(unittest.TestCase):
         self.assertEqual(self.service.context("Which items should we restock?")[0]["sku"], "00042")
 
     def test_invalid_rows_show_errors_without_replacing_existing_stock(self):
+        self.window.skip_invalid_quantities.setChecked(False)
         self.seed([stock()])
         errors = []
         self.service.error.connect(errors.append)
         self.load("SKU,Qty\n00042,-2\n")
         self.review()
         self.assertFalse(self.service.plan.valid)
-        self.assertFalse(self.window.import_button.isEnabled())
+        self.assertTrue(self.window.import_button.isEnabled())
         self.assertIn("nonnegative", self.window.review_text.toPlainText())
         self.assertEqual(InventoryStore(self.root / "local.sqlite").get("00042")["quantity"], 1)
         self.assertEqual(errors, [])
