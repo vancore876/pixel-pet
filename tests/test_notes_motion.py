@@ -64,6 +64,14 @@ class NotesTests(unittest.TestCase):
         self.assertIsNone(store.next_notification(20001)[0])
         self.assertEqual(store.find(n["id"])["next_due"], 21800)
 
+    def test_highlights_survive_backup_and_ignore_invalid_markers(self):
+        note = self.store.add('Parts', 'AB-123', details={'highlights': ['AB-123', 'ab-123', None, 'x' * 201, 'two\nlines']})
+        self.assertEqual(note['highlights'], ['AB-123'])
+        with tempfile.TemporaryDirectory() as folder:
+            restored = NoteStore(Path(folder) / 'notes.json')
+            restored.import_backup(self.store.export_json())
+            self.assertEqual(restored.find(note['id'])['highlights'], ['AB-123'])
+
     def test_stale_writer_cannot_erase_saved_notes(self):
         stale = NoteStore(self.path)
         saved = self.store.add('Keep', 'Saved by the first writer')

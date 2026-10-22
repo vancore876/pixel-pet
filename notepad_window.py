@@ -17,6 +17,7 @@ from config import clamp_position
 from notes import current_guidance, ORDER_STATUSES, business_summary, note_search_text, portable_notebook_state
 from auto_parts import (STOCK_STATUSES, CHECKLIST_TEMPLATES, money_to_cents, format_money,
                         order_totals, dashboard_summary, parts_to_source, customer_history)
+from note_highlights import MAX_HIGHLIGHTS, validated_highlights, render_highlights
 from sliding_text import SlidingText
 from content_intake import IntakeService, cleanup_result, own_text_file
 from notebook_backup import notebook_snapshot
@@ -72,6 +73,7 @@ class NotepadWindow(QDialog):
         self._server_status = ('Sign in to share orders and checklists.', False)
         self.business_pending = False
         self._loaded_note_signature = None
+        self.highlight_terms = []
         self.loading = False
         self.dirty = False
         self.import_result = None
@@ -278,6 +280,20 @@ class NotepadWindow(QDialog):
             find_layout.addWidget(button)
         self.find_bar.hide()
         form.addWidget(self.find_bar)
+        highlight_bar = QHBoxLayout()
+        self.highlight_button = QPushButton('Highlight')
+        self.highlight_button.setToolTip('Select a part number or phrase, then highlight its occurrences in this note. Save to keep it.')
+        self.highlight_button.setFocusPolicy(Qt.NoFocus)
+        self.highlight_button.clicked.connect(self.highlight_selection)
+        self.remove_highlight_button = QPushButton('Remove highlight')
+        self.remove_highlight_button.setFocusPolicy(Qt.NoFocus)
+        self.remove_highlight_button.clicked.connect(self.remove_highlight_selection)
+        highlight_bar.addWidget(self.highlight_button)
+        highlight_bar.addWidget(self.remove_highlight_button)
+        highlight_bar.addStretch()
+        form.addLayout(highlight_bar)
+        self.body.selectionChanged.connect(self.update_highlight_buttons)
+        self.body.textChanged.connect(self.render_note_highlights)
         self.document_pages = QWidget()
         page_row = QHBoxLayout(self.document_pages)
         page_row.setContentsMargins(0, 0, 0, 0)
@@ -376,6 +392,7 @@ class NotepadWindow(QDialog):
         self.refresh()
         self.show_section('overview')
         self.update_buttons()
+        self.update_highlight_buttons()
 
     def make_page(self, scroll=False):
         page = QWidget()
@@ -1881,7 +1898,7 @@ class NotepadWindow(QDialog):
 
     @staticmethod
     def content_signature(note):
-        return (note.get('title'), note.get('body'), note.get('document_id'), note.get('body_sha256'))
+        return (note.get('title'), note.get('body'), note.get('document_id'), note.get('body_sha256'), tuple(note.get('highlights', [])))
 
     def maybe_leave(self):
         if self.business_pending:
@@ -1910,7 +1927,9 @@ class NotepadWindow(QDialog):
         self.body.setReadOnly(False)
         self.loading = True
         self.title.clear()
+        self.highlight_terms = []
         self.body.clear()
+        self.render_note_highlights()
         self.load_business()
         self.repeat.setValue(self.settings["note_repeat_minutes"])
         self.scheduled.setChecked(False)
@@ -1947,6 +1966,7 @@ class NotepadWindow(QDialog):
             self.shared_business.mark_editing(identifier if self.uses_business_server(note) else None)
         self.loading = True
         self.title.setText(note["title"])
+        self.highlight_terms = list(note.get("highlights", []))
         self.body.setPlainText(note['body'])
         self.body.setReadOnly(bool(note.get('document_id')))
         self.document_pages.setVisible(bool(note.get('document_id')))
@@ -1973,6 +1993,7 @@ class NotepadWindow(QDialog):
             self.due.setDateTime(QDateTime.fromSecsSinceEpoch(int(due)))
         self.loading = False
         self.dirty = False
+        self.render_note_highlights()
         self._loaded_content_signature = self.content_signature(note)
         self.update_buttons()
         self.refresh_advice()
@@ -1985,6 +2006,43 @@ class NotepadWindow(QDialog):
             except (OSError, ValueError) as exc:
                 self.status.setText('The note is open. Its read receipt will need another sync: ' + str(exc))
         self.refresh_team_status()
+
+    def selected_highlight_term(self):
+        terms = validated_highlights([self.body.textCursor().selectedText()])
+        return terms[0] if terms else ''
+
+    def update_highlight_buttons(self):
+        term = self.selected_highlight_term().casefold()
+        present = term in {value.casefold() for value in self.highlight_terms}
+        self.highlight_button.setEnabled(bool(term) and not present and len(self.highlight_terms) < MAX_HIGHLIGHTS)
+        self.remove_highlight_button.setEnabled(bool(term) and present)
+
+    def render_note_highlights(self):
+        render_highlights(self.body, self.highlight_terms)
+        self.update_highlight_buttons()
+
+    def highlight_selection(self):
+        term = self.selected_highlight_term()
+        if not term or len(self.highlight_terms) >= MAX_HIGHLIGHTS:
+            return
+        updated = validated_highlights([*self.highlight_terms, term])
+        if updated != self.highlight_terms:
+            self.highlight_terms = updated
+            self.render_note_highlights()
+            self.mark_dirty()
+            cursor = self.body.textCursor()
+            cursor.clearSelection()
+            self.body.setTextCursor(cursor)
+            self.status.setText('Highlighted this part number or phrase throughout the note. Save to keep the highlight.')
+
+    def remove_highlight_selection(self):
+        term = self.selected_highlight_term().casefold()
+        updated = [value for value in self.highlight_terms if value.casefold() != term]
+        if updated != self.highlight_terms:
+            self.highlight_terms = updated
+            self.render_note_highlights()
+            self.mark_dirty()
+            self.status.setText('Highlight removed. Save to keep the change.')
 
     def open_find(self):
         self.sections.setCurrentRow(self.section_indices['writing'])
@@ -2039,6 +2097,7 @@ class NotepadWindow(QDialog):
             self.body.setPlainText(text)
         if not text:
             self.status.setText('The full document is unavailable. Keep your notebook files and restore a desktop ZIP backup.')
+        self.render_note_highlights()
         self.document_previous.setEnabled(value > 1)
         self.document_next.setEnabled(value < self.document_page.maximum())
 
@@ -2073,6 +2132,7 @@ class NotepadWindow(QDialog):
         try:
             due = self.due.dateTime().toSecsSinceEpoch() if self.scheduled.isChecked() else None
             details = self.collect_business()
+            details["highlights"] = list(self.highlight_terms)
             if details['kind'] in ('list', 'order') and not details['checklist'] and not self.body.toPlainText().strip():
                 raise ValueError('Add at least one item or write the entry details before saving.')
             title = self.title.text().strip() or (details['order_ref'] or ('Order for ' + (details['customer'] or 'Walk-in')) if details['kind'] == 'order' else 'Checklist' if details['kind'] == 'list' else '')

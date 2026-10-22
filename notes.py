@@ -15,6 +15,7 @@ import time
 import uuid
 from PySide6.QtCore import QObject, QTimer, Signal, QFileSystemWatcher, QLockFile
 
+from note_highlights import validated_highlights
 from fuzzy_search import search_words, typo_score
 from memory import contains_secret
 from auto_parts import MAX_PAYMENT_CENTS, MAX_UNIT_PRICE_CENTS, STOCK_STATUSES, dashboard_summary, validated_cents
@@ -282,6 +283,7 @@ class NoteStore:
                 raise ValueError('The notebook contains invalid document metadata.')
             document = {'document_id': document_id, 'body_characters': characters, 'body_sha256': digest}
         return {"id": identifier, "title": title, "body": body, "created": created,
+                "highlights": validated_highlights(data.get("highlights", [])),
                 "updated": timestamp("updated") or created,
                 'written': timestamp('written') or timestamp('updated') or created,
                 "next_due": timestamp("next_due"), "repeat_minutes": repeat,

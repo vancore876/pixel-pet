@@ -119,9 +119,12 @@ def apply_workspace_window_controls(widget):
     if (widget.windowType() not in (Qt.Window, Qt.Dialog)
             or current & Qt.FramelessWindowHint):
         return False
-    desired = ((current | Qt.WindowTitleHint | Qt.WindowSystemMenuHint
-                | Qt.WindowMinimizeButtonHint | Qt.WindowMaximizeButtonHint
-                | Qt.WindowCloseButtonHint) & ~Qt.WindowContextHelpButtonHint)
+    # PySide's enum complement can truncate higher flag bits, including Close.
+    # Mask as integers so removing Help cannot accidentally disable the X button.
+    desired = Qt.WindowType((int(current) | int(Qt.WindowTitleHint)
+                | int(Qt.WindowSystemMenuHint) | int(Qt.WindowMinimizeButtonHint)
+                | int(Qt.WindowMaximizeButtonHint) | int(Qt.WindowCloseButtonHint))
+                & ~int(Qt.WindowContextHelpButtonHint))
     if desired == current:
         return False
     visible, state, position = widget.isVisible(), widget.windowState(), widget.pos()

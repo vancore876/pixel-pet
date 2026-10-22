@@ -56,6 +56,8 @@ def shared_note_payload(note):
                'repeat_minutes': note['repeat_minutes'], 'due_at': due, 'done': note['done'],
                'recipients': copy.deepcopy(note.get('team_recipients', [])),
                **{key: copy.deepcopy(note.get(key)) for key in BUSINESS_FIELDS}}
+    if note.get('highlights'):
+        payload['highlights'] = copy.deepcopy(note['highlights'])
     if '*' in payload['recipients']:
         payload['recipients'] = []
     if note.get('document_id'):
@@ -916,6 +918,7 @@ class TeamService(QObject):
                         continue
                     payload = row['payload']
                     data = {**(current or {}), 'id': row['local_id'], 'title': payload.get('title', ''), 'body': payload.get('body', ''),
+                            'highlights': payload.get('highlights', []),
                             'created': payload.get('created', time.time()), 'written': payload.get('written', payload.get('created', time.time())),
                             'repeat_minutes': payload.get('repeat_minutes', 30), 'done': payload.get('done', False),
                             **{key: payload.get(key) for key in BUSINESS_FIELDS},

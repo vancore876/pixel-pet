@@ -77,13 +77,15 @@ class TeamServiceTests(unittest.TestCase):
         due = time.time() + 3600
         note = an.save_note(None, 'Customer pickup', 'Bring order to reception.', 30, due,
                             details={'kind': 'order', 'customer': 'Customer A', 'order_ref': 'ORDER-1',
-                                     'order_due': due, 'team_recipients': [bt.identity()['id']]})
+                                     'order_due': due, 'team_recipients': [bt.identity()['id']],
+                                     'highlights': ['reception']})
         an.modify(note['id'], pinned=True, pin_position=[30, 50], source='C:/private/list.txt')
         self.sync(at)
         self.sync(bt)
         incoming = b.find(note['id'])
         self.assertIsNotNone(incoming)
         self.assertEqual(incoming['customer'], 'Customer A')
+        self.assertEqual(incoming['highlights'], ['reception'])
         self.assertEqual(incoming['team_due_at'], due)
         self.assertFalse(incoming['unannounced'])
         self.assertIsNone(incoming['next_due'])
@@ -93,6 +95,10 @@ class TeamServiceTests(unittest.TestCase):
         self.assertEqual(a.find(note['id'])['pin_position'], [30, 50])
         for event in self.wire():
             self.assertNotIn('C:/private', str(event))
+        an.modify(note['id'], highlights=[])
+        self.sync(at)
+        self.sync(bt)
+        self.assertEqual(b.find(note['id'])['highlights'], [])
         self.assertEqual(ae + be, [])
 
     def test_cache_pin_receipt_and_personal_snooze_changes_do_not_publish_note_versions(self):

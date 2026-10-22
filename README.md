@@ -949,3 +949,5 @@ use scripted target data and the notebook examples use temporary test notes.
 Press **Ctrl+F** in the notebook to find text in the open note, including later pages of imported documents. Press **Enter** or **F3** for the next match, or choose **Previous**. Use **Search entries** to search across saved notes.
 
 Notebook saves now reject stale writers instead of overwriting changes from another window or process. Before replacing a saved notebook, Jeffery keeps its previous metadata in `notes.previous.json` beside `notes.json`. An unreadable notebook stays intact and blocks ordinary saves; use the notebook backup import to recover it. Keep complete ZIP backups for imported documents, since the previous JSON copy contains only their previews and references.
+
+Select an important part number or short phrase in Writing, click **Highlight**, then save the note. Matching occurrences use a yellow background, including on imported document pages. Reselect the same text and click **Remove highlight** to clear it. Highlights stay in notebook backups and shared-folder note sync. Native workspace X buttons also remain enabled when Help-button decorations are removed.
