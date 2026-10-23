@@ -40,6 +40,43 @@ class ScaledNotepadTests(unittest.TestCase):
         self.window.close()
         self.temp.cleanup()
 
+    def test_order_inventory_refresh_does_not_change_saved_stock_status(self):
+        from PySide6.QtCore import QObject, Signal
+        class Stock(QObject):
+            changed = Signal()
+            scope_reset = Signal()
+            status_changed = Signal(str)
+            message = 'Available: 3'
+            def availability(self, part_number, description, quantity):
+                return self.message
+        inventory = Stock()
+        self.window.set_inventory_service(inventory)
+        self.window.insert_checklist_row({'text': 'Brake pads', 'part_number': 'P1',
+                                         'stock_status': 'to_order'}, self.window.order_table)
+        self.assertEqual(self.window.order_table.item(0, 9).text(), 'Available: 3')
+        inventory.message = 'Sign in to check inventory'
+        inventory.scope_reset.emit()
+        self.assertEqual(self.window.order_table.item(0, 9).text(), inventory.message)
+        self.assertEqual(self.window.order_table.cellWidget(0, 7).currentData(), 'to_order')
+
+    def test_list_highlight_and_contributor_survive_note_validation(self):
+        note = NoteStore.validate_note({'id': 'shared-list', 'title': 'Parts', 'kind': 'list',
+            'highlights': ['Brake pads'], 'checklist': [{'id': 'pads', 'text': 'Brake pads',
+            'added_by': 'Alice', 'added_at': 1800000000}]})
+        self.window.highlight_terms = note['highlights']
+        self.window.insert_checklist_row(note['checklist'][0], self.window.task_table)
+        self.assertEqual(self.window.task_table.item(0, 3).text(), 'Alice')
+        self.assertEqual(self.window.task_table.item(0, 1).background().color().name(), '#f6d365')
+        self.assertEqual(self.window.collect_items(self.window.task_table)[0]['added_by'], 'Alice')
+
+    def test_writing_uses_office_server_but_full_documents_keep_document_storage(self):
+        from types import SimpleNamespace
+        self.window.shared_business = SimpleNamespace(_cache_ids=set())
+        self.assertTrue(self.window.uses_business_server({'id': 'writing', 'kind': 'note'}))
+        self.assertFalse(self.window.uses_business_server({'id': 'document', 'kind': 'note', 'document_id': 'full'}))
+        self.assertFalse(self.window.uses_business_server({'id': 'folder-note', 'kind': 'note', 'team_workspace_id': 'folder'}))
+        self.window.shared_business = None
+
     def save_large_import(self):
         result = _result('pdf', 'Long appointment guide', self.text, filename='guide.pdf')
         self.window.imported(result)

@@ -267,6 +267,10 @@ class NoteStore:
                               'bin_location': clean_text(row.get('bin_location'), 60),
                               'unit_price_cents': validated_cents(row.get('unit_price_cents'), MAX_UNIT_PRICE_CENTS),
                               'stock_status': row.get('stock_status') if row.get('stock_status') in STOCK_STATUSES else 'check_stock'})
+            if isinstance(row.get('added_by'), str):
+                checklist[-1]['added_by'] = clean_text(row['added_by'], 100)
+            if type(row.get('added_at')) in (int, float) and math.isfinite(row['added_at']):
+                checklist[-1]['added_at'] = row['added_at']
         done = data.get('done') is True or kind == 'order' and status in ('delivered', 'cancelled')
         if kind == 'order' and done and status not in ('delivered', 'cancelled'):
             status = 'delivered'
@@ -283,6 +287,7 @@ class NoteStore:
                 raise ValueError('The notebook contains invalid document metadata.')
             document = {'document_id': document_id, 'body_characters': characters, 'body_sha256': digest}
         return {"id": identifier, "title": title, "body": body, "created": created,
+                'added_by': clean_text(data.get('added_by'), 100), 'added_at': timestamp('added_at'),
                 "highlights": validated_highlights(data.get("highlights", [])),
                 "updated": timestamp("updated") or created,
                 'written': timestamp('written') or timestamp('updated') or created,

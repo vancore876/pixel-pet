@@ -577,6 +577,28 @@ class ChatStore:
                 previous = json.loads(existing['entry_json'])
                 canonical['created'] = previous['created']
                 canonical['written'] = now if (previous['title'], previous['body']) != (canonical['title'], canonical['body']) else previous['written']
+            # The authenticated server actor owns attribution; submitted names
+            # cannot forge authorship or replace an existing row's creator.
+            previous_rows = {row['id']: row for row in previous.get('checklist', [])} if existing else {}
+            actor_name = connection.execute('SELECT username FROM users WHERE id=?', (actor_id,)).fetchone()[0]
+            canonical.pop('added_by', None)
+            canonical.pop('added_at', None)
+            if existing:
+                for key in ('added_by', 'added_at'):
+                    if key in previous:
+                        canonical[key] = previous[key]
+            else:
+                canonical.update(added_by=actor_name, added_at=now)
+            for row in canonical['checklist']:
+                old_row = previous_rows.get(row['id'])
+                row.pop('added_by', None)
+                row.pop('added_at', None)
+                if old_row is None:
+                    row.update(added_by=actor_name, added_at=now)
+                else:
+                    for key in ('added_by', 'added_at'):
+                        if key in old_row:
+                            row[key] = old_row[key]
             canonical['updated'] = now
             connection.execute('UPDATE business_state SET revision = revision + 1 WHERE id = 1')
             revision = connection.execute('SELECT revision FROM business_state WHERE id = 1').fetchone()[0]

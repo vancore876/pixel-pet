@@ -34,7 +34,7 @@ _EMPLOYEE_FIELDS = frozenset({
     "employee", "employees", "employee_id", "employee_name", "employee_roster",
     "roster", "inbox", "messages", "employee_messages", "private_messages",
     "sender", "sender_id", "sender_name", "recipient", "recipient_id", "recipients",
-    "delivery_receipts", "receipts", "workspace_path", "shared_folder", "share_path",
+    "delivery_receipts", "receipts", "workspace_path", "shared_folder", "share_path", "added_by",
 })
 _NOTE_CONTEXT_FIELDS = frozenset({
     "incomplete_notes", "notebook_references", "semantic_notebook_references",

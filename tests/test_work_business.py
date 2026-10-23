@@ -55,7 +55,7 @@ class PortableBusinessSchemaTests(unittest.TestCase):
         self.assertEqual((result['ai_guidance'], result['reminder_history'], result['unannounced']), ({}, [], False))
 
     def test_schema_rejects_documents_unknown_fields_and_invalid_dates(self):
-        for changes in ({'document_id': ''}, {'admin': True}, {'kind': 'note'}, {'created': float('nan')},
+        for changes in ({'document_id': ''}, {'admin': True}, {'kind': 'unsupported'}, {'created': float('nan')},
                         {'created': 100}, {'created': 10**1000}, {'next_due': True}, {'order_due': -1},
                         {'currency': 'USD'}, {'payment_received_cents': True}, {'payment_received_cents': -1},
                         {'body': '\x00'}, {'title': '\ud800'}, {'priority': 'express'}):
@@ -148,6 +148,24 @@ class SharedBusinessHTTPTests(unittest.TestCase):
         data = entry() if data is None else data
         return self.request('/api/business/' + data['id'], method='PUT', token=token,
                             data={'expected_revision': expected, 'entry': data})
+
+    def test_shared_highlights_and_server_owned_row_authorship(self):
+        data = entry(highlights=['PAD-123'])
+        data['checklist'][0]['added_by'] = 'forged'
+        status, first, _ = self.save(data)
+        self.assertEqual(status, 200)
+        self.assertEqual(first['entry']['highlights'], ['PAD-123'])
+        self.assertEqual(first['entry']['checklist'][0]['added_by'], 'business_alice')
+        changed = first['entry']
+        changed['checklist'][0]['added_by'] = 'forged again'
+        changed['checklist'].append({'id': 'new', 'text': 'Oil filter'})
+        changed['highlights'] = ['Oil filter']
+        status, second, _ = self.save(changed, expected=first['revision'], token='bob')
+        self.assertEqual(status, 200)
+        self.assertEqual(second['entry']['checklist'][0]['added_by'], 'business_alice')
+        self.assertEqual(second['entry']['checklist'][1]['added_by'], 'business_bob')
+        _, records, _ = self.request('/api/business', token='alice')
+        self.assertIn('Oil filter', json.dumps(records))
 
     def test_all_operations_require_an_active_individual_login(self):
         data = entry()
@@ -254,7 +272,20 @@ class SharedBusinessHTTPTests(unittest.TestCase):
         saved = self.save(data)[1]
         self.assertEqual(saved['entry']['kind'], 'list')
         self.assertEqual(self.request('/api/business', token='bob')[1]['entries'][0]['entry']['title'], 'Opening')
-        self.assertEqual(self.save(entry(kind='note'))[0], 422)
+        self.assertEqual(self.save(entry(kind='note'))[0], 200)
+
+    def test_writing_notes_share_body_highlights_and_original_author(self):
+        data = entry(kind='note', title='Parts to check', body='PAD-123 for customer',
+                     highlights=['PAD-123'], checklist=[], added_by='forged')
+        status, first, _ = self.save(data)
+        self.assertEqual(status, 200)
+        self.assertEqual(first['entry']['added_by'], 'business_alice')
+        updated = {**first['entry'], 'body': 'PAD-123 checked by coworker', 'added_by': 'forged'}
+        status, second, _ = self.save(updated, expected=first['revision'], token='bob')
+        self.assertEqual(status, 200)
+        self.assertEqual(second['entry']['added_by'], 'business_alice')
+        self.assertEqual(second['entry']['highlights'], ['PAD-123'])
+        self.assertEqual(self.request('/api/business', token='alice')[1]['entries'][0], second)
 
     def test_capacity_can_be_released_by_deleting_older_shared_entries(self):
         self.app.state.store.max_business_entries = 2

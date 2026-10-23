@@ -1,5 +1,15 @@
 # Jeffery Work Chat
 
+Writing notes, shared orders and checklists save highlights on the office server. Select a list
+item or text in the note, click **Highlight**, then **Save**. Coworkers receive
+the highlights through normal synchronization. Concurrent edits require reloading
+the latest version before saving.
+
+Each newly saved note and list or order item shows **Added by**, assigned by the server
+from the signed-in employee. Editing an item keeps its original contributor.
+Older items without recorded attribution show **Unknown**. Update and restart
+the office server and desktop clients to use these fields.
+
 Work Chat gives each coworker a username and password, a shared **Team Room**,
 and private direct messages. The same login also enables shared Famous Twins
 orders and checklists in desktop Jeffery. A Python service stores accounts,
@@ -226,7 +236,7 @@ Chat usernames are separate from Windows logins. Different Windows user
 profiles keep local notebooks and settings separate. If coworkers use the
 same Windows profile, they share those local files and must **Sign out** of
 Work Chat between people. Each person signs in with their own chat account;
-changing the chat account does not change personal writing. Shared business
+Writing notes are now office-wide. Shared notebook
 records use a disposable local cache that is cleared on sign-out/account
 changes and reloaded from the server on sign-in.
 
@@ -271,15 +281,20 @@ for JMD totals, quotes, supplier/bin details, manual sourcing, customer history,
 pickup summaries, templates, and animations.
 
 - Every authenticated coworker can read, edit, complete, and delete every shared
-  order/checklist. These are team business records; direct-message privacy does
+  Writing note, order, and checklist. These are team business records; direct-message privacy does
   not apply to them.
 - Signing in loads records from the office server. New and edited records need
   a live connection to save; changes appear on other signed-in desktop clients
   approximately every 2.5 seconds. The browser currently offers chat, not the
   desktop business workspace.
-- Personal Writing entries and full documents remain local. Existing local
-  orders/checklists are not uploaded at login. Opening one and choosing **Save
-  changes** explicitly publishes it to coworkers.
+- Existing plain-text Writing notes upload to the office server after sign-in.
+  An open editor waits for **Save**; failed uploads preserve the local original.
+  The employee who first shares an older note is recorded as its contributor;
+  the app cannot recover its historical author. New notes save directly to the
+  office server, with shared highlights and author attribution. Full imported
+  documents retain their separate local document storage. Notes already assigned
+  to folder-based team synchronization retain that ownership. Existing local
+  orders/checklists are published when saved.
 - Concurrent changes use version checks. A stale save/delete returns a conflict
   instead of overwriting another coworker. An unsaved editor draft is preserved
   in the current window. **Reload saved** appears beside the save controls after

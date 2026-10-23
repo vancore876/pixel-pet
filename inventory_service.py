@@ -747,6 +747,29 @@ class InventoryService(QObject):
         self._busy(False)
         self._set_status("Inventory operation cancelled. Refresh to check current office stock.")
 
+    def availability(self, part_number="", description="", quantity=1):
+        """Read the current account's imported stock without changing an order."""
+        if self.shared and (not self.token or not self.user):
+            return "Sign in to check inventory"
+        if not self.catalog:
+            return "No inventory loaded"
+        code = str(part_number).strip().casefold()
+        name = str(description).strip().casefold()
+        matches = [row for row in self.catalog if
+                   (code and any(str(row.get(key, "")).casefold() == code
+                                 for key in ("sku", "barcode", "alternate_part_number", "substitute_part_number")))
+                   or (not code and name and str(row.get("description", "")).strip().casefold() == name)]
+        if not matches:
+            result = "Not found in imported inventory"
+        elif len(matches) > 1:
+            result = "Multiple matches; check part number"
+        else:
+            row = matches[0]
+            count = int(row.get("quantity", 0))
+            state = "Out of stock" if count == 0 else ("Available" if count >= quantity else "Insufficient stock")
+            result = f"{state}: {count} available · {row.get('sku', '')} · {row.get('location', '')}"
+        return result + (" · Offline cached stock" if self.shared and not self.online else " · Imported stock snapshot")
+
     def context(self, query="", limit=8):
         """Return only memory-cached stock; callers must apply work AI consent."""
         if self.shared and (not self.token or not self.user):

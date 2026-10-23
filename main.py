@@ -139,6 +139,7 @@ class BuddyApp(QObject):
         self.inventory.scan_ready.connect(self.stock_scan_feedback)
         self.inventory.movement_finished.connect(self.stock_movement_feedback)
         self.chat.inventory_context = self.inventory_context
+        self.notepad.set_inventory_service(self.inventory)
         self.home = HomeWindow(self.note_service, self.settings, self.focus)
         self.home.navigate_requested.connect(self.home_navigate)
         self.home.create_requested.connect(self.new_business_entry)
@@ -627,10 +628,11 @@ class BuddyApp(QObject):
         if not self.settings['inventory_share_with_ai']:
             return {}
         records = self.inventory.context(query, limit=8)
-        if not records:
-            return {}
         return {'items': records, 'source': 'Shared office inventory' if self.inventory.shared else 'Local inventory',
                 'status': self.inventory.status, 'last_import_at': self.inventory.summary.get('last_import_at'),
+                'summary': self.inventory.summary,
+                'results_are_partial': True,
+                'lookup_note': 'These are bounded search results, not the full catalogue. No match means not found, not proof that the business does not carry a part.',
                 'live_stock_count': False}
 
     def review_web_source(self, result):

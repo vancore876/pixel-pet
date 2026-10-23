@@ -8,7 +8,7 @@ import shutil
 import tempfile
 from pathlib import Path
 from PySide6.QtCore import Qt, Signal, QDateTime, QTimer, QSignalBlocker, QEvent, QSize
-from PySide6.QtGui import QKeySequence, QShortcut, QTextCursor
+from PySide6.QtGui import QKeySequence, QShortcut, QTextCursor, QColor, QBrush
 from PySide6.QtWidgets import (QApplication, QDialog, QWidget, QVBoxLayout, QHBoxLayout,
     QFormLayout, QSplitter, QListWidget, QListWidgetItem, QLabel, QLineEdit,
     QPlainTextEdit, QPushButton, QCheckBox, QSpinBox, QDateTimeEdit, QFileDialog,
@@ -128,6 +128,9 @@ class NotepadWindow(QDialog):
         self.summary.setObjectName('hint')
         self.summary.setWordWrap(True)
         self.summary.hide()
+        self.note_author = QLabel('')
+        self.note_author.setObjectName('hint')
+        layout.addWidget(self.note_author)
         self.workspace_splitter = QSplitter()
         splitter = self.workspace_splitter
         self.navigation_panel = QWidget()
@@ -392,6 +395,8 @@ class NotepadWindow(QDialog):
         self.refresh()
         self.show_section('overview')
         self.update_buttons()
+        for table in (self.task_table, self.order_table):
+            table.itemSelectionChanged.connect(self.update_highlight_buttons)
         self.update_highlight_buttons()
 
     def make_page(self, scroll=False):
@@ -640,8 +645,8 @@ class NotepadWindow(QDialog):
         self.checklist_progress = QProgressBar()
         self.checklist_progress.setFormat('No tasks yet')
         box.addWidget(self.checklist_progress)
-        self.task_table = QTableWidget(0, 3)
-        self.task_table.setHorizontalHeaderLabels(['Done', 'Task', 'Qty'])
+        self.task_table = QTableWidget(0, 4)
+        self.task_table.setHorizontalHeaderLabels(['Done', 'Task', 'Qty', 'Added by'])
         self.task_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.task_table.verticalHeader().hide()
         self.task_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
@@ -742,8 +747,10 @@ class NotepadWindow(QDialog):
         parts_heading.setObjectName('sectionTitle')
         box.addWidget(parts_heading)
         self.order_fields = [self.customer, self.contact, self.order_ref, self.order_status, self.order_timed, self.order_due]
-        self.order_table = QTableWidget(0, 9)
-        self.order_table.setHorizontalHeaderLabels(['Done', 'Part / description', 'Qty', 'Part no.', 'Supplier', 'Bin', 'Unit JMD', 'Stock', 'Line JMD'])
+        self.order_table = QTableWidget(0, 11)
+        self.order_table.setHorizontalHeaderLabels(['Done', 'Part / description', 'Qty', 'Part no.', 'Supplier', 'Bin', 'Unit JMD', 'Stock', 'Line JMD', 'Inventory availability', 'Added by'])
+        self.order_table.setColumnWidth(9, 290)
+        self.order_table.itemChanged.connect(self.refresh_inventory_availability)
         self.order_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.order_table.verticalHeader().hide()
         self.order_table.setMinimumHeight(170)
@@ -1259,13 +1266,15 @@ class NotepadWindow(QDialog):
             return False
         note = self.service.store.find(self.editing_id) if note is None else note
         kind = kind or (note or {}).get('kind') or self.kind.currentData()
-        if kind not in ('list', 'order'):
+        if kind not in ('list', 'order', 'note') or (note and note.get('document_id')):
             return False
         # Server ownership remains stable when folder sync is also configured.
         if note and note['id'] in getattr(self.shared_business, '_cache_ids', set()):
             return True
         if note and (note.get('team_id') or note.get('team_workspace_id')):
             return False
+        if kind == 'note':
+            return True
         return not bool(self.team_service is not None and self.team_service.enabled)
 
     def selected_team_recipients(self):
@@ -1382,6 +1391,32 @@ class NotepadWindow(QDialog):
                     field.setPlainText(text)
         self.mark_dirty()
 
+    def set_inventory_service(self, inventory):
+        self.inventory_service = inventory
+        inventory.changed.connect(self.refresh_inventory_availability)
+        inventory.scope_reset.connect(self.refresh_inventory_availability)
+        inventory.status_changed.connect(self.refresh_inventory_availability)
+        self.refresh_inventory_availability()
+
+    def refresh_inventory_availability(self, *args):
+        inventory = getattr(self, 'inventory_service', None)
+        if inventory is None:
+            return
+        with QSignalBlocker(self.order_table):
+            for row in range(self.order_table.rowCount()):
+                def cell(column):
+                    item = self.order_table.item(row, column)
+                    return item.text().strip() if item else ''
+                try:
+                    quantity = int(cell(2))
+                except ValueError:
+                    quantity = 1
+                text = inventory.availability(cell(3), cell(1), quantity)
+                item = QTableWidgetItem(text)
+                item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+                item.setToolTip(text + '\nUses the same confirmed stock import as Inventory and Ask Jeffery. Order status is saved separately.')
+                self.order_table.setItem(row, 9, item)
+
     def add_checklist_item(self):
         text = self.item_text.text().strip()
         if not text or self.checklist.rowCount() >= 100:
@@ -1406,6 +1441,9 @@ class NotepadWindow(QDialog):
         table.setItem(row, 0, done)
         table.setItem(row, 1, QTableWidgetItem(item.get('text', '')))
         table.setItem(row, 2, QTableWidgetItem(str(item.get('quantity', 1))))
+        author = QTableWidgetItem(item.get('added_by') or 'Unknown')
+        author.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+        table.setItem(row, 10 if table is self.order_table else 3, author)
         if table is self.order_table:
             for column, key in ((3, 'part_number'), (4, 'supplier'), (5, 'bin_location')):
                 table.setItem(row, column, QTableWidgetItem(item.get(key, '')))
@@ -1419,6 +1457,8 @@ class NotepadWindow(QDialog):
             total = QTableWidgetItem('')
             total.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
             table.setItem(row, 8, total)
+            self.refresh_inventory_availability()
+        self.render_note_highlights()
 
     def add_order_item(self):
         text = self.part_text.text().strip()
@@ -1918,6 +1958,7 @@ class NotepadWindow(QDialog):
         if not self.maybe_leave():
             return False
         self.editing_id = None
+        self.note_author.clear()
         self._loaded_content_signature = None
         self.reload_button.hide()
         self._loaded_note_signature = None
@@ -1961,6 +2002,7 @@ class NotepadWindow(QDialog):
         if not note:
             return
         self.editing_id = identifier
+        self.note_author.setText('Added by: ' + (note.get('added_by') or 'Unknown'))
         self.reload_button.hide()
         if self.shared_business is not None:
             self.shared_business.mark_editing(identifier if self.uses_business_server(note) else None)
@@ -2009,6 +2051,12 @@ class NotepadWindow(QDialog):
 
     def selected_highlight_term(self):
         terms = validated_highlights([self.body.textCursor().selectedText()])
+        if not terms:
+            table = self.order_table if self.kind.currentData() == 'order' else self.task_table
+            selected = table.selectedItems()
+            if selected:
+                cell = table.item(selected[0].row(), 1)
+                terms = validated_highlights([cell.text()]) if cell else []
         return terms[0] if terms else ''
 
     def update_highlight_buttons(self):
@@ -2019,6 +2067,15 @@ class NotepadWindow(QDialog):
 
     def render_note_highlights(self):
         render_highlights(self.body, self.highlight_terms)
+        for table in (self.task_table, self.order_table):
+            with QSignalBlocker(table):
+                for row in range(table.rowCount()):
+                    for column in (1, 3) if table is self.order_table else (1,):
+                        cell = table.item(row, column)
+                        if cell:
+                            marked = any(term.casefold() in cell.text().casefold() for term in self.highlight_terms)
+                            cell.setBackground(QBrush(QColor('#f6d365')) if marked else QBrush())
+                            cell.setForeground(QBrush(QColor('#202020')) if marked else QBrush())
         self.update_highlight_buttons()
 
     def highlight_selection(self):
@@ -2109,6 +2166,7 @@ class NotepadWindow(QDialog):
         self.update_buttons()
 
     def finish_saved_note(self, note, was_document=False):
+        self.note_author.setText('Added by: ' + (note.get('added_by') or 'Unknown'))
         self.loading = True
         self.title.setText(note['title'])
         self.loading = False
@@ -2137,8 +2195,6 @@ class NotepadWindow(QDialog):
                 raise ValueError('Add at least one item or write the entry details before saving.')
             title = self.title.text().strip() or (details['order_ref'] or ('Order for ' + (details['customer'] or 'Walk-in')) if details['kind'] == 'order' else 'Checklist' if details['kind'] == 'list' else '')
             current = self.service.store.find(self.editing_id)
-            if current and current['kind'] in ('list', 'order') and details['kind'] == 'note' and self.uses_business_server(current):
-                raise ValueError('Shared orders and checklists keep their business type. Create a new Writing entry for personal notes.')
             was_document = bool(current and current.get('document_id'))
             body = current['body'] if was_document else self.body.toPlainText()
             if len(body) > 10000 and (self.intake.busy or self.transfer.busy):

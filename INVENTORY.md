@@ -81,6 +81,20 @@ from Excel before importing a workbook that uses formulas.
 
 ## Find items and plan restocking
 
+Notepad customer orders show an **Inventory availability** column from this same
+confirmed CSV/Excel import. Exact part numbers, barcodes, alternate numbers, or
+substitute numbers take priority; without a number, the description must match
+exactly. The check compares the requested quantity with saved stock and shows
+available, insufficient, out of stock, multiple matches, or not found. Not found
+means absent from the imported list, not proof the business does not carry it.
+Offline checks are labelled as cached stock. These checks do not change order
+statuses or deduct stock.
+
+Ask Jeffery uses the same imported catalogue when inventory sharing with AI is
+enabled in Settings. It receives relevant matches and catalogue totals, rather
+than uploading the full file. Confirm an import in Inventory first; editing the
+original CSV alone does not update the saved stock snapshot.
+
 Search by part number, description, location, or supplier. **Needs restocking**
 shows items whose quantity is at or below their reorder point. The suggested
 quantity uses the larger of the configured reorder quantity or the amount

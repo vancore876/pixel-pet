@@ -18,10 +18,10 @@ NOTE_FIELDS = {
     'done', 'pinned', 'pin_position', 'unannounced', 'source', 'document_source',
     'ai_guidance', 'reminder_history', 'kind', 'customer', 'contact', 'order_ref',
     'order_status', 'order_due', 'vehicle', 'registration', 'vin', 'priority',
-    'order_type', 'currency', 'payment_received_cents', 'checklist',
+    'order_type', 'currency', 'payment_received_cents', 'checklist', 'highlights', 'added_by', 'added_at',
 }
 ROW_FIELDS = {'id', 'text', 'quantity', 'done', 'part_number', 'supplier',
-              'bin_location', 'unit_price_cents', 'stock_status'}
+              'bin_location', 'unit_price_cents', 'stock_status', 'added_by', 'added_at'}
 
 
 class BusinessValidationError(ValueError):
@@ -89,7 +89,7 @@ def validate_business_entry(data, identifier, *, now=None):
         raise BusinessValidationError('Give the shared order or checklist a title.')
     if not title:
         title = body.splitlines()[0][:80]
-    kind = _choice(data.get('kind'), ('order', 'list'), 'Entry type')
+    kind = _choice(data.get('kind'), ('order', 'list', 'note'), 'Entry type')
     status = _choice(data.get('order_status', 'new'), ORDER_STATUSES, 'Order status')
     done = _boolean(data.get('done', False), 'Done') or kind == 'order' and status in ('delivered', 'cancelled')
     if kind == 'order' and done and status not in ('delivered', 'cancelled'):
@@ -114,6 +114,16 @@ def validate_business_entry(data, identifier, *, now=None):
                      'bin_location': _text(row.get('bin_location', ''), 60, 'Bin location'),
                      'unit_price_cents': _integer(row.get('unit_price_cents', 0), 0, MAX_UNIT_PRICE_CENTS, 'Unit price cents'),
                      'stock_status': _choice(row.get('stock_status', 'check_stock'), STOCK_STATUSES, 'Stock status')})
+        if 'added_by' in row:
+            rows[-1]['added_by'] = _text(row['added_by'], 100, 'Added by')
+        if 'added_at' in row:
+            rows[-1]['added_at'] = _timestamp(row['added_at'], 'Added date')
+    highlights = data.get('highlights', [])
+    if not isinstance(highlights, list) or len(highlights) > 200:
+        raise BusinessValidationError('An entry supports up to 200 highlights.')
+    highlights = list(dict.fromkeys(_text(term, 200, 'Highlight') for term in highlights))
+    if any(not term or any(char in term for char in '\n\r\u2028\u2029') for term in highlights):
+        raise BusinessValidationError('Highlights must be nonempty single-line phrases.')
     created = _timestamp(data.get('created', current), 'Created date')
     updated = _timestamp(data.get('updated', current), 'Updated date')
     result = {'id': identifier, 'title': title, 'body': body, 'created': created, 'updated': updated,
@@ -133,7 +143,11 @@ def validate_business_entry(data, identifier, *, now=None):
               'order_type': _choice(data.get('order_type', 'order'), ('order', 'quote'), 'Order type'),
               'currency': _choice(data.get('currency', 'JMD'), ('JMD',), 'Currency'),
               'payment_received_cents': _integer(data.get('payment_received_cents', 0), 0, MAX_PAYMENT_CENTS, 'Payment cents'),
-              'checklist': rows}
+              'checklist': rows, 'highlights': highlights}
+    if data.get('added_by'):
+        result['added_by'] = _text(data['added_by'], 100, 'Added by')
+    if data.get('added_at') is not None:
+        result['added_at'] = _timestamp(data['added_at'], 'Added date')
     if len(json.dumps(result, ensure_ascii=False, separators=(',', ':')).encode('utf-8')) > MAX_BUSINESS_ENTRY_BYTES:
         raise BusinessValidationError('This shared entry is too large. Split it into smaller orders.')
     return result

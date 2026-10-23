@@ -79,6 +79,17 @@ class InventoryUiTests(unittest.TestCase):
         APP.processEvents()
         self.temp.cleanup()
 
+    def test_order_availability_uses_imported_stock_and_account_scope(self):
+        self.service.catalog = [stock(quantity=3, alternate_part_number='ALT'), stock('EMPTY', quantity=0)]
+        self.assertIn('Available: 3', self.service.availability('00042', quantity=3))
+        self.assertIn('Insufficient stock: 3', self.service.availability('ALT', quantity=4))
+        self.assertIn('Out of stock', self.service.availability('EMPTY'))
+        self.assertIn('Not found', self.service.availability('MISSING'))
+        self.assertIn('Multiple matches', self.service.availability(description='Brake pads'))
+        self.service.shared = True
+        self.service.token = ''
+        self.assertEqual(self.service.availability('00042'), 'Sign in to check inventory')
+
     def csv(self, content, name="stock.csv"):
         path = self.root / name
         path.write_text(content, encoding="utf-8")

@@ -27,6 +27,8 @@ class SharedBusinessController(QObject):
         self._generation = 0
         self._cursor = 0
         self._records = {}
+        self._publishing_ids = set()
+        self._migration_attempts = set()
         self._cache_ids = set()
         self._reserved_cache_ids = set()
         self._editing_id, self._editing_revision = None, 0
@@ -69,7 +71,7 @@ class SharedBusinessController(QObject):
         if identifiers:
             def remove():
                 self.store.state["notes"] = [note for note in self.store.notes
-                    if note["id"] not in identifiers or note.get("kind") not in ("order", "list")]
+                    if note["id"] not in identifiers]
             self.store.transaction(remove)
         self._write_manifest(set())
         self._cache_ids.clear()
@@ -89,6 +91,8 @@ class SharedBusinessController(QObject):
         self.api.base_url = origin
         self._cursor = 0
         self._records.clear()
+        self._publishing_ids.clear()
+        self._migration_attempts.clear()
         self._editing_id, self._editing_revision = None, 0
         self._new_identifier = uuid.uuid4().hex
         try:
@@ -113,7 +117,7 @@ class SharedBusinessController(QObject):
 
     def is_business(self, identifier):
         note = self.store.find(identifier)
-        return bool(note and note.get("kind") in ("order", "list"))
+        return bool(note and not note.get('document_id') and note.get("kind") in ("order", "list", "note"))
 
     def _apply_record(self, record):
         if not isinstance(record, dict):
@@ -133,14 +137,14 @@ class SharedBusinessController(QObject):
         else:
             entry = record.get("entry")
             if (not isinstance(entry, dict) or entry.get("id") != identifier
-                    or entry.get("kind") not in ("order", "list") or entry.get("document_id")):
+                    or entry.get("kind") not in ("order", "list", "note") or entry.get("document_id")):
                 raise ValueError("Invalid shared order or checklist.")
             note = NoteStore.validate_note(entry)
             if note is None:
                 raise ValueError("The shared record is incomplete.")
             note['team_shared'] = True
             old = self.store.find(identifier)
-            if old and old.get("kind") not in ("order", "list"):
+            if old and (old.get('document_id') or (old.get("kind") == 'note' and not known and identifier not in self._publishing_ids)):
                 raise ValueError("A shared record conflicts with a personal writing ID. Personal writing was preserved.")
             if old:
                 for field in ("pinned", "pin_position", "ai_guidance", "reminder_history"):
@@ -209,11 +213,37 @@ class SharedBusinessController(QObject):
                                          if self.ready else "Loading shared business records…", self.ready)
                 if data["has_more"]:
                     QTimer.singleShot(0, self.refresh)
+                elif self.ready:
+                    QTimer.singleShot(0, self.share_existing_notes)
             except (OSError, ValueError, TypeError) as failure:
                 self.ready = False
                 self.status_changed.emit("Could not load shared business records: " + str(failure), False)
         self.api.request("GET", "/api/business?" + urlencode({"after_revision": start, "limit": 3}),
                          None, received, self.token)
+
+    def share_existing_notes(self):
+        """Move existing plain Writing notes to the authenticated office, one at a time."""
+        if not self.ready or not self.token or self._writing or self._polling or self._closed:
+            return
+        note = next((note for note in self.store.notes
+                     if note.get('kind') == 'note' and not note.get('document_id')
+                     and not note.get('team_id') and not note.get('team_workspace_id')
+                     and note['id'] not in self._cache_ids and note['id'] not in self._records
+                     and note['id'] not in self._migration_attempts
+                     and note['id'] != self._editing_id), None)
+        if note is None:
+            return
+        identifier = note['id']
+        self._migration_attempts.add(identifier)
+        self._publishing_ids.add(identifier)
+        generation = self._generation
+        def completed(saved, error):
+            if generation != self._generation:
+                return
+            if error:
+                self.status_changed.emit('Note stays on this PC until sharing succeeds: ' + error, False)
+            QTimer.singleShot(0, self.share_existing_notes)
+        self._write('PUT', identifier, copy.deepcopy(note), completed)
 
     def _write(self, method, identifier, entry, callback):
         if not self.token or not self.ready or self._closed:
@@ -280,8 +310,10 @@ class SharedBusinessController(QObject):
             else:
                 entry = self.store.new_note(title, body, repeat, due, now, details=details)
                 identifier = entry["id"] = self._new_identifier
-            if entry.get("kind") not in ("order", "list") or entry.get("document_id"):
-                raise ValueError("Only orders and checklists can be shared; writing and documents stay personal.")
+            if entry.get("kind") not in ("order", "list", "note") or entry.get("document_id"):
+                raise ValueError("Notes, orders and checklists can be shared. Imported full documents use document storage.")
+            if old and old['id'] not in self._cache_ids:
+                self._publishing_ids.add(old['id'])
             return self._write("PUT", identifier, entry, callback)
         except (OSError, ValueError, TypeError) as error:
             callback(None, str(error))

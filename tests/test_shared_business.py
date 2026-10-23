@@ -58,15 +58,33 @@ class SharedBusinessTests(unittest.TestCase):
                        {'kind': 'order', 'currency': 'JMD'}, lambda n, e: results.append((n, e)))
         return results
 
-    def test_requires_login_and_never_publishes_personal_writing(self):
+    def test_requires_login_before_migrating_existing_writing(self):
         self.assertIn('Sign in', self.save()[0][1])
         self.assertFalse(self.api.calls)
         personal = self.store.add('Private writing', 'Personal text', repeat=0)
         self.login()
         self.assertTrue(self.sync.ready)
-        self.assertFalse(any(call['method'] == 'PUT' for call in self.api.calls))
+        self.sync.share_existing_notes()
+        call = self.api.pending('/api/business/' + personal['id'], 'PUT')
+        self.assertEqual(call['body']['entry']['body'], 'Personal text')
+        self.assertEqual(call['body']['expected_revision'], 0)
+        # A failed migration must retain the local original.
+        self.api.finish(call, None, 'Offline', 503)
         self.sync.set_session(self.api.base_url, '')
         self.assertEqual(self.store.find(personal['id'])['body'], 'Personal text')
+
+    def test_writing_syncs_highlights_author_and_clears_on_logout(self):
+        personal = self.store.add('Parts', 'PAD-123', repeat=0)
+        self.login()
+        self.sync.share_existing_notes()
+        call = self.api.pending('/api/business/' + personal['id'], 'PUT')
+        canonical = {**call['body']['entry'], 'highlights': ['PAD-123'], 'added_by': 'alice'}
+        self.api.finish(call, {'id': personal['id'], 'revision': 1, 'deleted': False,
+                              'entry': canonical, 'updated_by_username': 'alice'})
+        self.assertEqual(self.store.find(personal['id'])['highlights'], ['PAD-123'])
+        self.assertEqual(self.store.find(personal['id'])['added_by'], 'alice')
+        self.sync.set_session(self.api.base_url, '')
+        self.assertIsNone(self.store.find(personal['id']))
 
     def test_remote_update_preserves_captured_edit_version_and_conflict_draft(self):
         first = self.record()
