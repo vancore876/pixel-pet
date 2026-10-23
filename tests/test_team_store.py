@@ -70,6 +70,20 @@ class TeamStoreTests(unittest.TestCase):
         self.assertFalse(entity['conflict'])
         self.assertEqual(entity['payload']['highlights'], ['PART-1'])
 
+    def test_removed_checklist_item_cannot_return_from_concurrent_stale_edit(self):
+        rows = [{'id': 'removed', 'text': 'Remove me'}, {'id': 'kept', 'text': 'Keep me'}]
+        note = self.note(checklist=rows)
+        first = self.alice.put_note(note)
+        self.sync(self.alice, self.bob)
+        self.alice.put_note({**note, 'checklist': rows[1:]}, base_revisions=[first['event_id']])
+        self.bob.put_note({**note, 'title': 'Stale edit'}, base_revisions=[first['event_id']])
+        self.sync(self.bob, self.alice)
+        entity = self.alice.get_entity('note', note['id'])
+        for variant in entity['variants']:
+            self.assertEqual([row['id'] for row in variant['payload']['checklist']], ['kept'])
+        self.alice.put_note(note, base_revisions=entity['revisions'])
+        self.assertEqual([row['id'] for row in self.alice.get_entity('note', note['id'])['payload']['checklist']], ['kept'])
+
     def test_durable_identity_and_outbox_survive_restart(self):
         original = self.alice.identity()
         event = self.alice.put_note(self.note())

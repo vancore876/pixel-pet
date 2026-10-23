@@ -21,6 +21,11 @@ entry and its conflicting versions. The confirmation explains this scope.
 Concurrent live versions do not reappear after deletion. A missing local sync
 baseline alone does not recreate an unchanged deleted note; genuine unpublished
 local edits can still be preserved as a separate recovered entry.
+Local note deletions also retain a persistent deletion marker. An older response
+already in flight cannot reinsert that note, and deletion still publishes when
+the local sync baseline is missing. Removing a checklist or order item records
+its stable item identity as deleted in shared history; stale versions cannot
+restore that item. Add it again as a new item if it is needed later.
 
 Each newly saved note and list or order item shows **Added by**, assigned by the server
 from the signed-in employee. Editing an item keeps its original contributor.

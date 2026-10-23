@@ -72,6 +72,16 @@ class NotesTests(unittest.TestCase):
             restored.import_backup(self.store.export_json())
             self.assertEqual(restored.find(note['id'])['highlights'], ['AB-123'])
 
+    def test_deleting_not_yet_synced_work_note_keeps_valid_durable_marker(self):
+        note = self.store.add('Pending', 'Not synced yet', details={'team_shared': True})
+        self.store.delete(note['id'])
+        reloaded = NoteStore(self.path)
+        self.assertEqual(reloaded.notes, [])
+        self.assertEqual(reloaded.state['deleted_notes'][0]['id'], note['id'])
+        self.assertEqual(reloaded.state['deleted_notes'][0]['team_revisions'], [])
+        self.assertFalse(reloaded.blocked_write)
+        reloaded.close()
+
     def test_stale_writer_cannot_erase_saved_notes(self):
         stale = NoteStore(self.path)
         saved = self.store.add('Keep', 'Saved by the first writer')

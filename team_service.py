@@ -214,6 +214,7 @@ class TeamService(QObject):
     def _snapshot(self):
         excluded = set(self.exclude_note_ids())
         return {'notes': copy.deepcopy([note for note in self.note_service.store.notes if note['id'] not in excluded]),
+                'deleted_notes': copy.deepcopy(self.note_service.store.state.get('deleted_notes', [])),
                 'excluded_ids': list(excluded),
                 'document_path': str(self.note_service.store.path.parent / 'documents.sqlite')}
 
@@ -579,6 +580,13 @@ class TeamService(QObject):
         notes = {n['id']: n for n in snapshot['notes']
                  if not n.get('team_workspace_id') or n['team_workspace_id'] == workspace}
         baseline = ledger.rows(workspace)
+        for marker in snapshot.get('deleted_notes', []):
+            if (marker.get('team_workspace_id') and marker['team_workspace_id'] != workspace
+                    or marker['id'] in snapshot.get('excluded_ids', [])):
+                continue
+            if marker['id'] not in baseline:
+                ledger.save(workspace, marker['id'], _entity_id(marker), {}, marker.get('team_revisions') or [])
+        baseline = ledger.rows(workspace)
         # A restored/copied notebook may have a newer baseline than its local
         # event cache. Replay the share once before deciding ancestry is lost.
         missing = any(not store.has_revisions('note', _entity_id(note),
@@ -907,6 +915,12 @@ class TeamService(QObject):
                 # The per-row snapshot guard still protects midflight edits,
                 # and any later failure rolls back the entire local commit.
                 for row in sorted(result['updates'], key=lambda item: not item['deleted']):
+                    deletion_pending = any(
+                        (not marker.get('team_workspace_id') or marker['team_workspace_id'] == self._identity['workspace_id'])
+                        and _entity_id(marker) == row['entity_id']
+                        for marker in store.state.get('deleted_notes', []))
+                    if deletion_pending and not row['deleted']:
+                        continue  # Never materialize a deleted row from an older in-flight snapshot.
                     current = store.find(row['local_id'])
                     original = before.get(row['local_id'])
                     if original is not None and (current is None or shared_note_payload(current) != shared_note_payload(original)):

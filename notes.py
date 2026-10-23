@@ -207,6 +207,10 @@ class NoteStore:
                 self.state["linked_file"] = linked
                 lines = raw.get("linked_lines", [])
                 self.state["linked_lines"] = [clean_text(line, 10000) for line in lines[:MAX_NOTES] if isinstance(line, str)] if isinstance(lines, list) else []
+                deleted = raw.get('deleted_notes', [])
+                self.state['deleted_notes'] = [{'id': row['id'], **validate_team_metadata(row)} for row in deleted if isinstance(row, dict)
+                    and isinstance(row.get('id'), str) and len(row['id']) == 32
+                    and all(char in '0123456789abcdef' for char in row['id'])] if isinstance(deleted, list) else []
                 if any(note.get('document_id') for note in self.notes) and not (self.path.parent / 'documents.sqlite').is_file():
                     self.warning = 'Full document text is missing. Keep documents.sqlite with notes.json or restore a complete ZIP backup.'
                 self._restore_recovery_pending = True
@@ -661,8 +665,16 @@ class NoteStore:
                            next_due=None if done or not repeat else time.time() + repeat * 60)
 
     def delete(self, identifier):
-        document_id = (self.find(identifier) or {}).get('document_id')
+        note = self.find(identifier) or {}
+        document_id = note.get('document_id')
         def change():
+            if note.get('team_shared') or note.get('team_id'):
+                marker = {key: copy.deepcopy(note.get(key)) for key in
+                          ('id', 'team_id', 'team_workspace_id', 'team_revisions')}
+                marker['team_revisions'] = marker.get('team_revisions') or []
+                markers = self.state.setdefault('deleted_notes', [])
+                markers[:] = [row for row in markers if row['id'] != identifier]
+                markers.append(marker)
             self.state["notes"] = [n for n in self.notes if n["id"] != identifier]
         self.transaction(change)
         self._discard_unreferenced([document_id])

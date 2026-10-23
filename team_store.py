@@ -212,8 +212,21 @@ class TeamStore:
         deleted = any(e["operation"] == "delete" for e in heads)
         chosen = max(heads, key=lambda e: (e["operation"] == "delete", e["event_id"]))
         by_id = {event['event_id']: event for event in events}
+        removed_items = set()
+        if kind == 'note':
+            for event in events:
+                if event['operation'] != 'put' or 'checklist' not in event['payload']:
+                    continue
+                remaining = {row['id'] for row in event['payload']['checklist']}
+                for parent_id in event['parents']:
+                    parent = by_id.get(parent_id)
+                    if parent:
+                        removed_items.update(row['id'] for row in parent['payload'].get('checklist', [])
+                                             if row['id'] not in remaining)
         def projected_payload(event):
             payload = event['payload']
+            if kind == 'note' and removed_items and 'checklist' in payload:
+                payload = {**payload, 'checklist': [row for row in payload['checklist'] if row['id'] not in removed_items]}
             if kind != 'note' or 'highlights' in payload:
                 return payload
             # Legacy clients omit fields they do not understand. Inherit the

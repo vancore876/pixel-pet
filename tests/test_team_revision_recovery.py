@@ -253,6 +253,42 @@ class TeamRevisionRecoveryTests(unittest.TestCase):
             self.assertIn(edited, [self.body(client[0], note) for note in client[0].notes])
         self.assert_no_errors()
 
+    def test_delete_with_lost_baseline_stays_deleted_across_three_clients(self):
+        alice, bob, carol, identifier = self.create_three()
+        original = copy.deepcopy(alice[0].find(identifier))
+        with closing(sqlite3.connect(alice[2].profile_path.with_suffix('.bridge.sqlite'))) as db, db:
+            db.execute('DELETE FROM notes WHERE local_id=?', (identifier,))
+        alice[1].delete(identifier)
+        alice[2]._apply_updates({'snapshot': {'notes': []},
+            'document_path': str(alice[0].path.parent / 'documents.sqlite'),
+            'updates': [{'local_id': identifier, 'entity_id': identifier,
+                         'payload': shared_note_payload(original), 'revisions': original['team_revisions'],
+                         'deleted': False, 'conflict_revision': '', 'original': None}]})
+        self.assertEqual(alice[0].notes, [])
+        self.sync(alice[2])
+        self.all_sync((alice, bob, carol), rounds=3)
+        for client in (alice, bob, carol):
+            self.assertEqual(client[0].notes, [])
+        restored = NoteStore(alice[0].path)
+        self.assertEqual(restored.state['deleted_notes'][0]['id'], identifier)
+        restored.close()
+        self.assert_no_errors()
+
+    def test_removed_items_stay_removed_after_stale_checklist_edit(self):
+        alice, bob, carol, identifier = self.create_three()
+        rows = [{'id': 'remove', 'text': 'Removed part'}, {'id': 'keep', 'text': 'Kept part'}]
+        alice[1].save_note(identifier, 'Parts', 'Shared checklist', 0,
+                           details={'kind': 'list', 'checklist': rows})
+        self.all_sync((alice, bob, carol))
+        alice[0].edit(identifier, 'Parts', 'Shared checklist', 0, details={'checklist': rows[1:]})
+        bob[0].edit(identifier, 'Parts', 'Coworker updated details', 0, details={'checklist': rows})
+        self.all_sync((alice, bob, carol), rounds=3)
+        for client in (alice, bob, carol):
+            self.assertTrue(client[0].notes)
+            for note in client[0].notes:
+                self.assertEqual([row['id'] for row in note['checklist']], ['keep'])
+        self.assert_no_errors()
+
     def test_missing_baseline_does_not_recreate_unchanged_deleted_note(self):
         alice, bob, carol, identifier = self.create_three()
         with closing(sqlite3.connect(alice[2].profile_path.with_suffix('.bridge.sqlite'))) as db, db:
