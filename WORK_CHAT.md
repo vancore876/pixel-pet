@@ -3,7 +3,12 @@
 Writing notes, shared orders and checklists save highlights on the office server. Select a list
 item or text in the note, click **Highlight**, then **Save**. Coworkers receive
 the highlights through normal synchronization. Concurrent edits require reloading
-the latest version before saving.
+the latest version before saving. Select multiple lines or list items to highlight
+them together. Each entry supports up to 200 phrases; exceeding the limit leaves
+existing highlights unchanged and explains how to proceed. Overlapping phrases
+share one painted range. A server response that drops saved highlights preserves
+the editor draft and asks you to update the office server instead of clearing
+the highlights silently.
 
 Each newly saved note and list or order item shows **Added by**, assigned by the server
 from the signed-in employee. Editing an item keeps its original contributor.

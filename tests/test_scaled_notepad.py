@@ -77,6 +77,92 @@ class ScaledNotepadTests(unittest.TestCase):
         self.assertFalse(self.window.uses_business_server({'id': 'folder-note', 'kind': 'note', 'team_workspace_id': 'folder'}))
         self.window.shared_business = None
 
+    def test_shared_note_highlights_remain_visible_immediately_after_save(self):
+        from shared_business import SharedBusinessController
+        from test_work_chat import ScriptedApi
+        from server_business_schema import validate_business_entry
+        api = ScriptedApi()
+        controller = SharedBusinessController(self.service, api=api)
+        self.window.shared_business = controller
+        try:
+            controller.set_session('http://localhost', 'token', {'username': 'alice'})
+            api.finish(api.pending('/api/business?', 'GET'), {'entries': [], 'cursor': 0, 'has_more': False})
+            self.window.title.setText('Parts')
+            self.window.body.setPlainText('AB-123 and AB-123')
+            self.assertTrue(self.window.body.find('AB-123'))
+            self.window.highlight_selection()
+            self.assertEqual(len(self.window.body.extraSelections()), 2)
+            self.assertTrue(self.window.save_note())
+            call = api.pending('/api/business/', 'PUT')
+            entry = call['body']['entry']
+            saved = validate_business_entry(entry, entry['id'])
+            api.finish(call, {'id': entry['id'], 'revision': 1, 'deleted': False, 'entry': saved})
+            self.assertEqual(self.window.highlight_terms, ['AB-123'])
+            self.assertEqual(len(self.window.body.extraSelections()), 2)
+            self.assertEqual(self.store.find(entry['id'])['highlights'], ['AB-123'])
+        finally:
+            controller.shutdown()
+            self.window.shared_business = None
+
+    def test_server_that_drops_highlights_preserves_visible_draft(self):
+        from shared_business import SharedBusinessController
+        from test_work_chat import ScriptedApi
+        api = ScriptedApi()
+        controller = SharedBusinessController(self.service, api=api)
+        self.window.shared_business = controller
+        try:
+            controller.set_session('http://localhost', 'token', {'username': 'alice'})
+            api.finish(api.pending('/api/business?', 'GET'), {'entries': [], 'cursor': 0, 'has_more': False})
+            self.window.title.setText('Parts')
+            self.window.body.setPlainText('AB-123 and AB-123')
+            self.window.body.find('AB-123')
+            self.window.highlight_selection()
+            self.assertTrue(self.window.save_note())
+            call = api.pending('/api/business/', 'PUT')
+            returned = dict(call['body']['entry'])
+            returned.pop('highlights')
+            api.finish(call, {'id': returned['id'], 'revision': 1, 'deleted': False, 'entry': returned})
+            self.assertEqual(self.window.highlight_terms, ['AB-123'])
+            self.assertEqual(len(self.window.body.extraSelections()), 2)
+            self.assertTrue(self.window.dirty)
+            self.assertIn('highlights', self.window.status.text())
+        finally:
+            controller.shutdown()
+            self.window.shared_business = None
+
+    def test_two_hundred_highlights_survive_local_save_reload(self):
+        from PySide6.QtGui import QTextCursor
+        terms = [f'PART-{number:04}' for number in range(200)]
+        text = '\n'.join(terms + terms)
+        self.window.title.setText('Many parts')
+        self.window.body.setPlainText(text)
+        self.window.body.selectAll()
+        self.window.highlight_selection()
+        self.assertEqual(self.window.highlight_terms, terms)
+        self.assertEqual(len(self.window.body.extraSelections()), 400)
+        self.assertTrue(self.window.save_note())
+        identifier = self.window.editing_id
+        self.window.load_note(identifier)
+        self.assertEqual(len(self.window.body.extraSelections()), 400)
+        restored = NoteStore(self.store.path)
+        self.assertEqual(restored.find(identifier)['highlights'], terms)
+        restored.close()
+        self.window.body.moveCursor(QTextCursor.End)
+        self.window.body.insertPlainText('\nEXTRA-PART')
+        self.window.body.selectAll()
+        self.window.highlight_selection()
+        self.assertEqual(self.window.highlight_terms, terms)
+        self.assertIn('200', self.window.status.text())
+        self.assertEqual(len(self.window.body.extraSelections()), 400)
+
+    def test_overlapping_highlights_and_unicode_keep_correct_ranges(self):
+        from note_highlights import render_highlights
+        self.window.body.setPlainText('😀 ABCD ABCD')
+        render_highlights(self.window.body, ['ABC', 'BCD', 'ABCD'])
+        self.assertEqual([item.cursor.selectedText() for item in self.window.body.extraSelections()], ['ABCD', 'ABCD'])
+        render_highlights(self.window.body, ['😀', 'ABCD'])
+        self.assertEqual([item.cursor.selectedText() for item in self.window.body.extraSelections()], ['😀', 'ABCD', 'ABCD'])
+
     def save_large_import(self):
         result = _result('pdf', 'Long appointment guide', self.text, filename='guide.pdf')
         self.window.imported(result)

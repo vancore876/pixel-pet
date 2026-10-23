@@ -1389,6 +1389,7 @@ class NotepadWindow(QDialog):
             if field is not source and field.toPlainText() != text:
                 with QSignalBlocker(field):
                     field.setPlainText(text)
+        self.render_note_highlights()
         self.mark_dirty()
 
     def set_inventory_service(self, inventory):
@@ -2050,23 +2051,38 @@ class NotepadWindow(QDialog):
         self.refresh_team_status()
 
     def selected_highlight_term(self):
-        terms = validated_highlights([self.body.textCursor().selectedText()])
-        if not terms:
+        terms = self.selected_highlight_terms()
+        return terms[0] if terms else ''
+
+    def selected_highlight_terms(self):
+        # A selection spanning several part lines is a batch, rather than an
+        # invalid single phrase that silently does nothing.
+        text = self.body.textCursor().selectedText().replace('\u2029', '\n').replace('\u2028', '\n')
+        terms, seen = [], set()
+        for line in text.splitlines():
+            valid = validated_highlights([line])
+            if valid and valid[0].casefold() not in seen:
+                terms.append(valid[0])
+                seen.add(valid[0].casefold())
+                if len(terms) > MAX_HIGHLIGHTS:
+                    break
+        if not terms or self.task_table.hasFocus() or self.order_table.hasFocus():
             table = self.order_table if self.kind.currentData() == 'order' else self.task_table
             selected = table.selectedItems()
             if selected:
-                cell = table.item(selected[0].row(), 1)
-                terms = validated_highlights([cell.text()]) if cell else []
-        return terms[0] if terms else ''
+                terms = validated_highlights([table.item(row, 1).text() for row in
+                    sorted({cell.row() for cell in selected}) if table.item(row, 1)])
+        return terms
 
     def update_highlight_buttons(self):
-        term = self.selected_highlight_term().casefold()
-        present = term in {value.casefold() for value in self.highlight_terms}
-        self.highlight_button.setEnabled(bool(term) and not present and len(self.highlight_terms) < MAX_HIGHLIGHTS)
-        self.remove_highlight_button.setEnabled(bool(term) and present)
+        selected = {term.casefold() for term in self.selected_highlight_terms()}
+        present = {value.casefold() for value in self.highlight_terms}
+        self.highlight_button.setEnabled(bool(selected - present) and len(self.highlight_terms) < MAX_HIGHLIGHTS)
+        self.remove_highlight_button.setEnabled(bool(selected & present))
 
     def render_note_highlights(self):
-        render_highlights(self.body, self.highlight_terms)
+        for editor in (self.body, self.checklist_notes, self.order_notes):
+            render_highlights(editor, self.highlight_terms)
         for table in (self.task_table, self.order_table):
             with QSignalBlocker(table):
                 for row in range(table.rowCount()):
@@ -2079,10 +2095,15 @@ class NotepadWindow(QDialog):
         self.update_highlight_buttons()
 
     def highlight_selection(self):
-        term = self.selected_highlight_term()
-        if not term or len(self.highlight_terms) >= MAX_HIGHLIGHTS:
+        terms = self.selected_highlight_terms()
+        if not terms:
             return
-        updated = validated_highlights([*self.highlight_terms, term])
+        existing = {term.casefold() for term in self.highlight_terms}
+        additions = [term for term in terms if term.casefold() not in existing]
+        if len(self.highlight_terms) + len(additions) > MAX_HIGHLIGHTS:
+            self.status.setText(f'Up to {MAX_HIGHLIGHTS} highlight phrases per entry. Remove some highlights or select fewer items; existing highlights are unchanged.')
+            return
+        updated = validated_highlights([*self.highlight_terms, *additions])
         if updated != self.highlight_terms:
             self.highlight_terms = updated
             self.render_note_highlights()
@@ -2093,8 +2114,8 @@ class NotepadWindow(QDialog):
             self.status.setText('Highlighted this part number or phrase throughout the note. Save to keep the highlight.')
 
     def remove_highlight_selection(self):
-        term = self.selected_highlight_term().casefold()
-        updated = [value for value in self.highlight_terms if value.casefold() != term]
+        selected = {term.casefold() for term in self.selected_highlight_terms()}
+        updated = [value for value in self.highlight_terms if value.casefold() not in selected]
         if updated != self.highlight_terms:
             self.highlight_terms = updated
             self.render_note_highlights()

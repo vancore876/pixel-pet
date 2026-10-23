@@ -74,7 +74,7 @@ class SharedBusinessTests(unittest.TestCase):
         self.assertEqual(self.store.find(personal['id'])['body'], 'Personal text')
 
     def test_writing_syncs_highlights_author_and_clears_on_logout(self):
-        personal = self.store.add('Parts', 'PAD-123', repeat=0)
+        personal = self.store.add('Parts', 'PAD-123', repeat=0, details={'highlights': ['PAD-123']})
         self.login()
         self.sync.share_existing_notes()
         call = self.api.pending('/api/business/' + personal['id'], 'PUT')

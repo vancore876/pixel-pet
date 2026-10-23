@@ -282,6 +282,19 @@ class SharedBusinessController(QObject):
             try:
                 if not isinstance(data, dict) or data.get("id") != identifier:
                     raise ValueError("Invalid save acknowledgment.")
+                if entry is not None:
+                    saved_entry = data.get('entry')
+                    if (not isinstance(saved_entry, dict) or
+                            saved_entry.get('highlights', []) != entry.get('highlights', [])):
+                        callback(None, 'The office server did not preserve the highlights. '
+                                 'Update and restart the office server, then retry Save. '
+                                 'The text may already be saved, but the highlights were not confirmed.')
+                        self.status_changed.emit('Highlights not confirmed by the office server; update the server before retrying.', False)
+                        # Do not replace the cache or announce a successful save.
+                        # The editor keeps its draft while polling can retrieve
+                        # the server revision needed for a later retry.
+                        self.refresh()
+                        return
                 note = self._apply_record(data)
                 if identifier == self._editing_id:
                     self._editing_revision = data["revision"]

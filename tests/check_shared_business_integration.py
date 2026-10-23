@@ -62,6 +62,35 @@ class SharedOfficeTests(harness.RealServerTests):
         controller.refresh()
         wait_for(predicate)
 
+    def test_many_note_highlights_save_sync_and_remove_between_two_clients(self):
+        alice, ac, a, aw = self.coworker('highlight_alice')
+        bob, bc, b, bw = self.coworker('highlight_bob')
+        terms = [f'PART-{number:04}' for number in range(200)]
+        aw.new_note()
+        aw.title.setText('Shared highlighted parts')
+        aw.body.setPlainText('\n'.join(terms + terms))
+        aw.body.selectAll()
+        aw.highlight_selection()
+        self.assertEqual(len(aw.body.extraSelections()), 400)
+        self.assertTrue(aw.save_note())
+        wait_for(lambda: not aw.business_pending and aw.editing_id is not None)
+        identifier = aw.editing_id
+        self.assertEqual(a.store.find(identifier)['highlights'], terms)
+        self.assertEqual(len(aw.body.extraSelections()), 400)
+        self.sync(bc, lambda: b.store.find(identifier) is not None)
+        bw.load_note(identifier)
+        self.assertEqual(len(bw.body.extraSelections()), 400)
+        self.assertEqual(bw.note_author.text(), 'Added by: highlight_alice')
+        self.assertTrue(bw.body.find('PART-0001'))
+        bw.remove_highlight_selection()
+        self.assertTrue(bw.save_note())
+        wait_for(lambda: not bw.business_pending)
+        self.assertNotIn('PART-0001', b.store.find(identifier)['highlights'])
+        self.sync(ac, lambda: 'PART-0001' not in a.store.find(identifier)['highlights'])
+        aw.load_note(identifier)
+        self.assertEqual(len(aw.body.extraSelections()), 398)
+        self.assertEqual(aw.note_author.text(), 'Added by: highlight_alice')
+
     def test_shared_orders_checklists_conflict_delete_and_personal_writing(self):
         alice, ac, a, aw = self.coworker('parts_alice')
         bob, bc, b, bw = self.coworker('parts_bob')
