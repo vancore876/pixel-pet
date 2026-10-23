@@ -47,6 +47,29 @@ class TeamStoreTests(unittest.TestCase):
         self.sync(self.alice, self.bob, self.carol)
         return event["entity_id"]
 
+    def test_legacy_client_omission_preserves_highlights_and_explicit_empty_removes(self):
+        note = self.note(highlights=['PART-1'])
+        first = self.alice.put_note(note)
+        self.sync(self.alice, self.bob)
+        legacy = {key: value for key, value in note.items() if key != 'highlights'}
+        second = self.bob.put_note(legacy, base_revisions=[first['event_id']])
+        self.sync(self.bob, self.alice)
+        self.assertEqual(self.alice.get_entity('note', note['id'])['payload']['highlights'], ['PART-1'])
+        self.assertNotIn('highlights', second['payload'])
+        self.alice.put_note({**note, 'highlights': []}, base_revisions=[second['event_id']])
+        self.assertEqual(self.alice.get_entity('note', note['id'])['payload']['highlights'], [])
+
+    def test_equivalent_legacy_and_current_heads_do_not_create_conflict_copies(self):
+        note = self.note(highlights=['PART-1'])
+        first = self.alice.put_note(note)
+        self.sync(self.alice, self.bob)
+        self.alice.put_note(note, base_revisions=[first['event_id']])
+        self.bob.put_note({k: v for k, v in note.items() if k != 'highlights'}, base_revisions=[first['event_id']])
+        self.sync(self.bob, self.alice)
+        entity = self.alice.get_entity('note', note['id'])
+        self.assertFalse(entity['conflict'])
+        self.assertEqual(entity['payload']['highlights'], ['PART-1'])
+
     def test_durable_identity_and_outbox_survive_restart(self):
         original = self.alice.identity()
         event = self.alice.put_note(self.note())

@@ -10,6 +10,13 @@ share one painted range. A server response that drops saved highlights preserves
 the editor draft and asks you to update the office server instead of clearing
 the highlights silently.
 
+Shared-folder sync also distinguishes omitted highlights from an explicit empty
+list. Events from older clients inherit the nearest recorded highlight value;
+current clients send an empty list only when highlights are removed. Equivalent
+versions do not generate conflict copies, and received notes use a normalized
+local baseline so idle synchronization does not republish unchanged content.
+Previously created conflict copies remain available for review.
+
 Each newly saved note and list or order item shows **Added by**, assigned by the server
 from the signed-in employee. Editing an item keeps its original contributor.
 Older items without recorded attribution show **Unknown**. Update and restart

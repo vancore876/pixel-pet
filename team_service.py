@@ -56,8 +56,9 @@ def shared_note_payload(note):
                'repeat_minutes': note['repeat_minutes'], 'due_at': due, 'done': note['done'],
                'recipients': copy.deepcopy(note.get('team_recipients', [])),
                **{key: copy.deepcopy(note.get(key)) for key in BUSINESS_FIELDS}}
-    if note.get('highlights'):
-        payload['highlights'] = copy.deepcopy(note['highlights'])
+    # Empty is an explicit removal. Omission belongs to older clients that
+    # cannot round-trip highlights and must not erase a parent's markers.
+    payload['highlights'] = copy.deepcopy(note.get('highlights', []))
     if '*' in payload['recipients']:
         payload['recipients'] = []
     if note.get('document_id'):
@@ -947,7 +948,8 @@ class TeamService(QObject):
                             raise ValueError('Shared notes exceed the local 2,000-note notebook limit. Export or remove older notes.')
                         store.notes.append(note)
                         affected.add(note['id'])
-                    baseline_rows.append({key: row[key] for key in ('local_id', 'entity_id', 'payload', 'revisions', 'deleted', 'conflict_revision')})
+                    baseline_rows.append({**{key: row[key] for key in ('local_id', 'entity_id', 'revisions', 'deleted', 'conflict_revision')},
+                                          'payload': shared_note_payload(note)})
             if result.get('restore_id'):
                 # Open the local document store so its normal notebook commit
                 # validates and activates this staged restore atomically.

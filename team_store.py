@@ -211,9 +211,37 @@ class TeamStore:
         # A concurrent deletion wins until an explicit reviewed restoration.
         deleted = any(e["operation"] == "delete" for e in heads)
         chosen = max(heads, key=lambda e: (e["operation"] == "delete", e["event_id"]))
-        variants = [{"revision": e["event_id"], "deleted": e["operation"] == "delete", "payload": e["payload"], "actor_id": e["actor_id"]} for e in heads]
-        return {"id": entity_id, "kind": kind, "payload": chosen["payload"], "revisions": sorted(e["event_id"] for e in heads),
-                "deleted": deleted, "conflict": len({_json((e["operation"], e["payload"])) for e in heads}) > 1,
+        by_id = {event['event_id']: event for event in events}
+        def projected_payload(event):
+            payload = event['payload']
+            if kind != 'note' or 'highlights' in payload:
+                return payload
+            # Legacy clients omit fields they do not understand. Inherit the
+            # nearest explicit highlight value without changing immutable wire.
+            pending, seen = sorted(event['parents'], reverse=True), set()
+            while pending:
+                next_level = []
+                for identifier in pending:
+                    if identifier in seen:
+                        continue
+                    seen.add(identifier)
+                    parent = by_id.get(identifier)
+                    if parent is None:
+                        continue
+                    if 'highlights' in parent['payload']:
+                        return {**payload, 'highlights': parent['payload']['highlights']}
+                    next_level.extend(parent['parents'])
+                pending = sorted(set(next_level), reverse=True)
+            return payload
+        variants = [{"revision": e["event_id"], "deleted": e["operation"] == "delete", "payload": projected_payload(e), "actor_id": e["actor_id"]} for e in heads]
+        def content(variant):
+            payload = variant['payload']
+            if kind == 'note':
+                payload = {**payload, 'highlights': payload.get('highlights', [])}
+            return _json((variant['deleted'], payload))
+        chosen_payload = next(v['payload'] for v in variants if v['revision'] == chosen['event_id'])
+        return {"id": entity_id, "kind": kind, "payload": chosen_payload, "revisions": sorted(e["event_id"] for e in heads),
+                "deleted": deleted, "conflict": len({content(v) for v in variants}) > 1,
                 "variants": variants, "versions": variants, "winner_revision": chosen["event_id"],
                 "author_id": chosen["actor_id"], "created": chosen["created"]}
 

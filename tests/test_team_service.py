@@ -71,6 +71,37 @@ class TeamServiceTests(unittest.TestCase):
     def wire(self):
         return SharedWorkspace(self.share).read_events()[0]
 
+    def test_legacy_highlight_omission_does_not_spawn_notes_or_sync_writes(self):
+        a, an, at, ae = self.client('Alice')
+        b, bn, bt, be = self.client('Bob')
+        note = an.save_note(None, 'Parts', 'PART-1', 0, details={'highlights': ['PART-1']})
+        self.sync(at)
+        self.sync(bt)
+        remote = TeamStore(self.root / 'legacy.sqlite')
+        try:
+            remote.configure(at.identity()['workspace_id'], 'Legacy')
+            for event in self.wire():
+                remote.ingest_event(event)
+            entity = remote.get_entity('note', note['id'])
+            payload = {k: v for k, v in entity['payload'].items() if k != 'highlights'}
+            payload['legacy_extension'] = 'retained only in wire'
+            event = remote.put_note(payload, base_revisions=entity['revisions'])
+            SharedWorkspace(self.share).publish_event(event)
+        finally:
+            remote.close()
+        self.sync(at)
+        self.sync(bt)
+        before = len([e for e in self.wire() if e['kind'] == 'note'])
+        for _ in range(5):
+            self.sync(at)
+            self.sync(bt)
+        self.assertEqual(len(a.notes), 1)
+        self.assertEqual(len(b.notes), 1)
+        self.assertEqual(a.notes[0]['highlights'], ['PART-1'])
+        self.assertEqual(b.notes[0]['highlights'], ['PART-1'])
+        self.assertEqual(len([e for e in self.wire() if e['kind'] == 'note']), before)
+        self.assertEqual(ae + be, [])
+
     def test_two_computers_share_content_customer_schedule_and_local_pins_stay_local(self):
         a, an, at, ae = self.client('Alice')
         b, bn, bt, be = self.client('Bob')
