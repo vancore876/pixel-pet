@@ -253,6 +253,18 @@ class TeamRevisionRecoveryTests(unittest.TestCase):
             self.assertIn(edited, [self.body(client[0], note) for note in client[0].notes])
         self.assert_no_errors()
 
+    def test_missing_baseline_does_not_recreate_unchanged_deleted_note(self):
+        alice, bob, carol, identifier = self.create_three()
+        with closing(sqlite3.connect(alice[2].profile_path.with_suffix('.bridge.sqlite'))) as db, db:
+            db.execute('DELETE FROM notes WHERE local_id=?', (identifier,))
+        bob[1].delete(identifier)
+        self.sync(bob[2])
+        self.sync(alice[2])
+        self.all_sync((alice, bob, carol), rounds=3)
+        for client in (alice, bob, carol):
+            self.assertEqual(client[0].notes, [])
+        self.assert_no_errors()
+
     def test_missing_baseline_preserves_local_text_after_remote_deletion(self):
         alice, bob, carol, identifier = self.create_three()
         alice[0].edit(identifier, 'Customer notebook', 'Writing after baseline loss', 0)

@@ -627,6 +627,11 @@ class TeamService(QObject):
                     # A tombstone must not resurrect a stale notebook. Keep a
                     # local edit as an independent note instead. With a lost
                     # baseline, preserve uncertain local text as well.
+                    deleted_payload = current['payload']
+                    same_as_deleted = {**payload, 'highlights': payload.get('highlights', [])} == {
+                        **deleted_payload, 'highlights': deleted_payload.get('highlights', [])}
+                    if same_as_deleted:
+                        continue  # A lost baseline is not a new local edit.
                     if previous is None or payload != previous['payload']:
                         recover = True
                         recovery_warning = 'A local note was also deleted by another employee. Your local version was preserved as a separate note.'
@@ -675,9 +680,6 @@ class TeamService(QObject):
             if local_id not in notes and not previous['deleted']:
                 if local_id in snapshot.get('excluded_ids', []):
                     continue  # API-owned cache removal/logout is never a team deletion.
-                if previous['conflict_revision']:
-                    warnings.append('A conflicting note copy was preserved. Choose a version to resolve the conflict before removing its copy.')
-                    continue
                 try:
                     current = store.get_entity('note', previous['entity_id'])
                     if current and not current['deleted']:
@@ -772,6 +774,8 @@ class TeamService(QObject):
             variants = entity['variants']
             winner = max(variants, key=lambda variant: (variant['deleted'], variant['revision']))
             for variant in variants:
+                if entity['deleted'] and variant is not winner:
+                    continue  # Deletion wins over every concurrent live copy.
                 if variant is not winner and (not entity['conflict'] or variant['deleted']):
                     continue
                 conflict_revision = '' if variant is winner else variant['revision']

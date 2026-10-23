@@ -16,6 +16,11 @@ current clients send an empty list only when highlights are removed. Equivalent
 versions do not generate conflict copies, and received notes use a normalized
 local baseline so idle synchronization does not republish unchanged content.
 Previously created conflict copies remain available for review.
+Deleting a shared-folder note, including a conflict copy, deletes the shared
+entry and its conflicting versions. The confirmation explains this scope.
+Concurrent live versions do not reappear after deletion. A missing local sync
+baseline alone does not recreate an unchanged deleted note; genuine unpublished
+local edits can still be preserved as a separate recovered entry.
 
 Each newly saved note and list or order item shows **Added by**, assigned by the server
 from the signed-in employee. Editing an item keeps its original contributor.
