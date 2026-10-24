@@ -228,6 +228,8 @@ class SharedBusinessController(QObject):
 
     def share_existing_notes(self):
         """Move existing plain Writing notes to the authenticated office, one at a time."""
+        if getattr(self, 'folder_sync_active', lambda: False)():
+            return  # The folder owns new notes; never race it with API migration.
         if not self.ready or not self.token or self._writing or self._polling or self._closed:
             return
         note = next((note for note in self.store.notes

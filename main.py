@@ -150,6 +150,7 @@ class BuddyApp(QObject):
             if hasattr(window, 'home_requested'):
                 window.home_requested.connect(self.show_home)
         self.business_sync = SharedBusinessController(self.note_service, self)
+        self.business_sync.folder_sync_active = lambda: self.team.enabled
         self.team.exclude_note_ids = lambda: self.business_sync._reserved_cache_ids
         self.note_service.team_excluded_note_ids = lambda: self.business_sync._cache_ids
         self.notepad.shared_business = self.business_sync

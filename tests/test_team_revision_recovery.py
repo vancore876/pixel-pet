@@ -253,6 +253,34 @@ class TeamRevisionRecoveryTests(unittest.TestCase):
             self.assertIn(edited, [self.body(client[0], note) for note in client[0].notes])
         self.assert_no_errors()
 
+    def test_writing_saved_from_window_reaches_folder_coworkers_with_highlights(self):
+        from types import SimpleNamespace
+        from notepad_window import NotepadWindow
+        alice, bob, carol = self.client('Alice'), self.client('Bob'), self.client('Carol')
+        window = NotepadWindow(alice[1], alice[1].settings)
+        window.shared_business = SimpleNamespace(_cache_ids=set(), mark_editing=lambda value: None)
+        window.set_team_service(alice[2])
+        try:
+            window.title.setText('Shared Writing note')
+            window.body.setPlainText('Check PART-1 on every PC')
+            window.body.find('PART-1')
+            window.highlight_selection()
+            self.assertTrue(window.save_note())
+            identifier = window.editing_id
+            self.all_sync((alice, bob, carol), rounds=3)
+            for client in (alice, bob, carol):
+                self.assertEqual(len(client[0].notes), 1)
+                note = client[0].find(identifier)
+                self.assertIsNotNone(note)
+                self.assertEqual(note['kind'], 'note')
+                self.assertEqual(note['highlights'], ['PART-1'])
+            self.assert_no_errors()
+        finally:
+            window.dirty = False
+            window.shared_business = None
+            window.shutdown()
+            window.close()
+
     def test_cache_missing_is_not_a_delete_and_new_note_does_not_duplicate(self):
         alice, bob, carol, identifier = self.create_three()
         alice[0].state['notes'] = []

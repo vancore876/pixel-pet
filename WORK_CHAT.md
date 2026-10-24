@@ -1,5 +1,12 @@
 # Jeffery Work Chat
 
+New Writing notes follow the same active transport as orders and checklists.
+With shared-folder sync enabled, they are saved through that workspace rather
+than being forced onto the separate Work Chat API. Automatic API migration is
+disabled while folder sync owns new notes. Existing API records retain their
+ownership; viewing those records on another PC requires signing into the same
+Work Chat server. Folder-owned notes require the same shared-folder workspace.
+
 When an older office server rejects Writing notes or highlight fields with a
 validation error, current desktops retry once using a tagged compatibility body
 inside the server's existing checklist format. The same ID and expected revision

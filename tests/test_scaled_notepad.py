@@ -163,6 +163,20 @@ class ScaledNotepadTests(unittest.TestCase):
         render_highlights(self.window.body, ['😀', 'ABCD'])
         self.assertEqual([item.cursor.selectedText() for item in self.window.body.extraSelections()], ['😀', 'ABCD', 'ABCD'])
 
+    def test_new_writing_follows_active_folder_and_api_records_keep_ownership(self):
+        from types import SimpleNamespace
+        self.window.shared_business = SimpleNamespace(_cache_ids={'api-note'})
+        self.window.team_service = SimpleNamespace(enabled=True)
+        try:
+            self.assertFalse(self.window.uses_business_server({'id': 'new-note', 'kind': 'note'}))
+            self.assertFalse(self.window.uses_business_server({'id': 'new-list', 'kind': 'list'}))
+            self.assertTrue(self.window.uses_business_server({'id': 'api-note', 'kind': 'note'}))
+            self.window.team_service.enabled = False
+            self.assertTrue(self.window.uses_business_server({'id': 'new-note', 'kind': 'note'}))
+        finally:
+            self.window.team_service = None
+            self.window.shared_business = None
+
     def save_large_import(self):
         result = _result('pdf', 'Long appointment guide', self.text, filename='guide.pdf')
         self.window.imported(result)

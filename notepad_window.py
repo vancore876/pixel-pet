@@ -1273,8 +1273,6 @@ class NotepadWindow(QDialog):
             return True
         if note and (note.get('team_id') or note.get('team_workspace_id')):
             return False
-        if kind == 'note':
-            return True
         return not bool(self.team_service is not None and self.team_service.enabled)
 
     def selected_team_recipients(self):

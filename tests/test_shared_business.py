@@ -107,6 +107,13 @@ class SharedBusinessTests(unittest.TestCase):
         self.assertEqual(len(self.store.notes), 1)
         self.assertEqual(decode_entry(saved)['highlights'], ['PART-1'])
 
+    def test_folder_sync_blocks_automatic_api_note_migration(self):
+        self.store.add('Folder note', 'Use existing workspace', repeat=0)
+        self.login()
+        self.sync.folder_sync_active = lambda: True
+        self.sync.share_existing_notes()
+        self.assertFalse(any(call['method'] == 'PUT' for call in self.api.calls))
+
     def test_requires_login_before_migrating_existing_writing(self):
         self.assertIn('Sign in', self.save()[0][1])
         self.assertFalse(self.api.calls)
