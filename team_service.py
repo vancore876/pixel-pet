@@ -580,10 +580,12 @@ class TeamService(QObject):
         notes = {n['id']: n for n in snapshot['notes']
                  if not n.get('team_workspace_id') or n['team_workspace_id'] == workspace}
         baseline = ledger.rows(workspace)
+        deletion_markers = {}
         for marker in snapshot.get('deleted_notes', []):
             if (marker.get('team_workspace_id') and marker['team_workspace_id'] != workspace
                     or marker['id'] in snapshot.get('excluded_ids', [])):
                 continue
+            deletion_markers[marker['id']] = marker
             if marker['id'] not in baseline:
                 ledger.save(workspace, marker['id'], _entity_id(marker), {}, marker.get('team_revisions') or [])
         baseline = ledger.rows(workspace)
@@ -686,13 +688,18 @@ class TeamService(QObject):
                 warnings.append(f"{note.get('title', 'Note')}: sync is pending; your local text was preserved ({exc}).")
         for local_id, previous in baseline.items():
             if local_id not in notes and not previous['deleted']:
+                if local_id not in deletion_markers:
+                    continue  # Cache cleanup/recovery is never authorization to delete shared content.
                 if local_id in snapshot.get('excluded_ids', []):
                     continue  # API-owned cache removal/logout is never a team deletion.
                 try:
                     current = store.get_entity('note', previous['entity_id'])
                     if current and not current['deleted']:
-                        event = store.delete_note(previous['entity_id'], base_revisions=previous['revisions'])
-                        revisions = [event['event_id']]
+                        if not store.has_revisions('note', previous['entity_id'], previous['revisions']):
+                            raise ValueError('The selected deletion is waiting for its shared revisions.')
+                        marker = deletion_markers[local_id]
+                        selected = marker.get('team_conflict_revision') or next(iter(marker.get('team_revisions') or previous['revisions']), '')
+                        revisions = store.discard_note_version(previous['entity_id'], selected)
                     else:
                         revisions = current['revisions'] if current else previous['revisions']
                     ledger.save(workspace, local_id, previous['entity_id'], previous['payload'], revisions, True)
@@ -918,6 +925,8 @@ class TeamService(QObject):
                     deletion_pending = any(
                         (not marker.get('team_workspace_id') or marker['team_workspace_id'] == self._identity['workspace_id'])
                         and _entity_id(marker) == row['entity_id']
+                        and (bool(set(marker.get('team_revisions') or []) & set(row['revisions']))
+                             or not marker.get('team_revisions') and marker['id'] == row['local_id'])
                         for marker in store.state.get('deleted_notes', []))
                     if deletion_pending and not row['deleted']:
                         continue  # Never materialize a deleted row from an older in-flight snapshot.

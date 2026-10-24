@@ -670,7 +670,7 @@ class NoteStore:
         def change():
             if note.get('team_shared') or note.get('team_id'):
                 marker = {key: copy.deepcopy(note.get(key)) for key in
-                          ('id', 'team_id', 'team_workspace_id', 'team_revisions')}
+                          ('id', 'team_id', 'team_workspace_id', 'team_revisions', 'team_conflict_revision')}
                 marker['team_revisions'] = marker.get('team_revisions') or []
                 markers = self.state.setdefault('deleted_notes', [])
                 markers[:] = [row for row in markers if row['id'] != identifier]

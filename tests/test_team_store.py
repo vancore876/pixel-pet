@@ -84,6 +84,36 @@ class TeamStoreTests(unittest.TestCase):
         self.alice.put_note(note, base_revisions=entity['revisions'])
         self.assertEqual([row['id'] for row in self.alice.get_entity('note', note['id'])['payload']['checklist']], ['kept'])
 
+    def test_discard_one_version_keeps_sibling_and_unrelated_note(self):
+        note = self.note()
+        first = self.alice.put_note(note)
+        self.sync(self.alice, self.bob)
+        left = self.alice.put_note({**note, 'body': 'Alice'}, base_revisions=[first['event_id']])
+        self.bob.put_note({**note, 'body': 'Bob'}, base_revisions=[first['event_id']])
+        self.sync(self.bob, self.alice)
+        other = self.alice.put_note(self.note('Unrelated'))
+        self.alice.discard_note_version(note['id'], left['event_id'])
+        current = self.alice.get_entity('note', note['id'])
+        self.assertFalse(current['deleted'])
+        self.assertFalse(current['conflict'])
+        self.assertEqual(current['payload']['body'], 'Bob')
+        self.assertFalse(self.alice.get_entity('note', other['entity_id'])['deleted'])
+
+    def test_deleting_displayed_winner_keeps_other_conflict_version(self):
+        note = self.note()
+        first = self.alice.put_note(note)
+        self.sync(self.alice, self.bob)
+        self.alice.put_note({**note, 'body': 'Alice'}, base_revisions=[first['event_id']])
+        self.bob.put_note({**note, 'body': 'Bob'}, base_revisions=[first['event_id']])
+        self.sync(self.bob, self.alice)
+        current = self.alice.get_entity('note', note['id'])
+        kept = next(v['payload']['body'] for v in current['variants'] if v['revision'] != current['winner_revision'])
+        self.alice.discard_note_version(note['id'], current['winner_revision'])
+        current = self.alice.get_entity('note', note['id'])
+        self.assertFalse(current['deleted'])
+        self.assertEqual(current['payload']['body'], kept)
+        self.assertEqual(len(current['variants']), 1)
+
     def test_durable_identity_and_outbox_survive_restart(self):
         original = self.alice.identity()
         event = self.alice.put_note(self.note())

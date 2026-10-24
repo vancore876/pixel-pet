@@ -328,6 +328,24 @@ class TeamStore:
         current = self.get_entity("note", note_id)
         return self._put("note", note_id, current["payload"] if current else {}, "delete", base_revisions)
 
+    def discard_note_version(self, entity_id, revision):
+        """Discard one displayed conflict version without deleting its siblings."""
+        with self._lock, self._db:
+            current = self._view('note', entity_id)
+            if not current or current['deleted']:
+                return current['revisions'] if current else []
+            variants = current['variants']
+            if len(variants) == 1 or not current['conflict']:
+                return [self.delete_note(entity_id, base_revisions=current['revisions'])['event_id']]
+            if revision not in current['revisions']:
+                raise ValueError('This note version changed. Reload it before deleting.')
+            revisions = []
+            for variant in variants:
+                if variant['revision'] != revision:
+                    event = self._put('note', entity_id, variant['payload'], base_revisions=[revision, variant['revision']])
+                    revisions.append(event['event_id'])
+            return revisions
+
     def resolve_entity(self, kind, entity_id, revision):
         current = self.get_entity(kind, entity_id)
         if current is None:

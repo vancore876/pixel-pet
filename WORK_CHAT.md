@@ -16,9 +16,11 @@ current clients send an empty list only when highlights are removed. Equivalent
 versions do not generate conflict copies, and received notes use a normalized
 local baseline so idle synchronization does not republish unchanged content.
 Previously created conflict copies remain available for review.
-Deleting a shared-folder note, including a conflict copy, deletes the shared
-entry and its conflicting versions. The confirmation explains this scope.
-Concurrent live versions do not reappear after deletion. A missing local sync
+Deleting a displayed conflict version removes only that version; other versions
+and unrelated notes remain. Deleting an ordinary note still deletes that note
+across the workspace. Only a persistent marker from an explicit Delete action
+authorizes a shared deletion. A missing local cache or a retired conflict copy
+does not authorize deleting the remote note. A missing local sync
 baseline alone does not recreate an unchanged deleted note; genuine unpublished
 local edits can still be preserved as a separate recovered entry.
 Local note deletions also retain a persistent deletion marker. An older response

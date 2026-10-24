@@ -384,7 +384,7 @@ class TeamServiceTests(unittest.TestCase):
         self.assertEqual([n['body'] for n in b.notes if n.get('team_id') == note['id']], ['Alice’s change.'])
         self.assertEqual(ae + be, [])
 
-    def test_deleting_conflict_copy_deletes_shared_entry_without_recreation(self):
+    def test_deleting_conflict_copy_keeps_other_version_without_recreation(self):
         a, an, at, ae = self.client('Alice')
         b, bn, bt, be = self.client('Bob')
         note = an.save_note(None, 'Parts', 'Original', 0)
@@ -396,12 +396,13 @@ class TeamServiceTests(unittest.TestCase):
         self.sync(bt)
         self.sync(at)
         branch = next(n for n in a.notes if n.get('team_conflict_revision'))
+        kept_body = next(n['body'] for n in a.notes if not n.get('team_conflict_revision'))
         an.delete(branch['id'])
         for _ in range(3):
             self.sync(at)
             self.sync(bt)
-        self.assertEqual([n for n in a.notes if n.get('team_id') == note['id']], [])
-        self.assertEqual([n for n in b.notes if n.get('team_id') == note['id']], [])
+        self.assertEqual([n['body'] for n in a.notes if n.get('team_id') == note['id']], [kept_body])
+        self.assertEqual([n['body'] for n in b.notes if n.get('team_id') == note['id']], [kept_body])
         self.assertEqual(ae + be, [])
 
     def test_invalid_connection_reports_error_without_freezing_retries(self):

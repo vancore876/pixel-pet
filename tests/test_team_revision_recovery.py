@@ -253,6 +253,21 @@ class TeamRevisionRecoveryTests(unittest.TestCase):
             self.assertIn(edited, [self.body(client[0], note) for note in client[0].notes])
         self.assert_no_errors()
 
+    def test_cache_missing_is_not_a_delete_and_new_note_does_not_duplicate(self):
+        alice, bob, carol, identifier = self.create_three()
+        alice[0].state['notes'] = []
+        alice[0].save()
+        self.all_sync((alice, bob, carol), rounds=2)
+        for client in (alice, bob, carol):
+            self.assertEqual(len(client[0].notes), 1)
+            self.assertIsNotNone(client[0].find(identifier))
+        added = alice[1].save_note(None, 'New independent note', 'Fresh content', 0)
+        self.all_sync((alice, bob, carol), rounds=3)
+        for client in (alice, bob, carol):
+            self.assertEqual(len(client[0].notes), 2)
+            self.assertEqual(sum(n.get('team_id') == added['id'] for n in client[0].notes), 1)
+        self.assert_no_errors()
+
     def test_delete_with_lost_baseline_stays_deleted_across_three_clients(self):
         alice, bob, carol, identifier = self.create_three()
         original = copy.deepcopy(alice[0].find(identifier))
@@ -316,8 +331,7 @@ class TeamRevisionRecoveryTests(unittest.TestCase):
 
     def test_unavailable_delete_ancestry_defers_only_that_record(self):
         alice, bob, carol, identifier = self.create_three()
-        alice[0].state['notes'] = []
-        alice[0].save()
+        alice[0].delete(identifier)
         with closing(sqlite3.connect(alice[2].profile_path.with_suffix('.bridge.sqlite'))) as db, db:
             db.execute('UPDATE notes SET revisions=? WHERE local_id=?', (json.dumps([uuid.uuid4().hex]), identifier))
         outgoing = alice[0].add('Separate outgoing', 'Unaffected outgoing writing', 0)

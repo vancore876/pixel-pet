@@ -2305,7 +2305,7 @@ class NotepadWindow(QDialog):
             self.status.setText('Finish or cancel the notebook operation before deleting an entry.')
             return
         note = self.service.store.find(self.editing_id)
-        question = ('Permanently delete this shared note and all its conflicting versions on every computer?'
+        question = ('Delete this selected shared note version? Other conflicting versions will be kept.'
                     if note and note.get('team_id') else 'Permanently delete this entry?')
         if QMessageBox.question(self, 'Delete entry', question, QMessageBox.Yes | QMessageBox.No, QMessageBox.No) != QMessageBox.Yes:
             return
