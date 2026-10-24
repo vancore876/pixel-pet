@@ -11,6 +11,7 @@ from PySide6.QtCore import QObject, QTimer, Signal
 
 from notes import MAX_NOTES, NoteStore
 from work_chat import _ApiClient
+from shared_note_wire import encode_entry, decode_entry
 
 
 class SharedBusinessController(QObject):
@@ -29,6 +30,7 @@ class SharedBusinessController(QObject):
         self._records = {}
         self._publishing_ids = set()
         self._migration_attempts = set()
+        self._legacy_notebook = False
         self._cache_ids = set()
         self._reserved_cache_ids = set()
         self._editing_id, self._editing_revision = None, 0
@@ -93,6 +95,7 @@ class SharedBusinessController(QObject):
         self._records.clear()
         self._publishing_ids.clear()
         self._migration_attempts.clear()
+        self._legacy_notebook = False
         self._editing_id, self._editing_revision = None, 0
         self._new_identifier = uuid.uuid4().hex
         try:
@@ -135,7 +138,9 @@ class SharedBusinessController(QObject):
         if record["deleted"]:
             identifiers.discard(identifier)
         else:
-            entry = record.get("entry")
+            entry = decode_entry(record.get("entry"))
+            if entry is not record.get('entry'):
+                self._legacy_notebook = True
             if (not isinstance(entry, dict) or entry.get("id") != identifier
                     or entry.get("kind") not in ("order", "list", "note") or entry.get("document_id")):
                 raise ValueError("Invalid shared order or checklist.")
@@ -259,6 +264,7 @@ class SharedBusinessController(QObject):
         self._write_callback = callback
         generation = self._generation
         payload = {"expected_revision": expected}
+        compatibility_attempted = self._legacy_notebook
         if entry is not None:
             from server_business_schema import NOTE_FIELDS, ROW_FIELDS
             # Authorship is assigned by the authenticated server, never by a
@@ -271,10 +277,33 @@ class SharedBusinessController(QObject):
                 for row in payload['entry'].get('checklist', [])]
             if not payload['entry'].get('highlights'):
                 payload['entry'].pop('highlights', None)
+            if self._legacy_notebook:
+                try:
+                    payload['entry'] = encode_entry(payload['entry'])
+                except ValueError as error:
+                    self._writing = False
+                    self._write_callback = None
+                    callback(None, str(error))
+                    return False
         self.status_changed.emit("Saving to the office server…", True)
 
         def received(data, error, status):
             if generation != self._generation or self._closed:
+                return
+            nonlocal compatibility_attempted, payload
+            if (error and status == 422 and entry is not None and not compatibility_attempted
+                    and ('Entry type has an unsupported value' in error
+                         or 'supported order or checklist fields' in error)):
+                try:
+                    payload = {**payload, 'entry': encode_entry(payload['entry'])}
+                except ValueError as failure:
+                    self._writing = False
+                    self._write_callback = None
+                    callback(None, str(failure))
+                    return
+                compatibility_attempted = True
+                self._legacy_notebook = True
+                self.api.request(method, '/api/business/' + identifier, payload, received, self.token)
                 return
             self._writing = False
             self._write_callback = None
@@ -302,9 +331,11 @@ class SharedBusinessController(QObject):
                 if not isinstance(data, dict) or data.get("id") != identifier:
                     raise ValueError("Invalid save acknowledgment.")
                 if entry is not None:
-                    saved_entry = data.get('entry')
+                    saved_entry = decode_entry(data.get('entry'))
                     if (not isinstance(saved_entry, dict) or
-                            saved_entry.get('highlights', []) != entry.get('highlights', [])):
+                            saved_entry.get('highlights', []) != entry.get('highlights', [])
+                            or saved_entry.get('kind') != entry.get('kind')
+                            or saved_entry.get('body') != str(entry.get('body', '')).strip()):
                         callback(None, 'The office server did not preserve the highlights. '
                                  'Update and restart the office server, then retry Save. '
                                  'The text may already be saved, but the highlights were not confirmed.')

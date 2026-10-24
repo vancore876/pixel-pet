@@ -167,6 +167,38 @@ class SharedBusinessHTTPTests(unittest.TestCase):
         _, records, _ = self.request('/api/business', token='alice')
         self.assertIn('Oil filter', json.dumps(records))
 
+    def test_legacy_server_compatibility_preserves_writing_and_highlights(self):
+        from unittest.mock import patch
+        import work_server.store as store_module
+        from shared_note_wire import encode_entry, decode_entry
+        def legacy_validator(data, identifier, **kwargs):
+            if data.get('kind') not in ('order', 'list'):
+                raise BusinessValidationError('Entry type has an unsupported value.')
+            if 'highlights' in data:
+                raise BusinessValidationError('Shared entries contain only supported order or checklist fields.')
+            result = validate_business_entry(data, identifier, **kwargs)
+            result.pop('highlights', None)
+            return result
+        original = entry(kind='note', body='PART-1\nKeep this note', highlights=['PART-1'])
+        with patch.object(store_module, 'validate_business_entry', legacy_validator):
+            self.assertEqual(self.save(original)[0], 422)
+            status, first, _ = self.save(encode_entry(original))
+            self.assertEqual(status, 200)
+            remote = self.request('/api/business', token='bob')[1]['entries']
+            self.assertEqual(len(remote), 1)
+            decoded = decode_entry(remote[0]['entry'])
+            self.assertEqual(decoded['kind'], 'note')
+            self.assertEqual(decoded['body'], original['body'])
+            self.assertEqual(decoded['highlights'], ['PART-1'])
+            decoded.update(body='Updated by coworker', highlights=[])
+            decoded.pop('added_by', None)
+            decoded.pop('added_at', None)
+            status, second, _ = self.save(encode_entry(decoded), expected=first['revision'], token='bob')
+            self.assertEqual(status, 200)
+            self.assertEqual(decode_entry(second['entry'])['body'], 'Updated by coworker')
+            self.assertEqual(decode_entry(second['entry'])['highlights'], [])
+            self.assertEqual(len(self.request('/api/business')[1]['entries']), 1)
+
     def test_all_operations_require_an_active_individual_login(self):
         data = entry()
         self.assertEqual(self.request('/api/business', token=None)[0], 401)

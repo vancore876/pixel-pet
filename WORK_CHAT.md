@@ -1,5 +1,15 @@
 # Jeffery Work Chat
 
+When an older office server rejects Writing notes or highlight fields with a
+validation error, current desktops retry once using a tagged compatibility body
+inside the server's existing checklist format. The same ID and expected revision
+are retained. Current desktops decode that record back into its original entry
+type, text, and highlights, including when coworkers load or edit it. Older
+desktops may display the tagged text; update desktops that use these records.
+The older server's 10,000-character body limit includes the compatibility data.
+An entry that exceeds it remains an unsaved draft and is never truncated.
+Native notebook support remains the preferred server format.
+
 If updating appears to have no effect, run **Check_Work_Server.bat on the server
 computer**. It reports the project folder, loaded schema file, Python interpreter,
 Git revision, and running server's notebook capabilities without reading or

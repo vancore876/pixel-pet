@@ -73,8 +73,39 @@ class SharedBusinessTests(unittest.TestCase):
         self.assertNotIn('added_by', sent['checklist'][0])
         self.assertEqual(sent['highlights'], ['PAD-1'])
         self.api.finish(call, error='Shared entries contain only supported order or checklist fields.', status=422)
+        retry = self.api.pending('/api/business/', 'PUT')
+        self.api.finish(retry, error='Shared entries contain only supported order or checklist fields.', status=422)
         self.assertIn('same notebook schema', results[0][1])
         self.assertIn('highlights are preserved', results[0][1])
+
+    def test_legacy_entry_type_retries_same_note_and_round_trips_highlights(self):
+        from server_business_schema import validate_business_entry
+        from shared_note_wire import decode_entry
+        self.login()
+        results = []
+        self.sync.save(None, 'Writing', 'PART-1\nKeep this text', 0, None,
+                       {'kind': 'note', 'highlights': ['PART-1']},
+                       lambda note, error: results.append((note, error)))
+        first = self.api.pending('/api/business/', 'PUT')
+        identifier = first['body']['entry']['id']
+        self.api.finish(first, error='Entry type has an unsupported value.', status=422)
+        retry = self.api.pending('/api/business/', 'PUT')
+        self.assertEqual(first['body']['entry']['kind'], 'note')
+        self.assertEqual(retry['body']['entry']['kind'], 'list')
+        self.assertNotIn('highlights', retry['body']['entry'])
+        self.assertEqual(retry['body']['expected_revision'], first['body']['expected_revision'])
+        self.assertEqual(retry['body']['entry']['id'], identifier)
+        saved = validate_business_entry(retry['body']['entry'], identifier)
+        saved.pop('highlights', None)  # The earlier server does not return this field.
+        self.api.finish(retry, {'id': identifier, 'revision': 1, 'deleted': False, 'entry': saved})
+        self.assertEqual(len(results), 1)
+        note, error = results[0]
+        self.assertFalse(error)
+        self.assertEqual(note['kind'], 'note')
+        self.assertEqual(note['body'], 'PART-1\nKeep this text')
+        self.assertEqual(note['highlights'], ['PART-1'])
+        self.assertEqual(len(self.store.notes), 1)
+        self.assertEqual(decode_entry(saved)['highlights'], ['PART-1'])
 
     def test_requires_login_before_migrating_existing_writing(self):
         self.assertIn('Sign in', self.save()[0][1])
