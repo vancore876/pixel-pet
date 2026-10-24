@@ -1,5 +1,11 @@
 # Jeffery Work Chat
 
+The `/api/health` response includes `notebook_schema: 2` and notebook feature
+names for Writing notes, highlights, and server authorship. Desktop saves send
+only supported note fields; cached author names and timestamps are not echoed
+back because the authenticated server owns attribution. A field-schema rejection
+preserves the draft and reports the server/desktop format mismatch explicitly.
+
 Writing notes, shared orders and checklists save highlights on the office server. Select a list
 item or text in the note, click **Highlight**, then **Save**. Coworkers receive
 the highlights through normal synchronization. Concurrent edits require reloading

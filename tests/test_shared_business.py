@@ -58,6 +58,24 @@ class SharedBusinessTests(unittest.TestCase):
                        {'kind': 'order', 'currency': 'JMD'}, lambda n, e: results.append((n, e)))
         return results
 
+    def test_save_sends_note_fields_without_server_owned_authorship(self):
+        self.login()
+        results = []
+        self.sync.save(None, 'Parts', 'Check PAD-1', 0, None,
+            {'kind': 'order', 'highlights': ['PAD-1'], 'added_by': 'Cached author',
+             'added_at': 1800000000, 'checklist': [{'id': 'part', 'text': 'Pad',
+             'added_by': 'Cached employee', 'added_at': 1800000000}]},
+            lambda note, error: results.append((note, error)))
+        call = self.api.pending('/api/business/', 'PUT')
+        sent = call['body']['entry']
+        self.assertNotIn('added_by', sent)
+        self.assertNotIn('added_at', sent)
+        self.assertNotIn('added_by', sent['checklist'][0])
+        self.assertEqual(sent['highlights'], ['PAD-1'])
+        self.api.finish(call, error='Shared entries contain only supported order or checklist fields.', status=422)
+        self.assertIn('same notebook schema', results[0][1])
+        self.assertIn('highlights are preserved', results[0][1])
+
     def test_requires_login_before_migrating_existing_writing(self):
         self.assertIn('Sign in', self.save()[0][1])
         self.assertFalse(self.api.calls)

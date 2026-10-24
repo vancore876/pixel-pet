@@ -260,7 +260,17 @@ class SharedBusinessController(QObject):
         generation = self._generation
         payload = {"expected_revision": expected}
         if entry is not None:
-            payload["entry"] = {key: value for key, value in entry.items() if not key.startswith('team_')}
+            from server_business_schema import NOTE_FIELDS, ROW_FIELDS
+            # Authorship is assigned by the authenticated server, never by a
+            # desktop echoing its cached record. Local-only metadata is not wire data.
+            payload['entry'] = {key: copy.deepcopy(value) for key, value in entry.items()
+                                if key in NOTE_FIELDS and key not in {'added_by', 'added_at'}}
+            payload['entry']['checklist'] = [
+                {key: value for key, value in row.items()
+                 if key in ROW_FIELDS and key not in {'added_by', 'added_at'}}
+                for row in payload['entry'].get('checklist', [])]
+            if not payload['entry'].get('highlights'):
+                payload['entry'].pop('highlights', None)
         self.status_changed.emit("Saving to the office server…", True)
 
         def received(data, error, status):
@@ -269,6 +279,15 @@ class SharedBusinessController(QObject):
             self._writing = False
             self._write_callback = None
             if error:
+                if status == 422 and ('supported order or checklist fields' in error or
+                                      'contains unsupported fields' in error):
+                    message = ('The office server rejected the shared-note format. '
+                               'The server application and desktop must use the same notebook schema. '
+                               'Update the server project files, including server_business_schema.py and work_server/store.py, '
+                               'then restart that server process. Your draft and highlights are preserved; no fields were silently discarded.')
+                    callback(None, message)
+                    self.status_changed.emit(message, False)
+                    return
                 message = ("Another coworker changed this record. Your draft is preserved. Use Reload saved to review the latest version."
                            if status == 409 else "The server did not confirm this change: " + error +
                            " Check the latest saved version before retrying.")

@@ -284,7 +284,9 @@ def create_app(database_path="server-data/work-chat.sqlite", *, clock=time.time,
 
     @app.get("/api/health")
     def health():
-        return {"status": "ok", "service": "Jeffery Work Chat", "version": 1}
+        return {"status": "ok", "service": "Jeffery Work Chat", "version": 1,
+                'notebook_schema': 2,
+                'notebook_features': ['writing_notes', 'highlights', 'server_authorship']}
 
     @app.post("/api/auth/register", status_code=201)
     def register(credentials: Credentials, request: Request):
