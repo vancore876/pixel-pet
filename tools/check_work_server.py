@@ -27,6 +27,11 @@ def source_check():
     print('Project folder:', ROOT)
     print('Python:', sys.executable)
     print('Loaded notebook schema:', schema.__file__)
+    for module in ('admin.py', 'admin_store.py'):
+        path = ROOT / 'work_server' / module
+        print('IT module:', path, 'present' if path.is_file() else 'MISSING')
+        if not path.is_file():
+            return False
     try:
         revision = subprocess.run(['git', '-C', str(ROOT), 'rev-parse', '--short', 'HEAD'],
                                   capture_output=True, text=True, timeout=3)
@@ -67,6 +72,27 @@ def health_check(url):
     return True
 
 
+def it_check(url):
+    address = url.rstrip('/') + '/api/it/overview'
+    try:
+        with urllib.request.urlopen(address, timeout=3) as reply:
+            print('IT endpoint returned HTTP', reply.status, 'without authentication; check server configuration.')
+            return False
+    except urllib.error.HTTPError as error:
+        code = error.code
+        error.close()
+        if code == 401:
+            print('IT endpoint is present and requires an IT sign-in (HTTP 401).')
+            return True
+        print('IT endpoint:', address, 'HTTP', code)
+        if code == 404:
+            print('The running process does not provide IT administration. This is not an incorrect password.')
+        return False
+    except OSError as error:
+        print('IT endpoint check failed:', error)
+        return False
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--port', type=int, default=8765)
@@ -84,7 +110,10 @@ def main(argv=None):
             print('Close its server window or stop its Windows service before restarting this project copy.')
             return 1
         return 0 if source_ok else 1
-    return 0 if health_check(args.server or f'http://127.0.0.1:{args.port}') and source_ok else 1
+    url = args.server or f'http://127.0.0.1:{args.port}'
+    health_ok = health_check(url)
+    it_ok = it_check(url)
+    return 0 if health_ok and it_ok and source_ok else 1
 
 
 if __name__ == '__main__':

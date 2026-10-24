@@ -607,7 +607,9 @@ class ITWindow(QDialog):
                 self._lock("Your IT session ended or the password was incorrect. Sign in again.")
                 return
             if status == 404 and path in ("/api/it/login", "/api/it/overview", "/api/it/users"):
-                error = "Update and restart the office server to use IT administration."
+                error = (f'The IT service is missing at {address}{path} (HTTP 404). '
+                         'This is not a password rejection. The responding server has no IT endpoint. '
+                         'Run Check_Work_Server.bat on that server PC to identify the loaded project and IT modules.')
             callback(data, error, status)
 
         reply = self.api.request(method, path, body, finished, token=token)

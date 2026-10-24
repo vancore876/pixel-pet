@@ -118,6 +118,14 @@ def main(argv=None):
                              backup_directory=arguments.backup_directory,
                              backup_keep_days=arguments.backup_keep_days, database_lease=lease)
             try:
+                required_it = {('/api/it/login', 'POST'), ('/api/it/overview', 'GET'), ('/api/it/users', 'GET')}
+                available = {(getattr(route, 'path', ''), method) for route in app.routes
+                             for method in (getattr(route, 'methods', None) or ())}
+                if not required_it <= available:
+                    parser.error('The loaded server app has no complete IT backend. '
+                                 'Check the project folder and work_server/admin.py before starting.')
+                print('Server project:', Path(__file__).resolve().parent.parent, flush=True)
+                print('IT login, overview, and employee endpoints verified.', flush=True)
                 uvicorn.run(app, host=arguments.host, port=arguments.port,
                             ssl_certfile=arguments.certfile, ssl_keyfile=arguments.keyfile,
                             proxy_headers=False, access_log=False, server_header=False,

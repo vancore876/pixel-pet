@@ -1,6 +1,7 @@
 import contextlib
 import io
 import socket
+import urllib.error
 import unittest
 from unittest.mock import patch
 
@@ -28,3 +29,16 @@ class ServerDiagnosticTests(unittest.TestCase):
         with patch.object(diagnostic, 'source_check', return_value=False), \
              patch.object(diagnostic, 'listening', return_value=False):
             self.assertEqual(diagnostic.main(['--preflight']), 1)
+
+    def test_missing_it_route_is_not_reported_as_bad_password(self):
+        error = urllib.error.HTTPError('http://localhost/api/it/overview', 404, 'Not Found', {}, None)
+        with patch.object(diagnostic.urllib.request, 'urlopen', side_effect=error), \
+             contextlib.redirect_stdout(io.StringIO()) as output:
+            self.assertFalse(diagnostic.it_check('http://localhost'))
+        self.assertIn('does not provide IT administration', output.getvalue())
+
+    def test_it_route_requires_authentication(self):
+        error = urllib.error.HTTPError('http://localhost/api/it/overview', 401, 'Unauthorized', {}, None)
+        with patch.object(diagnostic.urllib.request, 'urlopen', side_effect=error), \
+             contextlib.redirect_stdout(io.StringIO()):
+            self.assertTrue(diagnostic.it_check('http://localhost'))

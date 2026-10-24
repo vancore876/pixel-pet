@@ -1,5 +1,13 @@
 # Jeffery Work Chat
 
+IT login is authenticated by `/api/it/login`. HTTP 404 on that endpoint means
+the responding service has no IT login handler, not that a password or version
+check failed. Desktop compatibility cannot supply a missing authentication
+backend. Check_Work_Server.bat checks the loaded IT module files and probes
+the running IT overview without credentials (401 is expected when supported).
+Server startup verifies the IT routes before listening and prints its project
+folder. IT passwords, session checks, and employee permissions remain enforced.
+
 One conflicting or unreadable API record does not block newer notes: it stays
 queued for retry while the download cursor advances through other records.
 Local conflicting Writing is preserved. Missing API cache entries are rebuilt

@@ -302,7 +302,9 @@ class ITWindowTests(unittest.TestCase):
         self.window.password_input.setText("admin123")
         self.window.login_button.click()
         self.api.finish(self.api.pending("/api/it/login"), None, "Not Found", 404)
-        self.assertIn("Update and restart the office server", self.window.status.text())
+        self.assertIn('IT service is missing', self.window.status.text())
+        self.assertIn('HTTP 404', self.window.status.text())
+        self.assertFalse(self.window.token)
         self.assertTrue(self.window.login_button.isEnabled())
 
     def test_home_theme_and_shutdown_preserve_native_controls_and_lock_session(self):
