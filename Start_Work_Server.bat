@@ -3,6 +3,12 @@ setlocal
 cd /d "%~dp0"
 call "%~dp0Setup_Work_Server.bat"
 if errorlevel 1 exit /b 1
+".server-venv\Scripts\python.exe" tools\check_work_server.py --preflight
+if errorlevel 1 (
+    echo The server was not started. See the diagnostic above.
+    pause
+    exit /b 1
+)
 set "JEFFERY_WORK_SERVER_DATA=%LOCALAPPDATA%\PixelSystemBuddy\work-server"
 if not defined LOCALAPPDATA set "JEFFERY_WORK_SERVER_DATA=%USERPROFILE%\AppData\Local\PixelSystemBuddy\work-server"
 echo Starting Jeffery Work Chat on office network port 8765.

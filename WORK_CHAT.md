@@ -1,5 +1,12 @@
 # Jeffery Work Chat
 
+If updating appears to have no effect, run **Check_Work_Server.bat on the server
+computer**. It reports the project folder, loaded schema file, Python interpreter,
+Git revision, and running server's notebook capabilities without reading or
+changing notes or accounts. Start_Work_Server.bat checks for an already occupied
+port before launch and reports the existing response instead of trying to start
+a second server. It never stops that existing process automatically.
+
 The `/api/health` response includes `notebook_schema: 2` and notebook feature
 names for Writing notes, highlights, and server authorship. Desktop saves send
 only supported note fields; cached author names and timestamps are not echoed
