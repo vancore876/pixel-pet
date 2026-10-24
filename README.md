@@ -944,6 +944,18 @@ use scripted target data and the notebook examples use temporary test notes.
 - [Groq GPT-OSS 20B](https://console.groq.com/docs/model/openai/gpt-oss-20b)
 - [Groq JSON mode](https://console.groq.com/docs/structured-outputs)
 
+### Ask Jeffery about unavailable parts
+
+Import the current Excel or CSV parts list in **Inventory**, including part numbers and quantities. In Settings, enable **Allow Groq to use matching inventory records**; in Ask Jeffery, enable sharing notes. For synced work notes, also enable **Allow Groq to read synced work notes**.
+
+Ask “Which parts in our Notepad are unavailable?” Jeffery compares open checklist part numbers and quantities, plus part numbers mentioned in Writing, against the imported catalogue. Answers distinguish zero stock, insufficient quantities, unmatched part numbers, and ambiguous matches, and identify the source note. Writing references assume one unit. Combined shortages include demand across open notes. These checks do not reserve or deduct stock. Reimport the spreadsheet when its quantities change; answers use the imported snapshot.
+
+### Internet updates
+
+Each push to `main` builds and publishes the Windows desktop release through **Publish desktop update** in GitHub Actions. Once the release succeeds, running apps check at startup and every ten minutes while online. A newer release shows **Update available** at the top right of workspace windows, including Home, Notepad, Inventory, Settings and Ask Jeffery. Clicking it offers to download, verify and restart. Offline checks stay quiet and retry later.
+
+Existing installations need this updater-enabled version installed once. After that, downloaded EXE installations and extracted source installations can update using the button. Developer Git checkouts display the button with instructions to pull and restart, preserving local code changes. Updates replace application files while keeping notes, accounts and imported inventory. Save other open drafts before updating; the Notepad save check also runs before restart.
+
 ### Finding and protecting saved notes
 
 Press **Ctrl+F** in the notebook to find text in the open note, including later pages of imported documents. Press **Enter** or **F3** for the next match, or choose **Previous**. Use **Search entries** to search across saved notes.

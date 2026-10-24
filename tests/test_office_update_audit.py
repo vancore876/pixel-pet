@@ -72,6 +72,23 @@ class InventoryCloudConsentTests(unittest.TestCase):
         self.inventory_calls.append(query)
         return self.stock
 
+    def test_notepad_stock_lookup_respects_note_and_team_sharing(self):
+        from types import SimpleNamespace
+        self.settings.values.update(inventory_share_with_ai=True, ai_share_notes=True, team_share_notes_with_ai=False)
+        self.chat.notes.setChecked(True)
+        self.chat.notebook_store = SimpleNamespace(notes=[{'id': 'secret', 'title': 'Team order', 'team_shared': True}])
+        calls = []
+        self.chat.inventory_notepad_context = lambda notes: calls.append(notes) or {'requests': []}
+        self.chat.system_message()
+        self.assertEqual(calls, [[]])
+        self.settings.values['team_share_notes_with_ai'] = True
+        self.chat.system_message()
+        self.assertEqual(calls[-1][0]['id'], 'secret')
+        self.settings.values['inventory_share_with_ai'] = False
+        previous = len(calls)
+        self.chat.system_message()
+        self.assertEqual(len(calls), previous)
+
     def submit(self, text="Where is FILTER-007, and does it need restocking?"):
         self.chat.input.setText(text)
         self.chat.submit()

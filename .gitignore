@@ -25,6 +25,7 @@ dist/
 *.p12
 *.mobileprovision
 data/
+app_build.json
 
 # Editor and OS files
 .DS_Store

@@ -775,7 +775,7 @@ class InventoryService(QObject):
         if self.shared and (not self.token or not self.user):
             return []
         terms = set(re.findall(r"[\w-]+", str(query).casefold()))
-        general = not terms or bool(terms & {"restock", "restocking", "reorder", "reordering"}) or {"low", "stock"} <= terms
+        general = not terms or bool(terms & {"restock", "restocking", "reorder", "reordering", "unavailable"}) or {"low", "stock"} <= terms or {"out", "stock"} <= terms
         scores = {}
         for term in terms:
             for number in self._context_index.get(term, ()):
@@ -787,6 +787,15 @@ class InventoryService(QObject):
         fields = (*FIELDS, "suggested_restock", "low_stock", "updated_at", "source")
         return [{key: self.catalog[number].get(key, "") for key in fields}
                 for number in ranked[:max(1, min(int(limit), 20))]]
+
+    def notepad_context(self, notes):
+        from stock_recall import requested_stock
+        if self.shared and (not self.token or not self.user):
+            return {'status': 'Sign in to inventory before checking requested parts.', 'requests': []}
+        if not self.catalog:
+            return {'status': 'No stock list loaded. Import the Excel or CSV parts list in Inventory.', 'requests': []}
+        return {**requested_stock(self.catalog, notes), 'inventory_status': self.status,
+                'last_import_at': self.summary.get('last_import_at'), 'live_stock_count': False}
 
     def stop(self):
         if self._stopped:

@@ -1,0 +1,58 @@
+name: Publish desktop update
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: desktop-release
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    runs-on: windows-latest
+    timeout-minutes: 35
+    env:
+      CI: 'true'
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Install desktop build dependencies
+        shell: pwsh
+        run: |
+          python -m venv .venv
+          .\.venv\Scripts\python.exe -m pip install -r requirements.txt
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          .\.venv\Scripts\python.exe -m pip install -r requirements-build.txt
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Verify update and stock logic
+        shell: pwsh
+        env:
+          QT_QPA_PLATFORM: offscreen
+          PYTHONPATH: 'tests;.'
+        run: .\.venv\Scripts\python.exe -m unittest tests.test_app_updates tests.test_stock_recall
+      - name: Build desktop
+        shell: cmd
+        run: Build_EXE.bat
+      - name: Prepare update manifest
+        shell: pwsh
+        run: .\.venv\Scripts\python.exe tools/publish_update_manifest.py
+      - name: Publish release
+        shell: pwsh
+        run: |
+          gh release view desktop-latest --repo "$env:GITHUB_REPOSITORY" *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release edit desktop-latest --repo "$env:GITHUB_REPOSITORY" --target "$env:GITHUB_SHA" --title 'Latest Pixel Pet desktop update' --notes "Built from $env:GITHUB_SHA. Save drafts before updating."
+          } else {
+            gh release create desktop-latest --repo "$env:GITHUB_REPOSITORY" --target "$env:GITHUB_SHA" --title 'Latest Pixel Pet desktop update' --notes "Built from $env:GITHUB_SHA. Save drafts before updating."
+          }
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          gh release upload desktop-latest dist/PixelSystemBuddy.exe dist/update.json --clobber --repo "$env:GITHUB_REPOSITORY"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

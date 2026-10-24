@@ -17,12 +17,14 @@ if /i "%~1"=="semantic" (
     if errorlevel 1 goto :failed
     set "SEMANTIC_ARGS=--collect-all sentence_transformers --collect-all transformers --collect-all tokenizers --collect-all safetensors --copy-metadata torch --copy-metadata sentence-transformers --copy-metadata huggingface-hub"
 )
-".venv\Scripts\python.exe" -m PyInstaller --noconfirm --clean --noconsole --onefile --name PixelSystemBuddy --add-data "assets;assets" --add-data "THIRD_PARTY_NOTICES.md;." --collect-all pypdfium2 --collect-all pypdfium2_raw --copy-metadata pypdfium2 --collect-data trafilatura --collect-data justext --collect-all rapidfuzz --copy-metadata RapidFuzz --copy-metadata Pillow --copy-metadata trafilatura --copy-metadata openpyxl --copy-metadata et-xmlfile --copy-metadata xlrd --copy-metadata defusedxml %SEMANTIC_ARGS% main.py
+".venv\Scripts\python.exe" tools\stamp_build.py
+if errorlevel 1 goto :failed
+".venv\Scripts\python.exe" -m PyInstaller --noconfirm --clean --noconsole --onefile --name PixelSystemBuddy --add-data "assets;assets" --add-data "app_build.json;." --add-data "THIRD_PARTY_NOTICES.md;." --collect-all pypdfium2 --collect-all pypdfium2_raw --copy-metadata pypdfium2 --collect-data trafilatura --collect-data justext --collect-all rapidfuzz --copy-metadata RapidFuzz --copy-metadata Pillow --copy-metadata trafilatura --copy-metadata openpyxl --copy-metadata et-xmlfile --copy-metadata xlrd --copy-metadata defusedxml %SEMANTIC_ARGS% main.py
 if errorlevel 1 goto :failed
 echo Done: dist\PixelSystemBuddy.exe
-pause
+if not defined CI pause
 exit /b 0
 :failed
 echo Build failed. Review the error above.
-pause
+if not defined CI pause
 exit /b 1

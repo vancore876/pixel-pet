@@ -139,6 +139,7 @@ class BuddyApp(QObject):
         self.inventory.scan_ready.connect(self.stock_scan_feedback)
         self.inventory.movement_finished.connect(self.stock_movement_feedback)
         self.chat.inventory_context = self.inventory_context
+        self.chat.inventory_notepad_context = self.inventory.notepad_context
         self.notepad.set_inventory_service(self.inventory)
         self.home = HomeWindow(self.note_service, self.settings, self.focus)
         self.home.navigate_requested.connect(self.home_navigate)
@@ -1297,6 +1298,8 @@ def main():
         QMessageBox.information(None, APP_NAME, "PixelSystem Buddy is already running. Check the tray icon beside your clock.")
         return 0
     buddy = BuddyApp(app)
+    from app_updates import UpdateController
+    app.update_controller = UpdateController(app, data, can_restart=buddy.notepad.maybe_leave)
     if args.smoke_test:
         QTimer.singleShot(4000, app.quit)
     try:
