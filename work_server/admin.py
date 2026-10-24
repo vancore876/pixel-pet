@@ -91,3 +91,9 @@ def register_admin_routes(app, store, *, rate_limiter, is_loopback, rate_window_
         limit_password_work(request)
         admin.employee_action(token(request), identifier, body.admin_password, body.confirm_username)
         return Response(status_code=204)
+
+    @app.post('/api/it/users/{identifier}/delete', status_code=204)
+    def delete_employee(identifier: Annotated[int, Path(ge=1, le=2**63 - 1)], body: ITEmployeeAction, request: Request):
+        limit_password_work(request)
+        admin.employee_action(token(request), identifier, body.admin_password, body.confirm_username, delete=True)
+        return Response(status_code=204)

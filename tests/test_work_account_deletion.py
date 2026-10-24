@@ -82,7 +82,7 @@ class AccountDeletionHTTPTests(unittest.TestCase):
         updated = self.request('/api/business?after_revision=' + str(order['revision']), token=bob['token'])[1]
         retained_order = next(entry for entry in updated['entries'] if entry['id'] == identifier)
         self.assertEqual(retained_order['updated_by_username'], 'deleted-user')
-        self.assertEqual(retained_order['entry'], order['entry'])
+        self.assertEqual(retained_order['entry'], {**order['entry'], 'added_by': 'deleted-user'})
         self.assertGreater(retained_order['revision'], order['revision'])
         item = self.request('/api/inventory/items/DELETE-KEEP', token=bob['token'])[1]
         self.assertEqual((item['quantity'], item['location']), (4, 'Shelf 8'))

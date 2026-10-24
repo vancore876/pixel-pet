@@ -1,5 +1,18 @@
 # Jeffery Work Chat
 
+IT **Active sessions** counts unexpired employee login tokens across the office,
+not computers currently online. Separate browser/desktop logins and repeated
+sign-ins can each contribute a token; the default employee expiry is eight hours.
+Select an employee and choose **Sign employee out of all PCs** to revoke their
+sessions without deleting the account.
+
+IT **Delete employee account** requires selecting one employee, entering the
+current IT password, and typing that employee's exact username. It removes the
+account from the employee directory and revokes all its sessions/recovery codes.
+Company notes, orders, stock, and messages remain; retained author identities are
+anonymized. Deletion is audited. This option requires the updated desktop and
+the updated server endpoint `/api/it/users/{id}/delete`.
+
 IT login is authenticated by `/api/it/login`. HTTP 404 on that endpoint means
 the responding service has no IT login handler, not that a password or version
 check failed. Desktop compatibility cannot supply a missing authentication

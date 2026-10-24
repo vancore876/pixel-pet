@@ -487,29 +487,43 @@ class ChatStore:
                                          (actor_id,)).fetchone()
             if current is None or (current["username"], current["password_hash"]) != (user["username"], user["password_hash"]):
                 raise StoreError(401, "Your account changed. Sign in again before deleting it.")
+            self._delete_account_rows(connection, actor_id)
+
+    def _delete_account_rows(self, connection, actor_id):
+        """Shared transactional anonymization for owner and IT-authorized deletion."""
+        username = connection.execute('SELECT username FROM users WHERE id=?', (actor_id,)).fetchone()[0]
+        tombstone = "deleted-" + secrets.token_hex(12)
+        while connection.execute("SELECT 1 FROM users WHERE username=?", (tombstone,)).fetchone():
             tombstone = "deleted-" + secrets.token_hex(12)
-            while connection.execute("SELECT 1 FROM users WHERE username=?", (tombstone,)).fetchone():
-                tombstone = "deleted-" + secrets.token_hex(12)
-            deleted_at = utc_timestamp(self.clock())
-            connection.execute("UPDATE users SET username=?,password_hash='!deleted',deleted_at=? WHERE id=?",
-                               (tombstone, deleted_at, actor_id))
-            connection.execute("DELETE FROM sessions WHERE user_id=?", (actor_id,))
-            connection.execute("DELETE FROM recovery_codes WHERE user_id=?", (actor_id,))
-            connection.execute("DELETE FROM read_receipts WHERE reader_id=?", (actor_id,))
-            # Shared stock is company data; uncommitted uploads and retry receipts
-            # belong to the removed account and must not survive it.
-            tables = {row["name"] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-            if "inventory_imports" in tables:
-                if "inventory_import_rows" in tables:
-                    connection.execute("DELETE FROM inventory_import_rows WHERE import_id IN (SELECT id FROM inventory_imports WHERE user_id=?)", (actor_id,))
-                connection.execute("DELETE FROM inventory_imports WHERE user_id=?", (actor_id,))
-            # Advance affected company records so another PC refreshes a cached
-            # author to the anonymous label without changing order contents.
-            for record in connection.execute("SELECT id FROM business_entries WHERE updated_by=? ORDER BY revision", (actor_id,)).fetchall():
-                connection.execute("UPDATE business_state SET revision=revision+1 WHERE id=1")
-                revision = connection.execute("SELECT revision FROM business_state WHERE id=1").fetchone()[0]
-                connection.execute("UPDATE business_entries SET revision=?,updated_at=? WHERE id=?",
-                                   (revision, deleted_at, record["id"]))
+        deleted_at = utc_timestamp(self.clock())
+        connection.execute("UPDATE users SET username=?,password_hash='!deleted',deleted_at=? WHERE id=?",
+                           (tombstone, deleted_at, actor_id))
+        connection.execute("DELETE FROM sessions WHERE user_id=?", (actor_id,))
+        connection.execute("DELETE FROM recovery_codes WHERE user_id=?", (actor_id,))
+        connection.execute("DELETE FROM read_receipts WHERE reader_id=?", (actor_id,))
+        # Shared stock is company data; uncommitted uploads and retry receipts
+        # belong to the removed account and must not survive it.
+        tables = {row["name"] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        if "inventory_imports" in tables:
+            if "inventory_import_rows" in tables:
+                connection.execute("DELETE FROM inventory_import_rows WHERE import_id IN (SELECT id FROM inventory_imports WHERE user_id=?)", (actor_id,))
+            connection.execute("DELETE FROM inventory_imports WHERE user_id=?", (actor_id,))
+        # Advance affected company records so another PC refreshes a cached
+        # author to the anonymous label without changing order contents.
+        for record in connection.execute('SELECT id,updated_by,entry_json FROM business_entries ORDER BY revision').fetchall():
+            entry = json.loads(record['entry_json']) if record['entry_json'] else None
+            changed = False
+            if entry:
+                for target in [entry, *entry.get('checklist', [])]:
+                    if target.get('added_by') == username:
+                        target['added_by'] = 'deleted-user'
+                        changed = True
+            if not changed and record['updated_by'] != actor_id:
+                continue
+            connection.execute("UPDATE business_state SET revision=revision+1 WHERE id=1")
+            revision = connection.execute("SELECT revision FROM business_state WHERE id=1").fetchone()[0]
+            connection.execute("UPDATE business_entries SET revision=?,updated_at=?,entry_json=? WHERE id=?",
+                               (revision, deleted_at, json.dumps(entry, ensure_ascii=False, separators=(',', ':')) if entry else None, record["id"]))
 
     @staticmethod
     def _business_identifier(identifier):

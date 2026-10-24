@@ -141,22 +141,30 @@ class BackupActionDialog(QDialog):
 class EmployeeActionDialog(QDialog):
     """Ask for fresh credentials for one explicitly selected employee."""
 
-    def __init__(self, owner, employee, reset_password):
+    def __init__(self, owner, employee, reset_password, delete_account=False):
         super().__init__(owner)
         self.owner, self.employee = owner, dict(employee)
         self.reset_password = reset_password
+        self.delete_account = delete_account
         self._reply = None
         self._active = True
         self._busy = False
         self.setWindowModality(Qt.WindowModal)
         title = "Reset employee password" if reset_password else "Sign employee out of all PCs"
+        if delete_account:
+            title = 'Delete employee account'
         self.setWindowTitle(title + " · Jeffery IT")
         self.resize(480, 360)
         layout = QVBoxLayout(self)
         layout.addWidget(_label(title, "sectionTitle"))
         detail = ("This replaces the employee's password, invalidates their recovery code, and signs them out of all PCs."
                   if reset_password else "The employee must sign in again on every PC. Their password stays the same.")
+        if delete_account:
+            detail = 'Delete only the selected employee account. This action cannot be undone.'
         layout.addWidget(_label(detail))
+        if delete_account:
+            layout.addWidget(_label('Permanently remove this employee account, revoke all sessions and recovery codes, '
+                                    'and anonymize retained company history. Shared notes, orders, and stock remain.'))
         layout.addWidget(_label("Employee: " + employee["username"]))
         form = QFormLayout()
         self.admin_password = _password()
@@ -183,6 +191,8 @@ class EmployeeActionDialog(QDialog):
         self.submit_button = _button("Reset password" if reset_password else "Sign out all PCs", self.submit)
         row.addWidget(self.cancel_button)
         row.addWidget(self.submit_button)
+        if delete_account:
+            self.submit_button.setText('Permanently delete account')
         layout.addLayout(row)
         apply_window_style(self, owner.settings)
 
@@ -211,6 +221,8 @@ class EmployeeActionDialog(QDialog):
         self.submit_button.setEnabled(False)
         self.status.setText("Updating employee account…")
         action = "reset-password" if self.reset_password else "sign-out"
+        if self.delete_account:
+            action = 'delete'
 
         def finished(data, error, status):
             if not self._active:
@@ -218,12 +230,17 @@ class EmployeeActionDialog(QDialog):
             self._busy = False
             self.submit_button.setEnabled(True)
             if error:
+                if self.delete_account and status == 404 and error == 'Not Found':
+                    error = ('This server does not provide employee account deletion yet. '
+                             'Install the server code for this delete option. No account was changed.')
                 self.status.setText(error)
                 return
             username = self.employee["username"]
             message = (f"Password reset for {username}. Give them the new password privately; they can generate a new recovery code after signing in."
                        if self.reset_password else f"{username} has been signed out of all PCs.")
             self.owner.status.setText(message)
+            if self.delete_account:
+                self.owner.status.setText(f'Employee account {username} deleted. Company records were preserved.')
             self.owner.refresh(preserve_status=True)
             self.accept()
 
@@ -380,6 +397,9 @@ class ITWindow(QDialog):
             self.metrics[key] = value
             metrics.addWidget(card, 0, column)
         layout.addLayout(metrics)
+        layout.addWidget(_label('Active sessions are unexpired employee sign-ins, not a count of PCs currently online. '
+                                'Repeated logins, browsers, and other PCs can each create a session. '
+                                'Select an employee and use Sign out all PCs to revoke their sessions.', 'hint'))
         row = QHBoxLayout()
         self.search = QLineEdit()
         self.search.setPlaceholderText("Find an employee by username")
@@ -409,6 +429,8 @@ class ITWindow(QDialog):
         self.sign_out_button = _button("Sign employee out of all PCs…", lambda: self._employee_action(False))
         row.addWidget(self.reset_button)
         row.addWidget(self.sign_out_button)
+        self.delete_button = _button('Delete employee account...', lambda: self._employee_action(False, delete_account=True))
+        row.addWidget(self.delete_button)
         row.addStretch()
         layout.addLayout(row)
         self._build_backups(layout)
@@ -777,6 +799,7 @@ class ITWindow(QDialog):
             raise ValueError("Invalid audit")
         rows = []
         names = {"initialized": "IT account initialized", "login": "IT signed in", "logout": "IT signed out",
+                 'employee_account_deleted': 'Employee account deleted',
                  "password_changed": "IT password changed", "employee_password_reset": "Employee password reset",
                  "employee_sessions_revoked": "Employee signed out of all PCs", "local_password_reset": "IT password reset on server"}
         for row in audit:
@@ -829,7 +852,7 @@ class ITWindow(QDialog):
         item = self.users_table.item(row, 0) if row >= 0 else None
         return next((user for user in self._users if item is not None and user["id"] == item.data(Qt.UserRole)), None)
 
-    def _employee_action(self, reset_password):
+    def _employee_action(self, reset_password, delete_account=False):
         employee = self._selected_user()
         if not employee or not self._token or self._must_change_password or self._busy or self._refreshing:
             return
@@ -838,7 +861,7 @@ class ITWindow(QDialog):
             return
         if self._action_dialog is not None:
             self._action_dialog.deleteLater()
-        self._action_dialog = EmployeeActionDialog(self, employee, reset_password)
+        self._action_dialog = EmployeeActionDialog(self, employee, reset_password, delete_account=delete_account)
         self._action_dialog.show()
         self._action_dialog.admin_password.setFocus()
 
@@ -858,6 +881,7 @@ class ITWindow(QDialog):
         available = bool(employee and self._token and not self._must_change_password and not self._busy and not self._refreshing)
         self.reset_button.setEnabled(available)
         self.sign_out_button.setEnabled(available)
+        self.delete_button.setEnabled(available)
         self.user_hint.setText("Selected: " + employee["username"] if employee else "Select an employee to manage access.")
 
     def _clear_password_fields(self):

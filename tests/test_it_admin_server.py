@@ -151,6 +151,39 @@ class ITAdminServerTests(unittest.TestCase):
         self.assertEqual(self.request("/api/it/password", method="POST", token=session["token"],
             data={"current_password": PASSWORD, "new_password": PASSWORD})[0], 422)
 
+    def test_active_session_count_is_unexpired_employee_signins_not_online_pcs(self):
+        session = self.ready()
+        self.employee()
+        self.store.login('employee', EMPLOYEE_PASSWORD)
+        self.store.login('employee', EMPLOYEE_PASSWORD)
+        self.assertEqual(self.admin.overview(session['token'])['sessions'], 3)
+        self.assertEqual(self.admin.users(session['token'])['users'][0]['active_sessions'], 3)
+        self.admin.employee_action(session['token'], self.store.users()[0]['id'], PASSWORD, 'employee')
+        self.assertEqual(self.admin.overview(session['token'])['sessions'], 0)
+
+    def test_admin_delete_requires_proof_and_removes_only_selected_account(self):
+        import uuid
+        session = self.ready()
+        employee, other = self.employee(), self.employee('other_employee')
+        self.store.login('employee', EMPLOYEE_PASSWORD)
+        note = {'id': uuid.uuid4().hex, 'kind': 'note', 'title': 'Company record', 'body': 'Keep this text'}
+        self.store.save_business_entry(employee['user']['id'], note['id'], 0, note)
+        self.store.save_business_entry(other['user']['id'], note['id'], 1, note)
+        path = f"/api/it/users/{employee['user']['id']}/delete"
+        body = {'admin_password': PASSWORD, 'confirm_username': 'employee'}
+        self.assertEqual(self.request(path, method='POST', token=employee['token'], data=body)[0], 401)
+        self.assertEqual(self.request(path, method='POST', token=session['token'], data={**body, 'confirm_username': 'other_employee'})[0], 422)
+        self.assertEqual(self.request(path, method='POST', token=session['token'], data={**body, 'admin_password': 'incorrect password'})[0], 401)
+        self.assertEqual(self.request(path, method='POST', token=session['token'], data=body)[0], 204)
+        with self.assertRaises(StoreError):
+            self.store.authenticate(employee['token'])
+        self.assertEqual(self.store.authenticate(other['token'])['username'], 'other_employee')
+        retained = self.store.business_entries()['entries'][0]['entry']
+        self.assertEqual(retained['body'], 'Keep this text')
+        self.assertEqual(retained['added_by'], 'deleted-user')
+        self.assertEqual(self.admin.overview(session['token'])['audit'][0]['action'], 'employee_account_deleted')
+        self.assertEqual([u['username'] for u in self.admin.users(session['token'])['users']], ['other_employee'])
+
     def test_employee_reset_revokes_sessions_and_recovery_and_preserves_other_employee(self):
         session = self.ready()
         employee, other = self.employee(), self.employee("another_employee")

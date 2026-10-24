@@ -185,7 +185,9 @@ class ITAdminStore:
                 raise StoreError(503, "The employee directory exceeds this server's account capacity.")
             return {"users": [dict(row) for row in rows]}
 
-    def employee_action(self, token, identifier, admin_password, confirm_username, *, new_password=None):
+    def employee_action(self, token, identifier, admin_password, confirm_username, *, new_password=None, delete=False):
+        if type(delete) is not bool or delete and new_password is not None:
+            raise StoreError(422, 'Choose one employee action.')
         if type(identifier) is not int or not 1 <= identifier < 2**63:
             raise StoreError(422, "Choose a valid employee account.")
         validate_username(confirm_username)
@@ -201,6 +203,10 @@ class ITAdminStore:
                 raise StoreError(404, "That employee account was not found.")
             if user["username"] != confirm_username:
                 raise StoreError(422, "Type the employee's username exactly to confirm.")
+            if delete:
+                self.store._delete_account_rows(connection, identifier)
+                self._audit(connection, 'employee_account_deleted', user['username'])
+                return
             if password_hash is not None:
                 connection.execute("UPDATE users SET password_hash=? WHERE id=?", (password_hash, identifier))
                 connection.execute("DELETE FROM recovery_codes WHERE user_id=?", (identifier,))

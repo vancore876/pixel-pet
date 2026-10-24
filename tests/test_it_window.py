@@ -218,6 +218,23 @@ class ITWindowTests(unittest.TestCase):
         self.assertTrue(all(not button.autoDefault() and not button.isDefault()
                             for button in self.window.findChildren(QPushButton)))
 
+    def test_employee_delete_requires_exact_name_and_it_password(self):
+        self.dashboard()
+        self.window.users_table.selectRow(0)
+        self.window.delete_button.click()
+        dialog = self.window._action_dialog
+        dialog.admin_password.setText('admin current password')
+        dialog.confirm_username.setText('wrong')
+        dialog.submit_button.click()
+        self.assertIn('exactly', dialog.status.text())
+        dialog.confirm_username.setText('alice')
+        dialog.submit_button.click()
+        call = self.api.pending('/api/it/users/4/delete')
+        self.assertEqual(call['body'], {'admin_password': 'admin current password', 'confirm_username': 'alice'})
+        self.assertEqual(dialog.admin_password.text(), '')
+        self.api.finish(call, None, '', 204)
+        self.assertIn('alice deleted', self.window.status.text())
+
     def test_employee_reset_requires_exact_confirmation_and_explicit_submit(self):
         self.dashboard()
         self.window.users_table.selectRow(0)
