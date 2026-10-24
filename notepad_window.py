@@ -427,12 +427,15 @@ class NotepadWindow(QDialog):
         self.refresh_shared_connection_status()
 
     def open_shared_connection(self):
-        if self.team_service is not None and self.team_service.enabled:
+        if self.team_service is not None and self.team_service.enabled and not getattr(self, '_api_attention', False):
             self.team_requested.emit()
         else:
             self.connection_work_chat_requested.emit()
 
     def refresh_shared_connection_status(self, *args):
+        api_message, api_connected = self._server_status
+        self._api_attention = not api_connected and api_message.startswith((
+            'Could not load', 'Shared business connection:', 'Server notes need attention:', 'The office server'))
         if self.team_service is not None and self.team_service.enabled:
             message = str(getattr(self.team_service, 'status', 'Connecting to the shared work folder…'))
             lower = message.casefold()
@@ -448,6 +451,12 @@ class NotepadWindow(QDialog):
             self.shared_login_button.setText('Folder settings')
             self.shared_status.setToolTip(message)
             self.shared_status.setAccessibleDescription(message)
+            if self._api_attention:
+                combined = message + '\n' + api_message
+                self.shared_status.setText(self.shared_status.text() + ' · Server notes need attention')
+                self.shared_status.setToolTip(combined)
+                self.shared_status.setAccessibleDescription(combined)
+                self.shared_login_button.setText('Check server connection')
             return
         message, connected = self._server_status
         if connected:

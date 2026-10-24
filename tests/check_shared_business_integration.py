@@ -91,6 +91,25 @@ class SharedOfficeTests(harness.RealServerTests):
         self.assertEqual(len(aw.body.extraSelections()), 398)
         self.assertEqual(aw.note_author.text(), 'Added by: highlight_alice')
 
+    def test_blocked_older_record_does_not_hide_new_writing_from_coworker(self):
+        alice, ac, a, aw = self.coworker('blocked_alice')
+        bob, bc, b, bw = self.coworker('blocked_bob')
+        old = self.saved(ac)
+        local = b.store.new_note('Protected local Writing', 'Preserve this local version', 0, None,
+                                 old['created'], details={'kind': 'note'})
+        local['id'] = old['id']
+        b.store.transaction(lambda: b.store.notes.append(local))
+        ac.mark_editing(None)
+        newest = self.saved(ac, kind='note', highlights=['Confirm'])
+        self.sync(bc, lambda: b.store.find(newest['id']) is not None)
+        self.assertEqual(b.store.find(old['id'])['body'], 'Preserve this local version')
+        self.assertIn(old['id'], bc._deferred_records)
+        bw.load_note(newest['id'])
+        self.assertEqual(bw.kind.currentData(), 'note')
+        self.assertEqual(bw.highlight_terms, ['Confirm'])
+        self.assertTrue(bw.body.extraSelections())
+        self.assertIn('Server notes need attention', bw._server_status[0])
+
     def test_shared_orders_checklists_conflict_delete_and_personal_writing(self):
         alice, ac, a, aw = self.coworker('parts_alice')
         bob, bc, b, bw = self.coworker('parts_bob')

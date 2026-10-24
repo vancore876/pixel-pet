@@ -28,6 +28,7 @@ class SharedBusinessController(QObject):
         self._generation = 0
         self._cursor = 0
         self._records = {}
+        self._deferred_records = {}
         self._publishing_ids = set()
         self._migration_attempts = set()
         self._legacy_notebook = False
@@ -93,6 +94,7 @@ class SharedBusinessController(QObject):
         self.api.base_url = origin
         self._cursor = 0
         self._records.clear()
+        self._deferred_records.clear()
         self._publishing_ids.clear()
         self._migration_attempts.clear()
         self._legacy_notebook = False
@@ -130,8 +132,10 @@ class SharedBusinessController(QObject):
                 or any(char not in "0123456789abcdef" for char in identifier)
                 or type(revision) is not int or revision < 1 or type(record.get("deleted")) is not bool):
             raise ValueError("Invalid shared business version.")
-        if revision <= self._records.get(identifier, {}).get("revision", 0):
-            return self.store.find(identifier)
+        known_revision = self._records.get(identifier, {}).get('revision', 0)
+        local = self.store.find(identifier)
+        if revision < known_revision or revision == known_revision and (record['deleted'] or local is not None):
+            return local
         known = identifier in self._cache_ids
         identifiers = self._cache_ids.copy()
         note = None
@@ -208,17 +212,40 @@ class SharedBusinessController(QObject):
                     if not isinstance(record, dict) or type(record.get("revision")) is not int or record["revision"] <= previous:
                         raise ValueError("Shared business revisions arrived out of order.")
                     previous = record["revision"]
-                    self._apply_record(record)
                 if data["cursor"] != previous or (data["has_more"] and not data["entries"]):
                     raise ValueError("Invalid shared business cursor.")
+                pending = dict(self._deferred_records)
+                for identifier in self._cache_ids:
+                    if identifier in self._records and self.store.find(identifier) is None:
+                        cached = self._records[identifier]
+                        if not cached['deleted'] and cached['revision'] >= pending.get(identifier, {}).get('revision', 0):
+                            pending[identifier] = cached
+                for record in data['entries']:
+                    identifier = record.get('id')
+                    if (not isinstance(identifier, str) or len(identifier) != 32
+                            or any(char not in '0123456789abcdef' for char in identifier)):
+                        raise ValueError('Invalid shared entry identifier.')
+                    if record['revision'] >= pending.get(identifier, {}).get('revision', 0):
+                        pending[identifier] = record
+                problems = []
+                for identifier, record in sorted(pending.items(), key=lambda item: item[1]['revision']):
+                    try:
+                        self._apply_record(record)
+                        self._deferred_records.pop(identifier, None)
+                    except (OSError, ValueError, TypeError) as failure:
+                        self._deferred_records[identifier] = copy.deepcopy(record)
+                        problems.append(str(failure))
                 self._cursor = data["cursor"]
                 self.ready = not data["has_more"]
                 self.service.changed.emit("")
                 self.status_changed.emit("Shared with coworkers · " + (self.user or {}).get("username", "Office account")
                                          if self.ready else "Loading shared business records…", self.ready)
+                if problems:
+                    self.status_changed.emit(f'Server notes need attention: {len(problems)} record(s) pending. '
+                                             'Other notes continue syncing. ' + problems[0], False)
                 if data["has_more"]:
                     QTimer.singleShot(0, self.refresh)
-                elif self.ready:
+                elif self.ready and not problems:
                     QTimer.singleShot(0, self.share_existing_notes)
             except (OSError, ValueError, TypeError) as failure:
                 self.ready = False

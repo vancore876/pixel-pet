@@ -107,6 +107,38 @@ class SharedBusinessTests(unittest.TestCase):
         self.assertEqual(len(self.store.notes), 1)
         self.assertEqual(decode_entry(saved)['highlights'], ['PART-1'])
 
+    def test_conflicting_old_record_does_not_block_new_notes_and_is_retried(self):
+        private = self.store.add('Local original', 'Preserve local text', repeat=0)
+        blocked = self.record(revision=1, identifier=private['id'], kind='note')
+        newest = self.record(revision=2, kind='note', highlights=['Check'])
+        statuses = []
+        self.sync.status_changed.connect(lambda text, connected: statuses.append(text))
+        self.sync.folder_sync_active = lambda: True
+        self.login([blocked, newest])
+        self.assertEqual(self.store.find(private['id'])['body'], 'Preserve local text')
+        self.assertIsNotNone(self.store.find(newest['id']))
+        self.assertEqual(self.sync._cursor, 2)
+        self.assertIn(private['id'], self.sync._deferred_records)
+        self.assertIn('Other notes continue syncing', statuses[-1])
+        self.sync.refresh()
+        self.page()
+        self.assertEqual(len(self.store.notes), 2)
+        self.store.delete(private['id'])
+        self.sync.refresh()
+        self.page()
+        self.assertFalse(self.sync._deferred_records)
+        self.assertEqual(self.store.find(private['id'])['body'], blocked['entry']['body'])
+        self.assertEqual(len(self.store.notes), 2)
+
+    def test_missing_api_cache_is_rehydrated_without_creating_another_note(self):
+        row = self.record()
+        self.login([row])
+        self.store.transaction(lambda: self.store.state.update(notes=[]))
+        self.sync.refresh()
+        self.page()
+        self.assertEqual([note['id'] for note in self.store.notes], [row['id']])
+        self.assertFalse(any(call['method'] == 'PUT' for call in self.api.calls))
+
     def test_folder_sync_blocks_automatic_api_note_migration(self):
         self.store.add('Folder note', 'Use existing workspace', repeat=0)
         self.login()

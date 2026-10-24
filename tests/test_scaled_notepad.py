@@ -177,6 +177,17 @@ class ScaledNotepadTests(unittest.TestCase):
             self.window.team_service = None
             self.window.shared_business = None
 
+    def test_folder_status_does_not_hide_blocked_server_notes(self):
+        from types import SimpleNamespace
+        self.window.team_service = SimpleNamespace(enabled=True, status='Connected to shared folder')
+        try:
+            self.window.set_shared_status('Server notes need attention: one record pending', False)
+            self.assertIn('Server notes need attention', self.window.shared_status.text())
+            self.assertIn('one record pending', self.window.shared_status.toolTip())
+            self.assertEqual(self.window.shared_login_button.text(), 'Check server connection')
+        finally:
+            self.window.team_service = None
+
     def save_large_import(self):
         result = _result('pdf', 'Long appointment guide', self.text, filename='guide.pdf')
         self.window.imported(result)

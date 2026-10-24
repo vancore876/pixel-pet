@@ -1,5 +1,12 @@
 # Jeffery Work Chat
 
+One conflicting or unreadable API record does not block newer notes: it stays
+queued for retry while the download cursor advances through other records.
+Local conflicting Writing is preserved. Missing API cache entries are rebuilt
+from the latest confirmed record without uploading a new note. When folder and
+API connections are both enabled, an API error appears alongside folder status;
+a healthy folder connection no longer hides server-note delivery problems.
+
 New Writing notes follow the same active transport as orders and checklists.
 With shared-folder sync enabled, they are saved through that workspace rather
 than being forced onto the separate Work Chat API. Automatic API migration is
