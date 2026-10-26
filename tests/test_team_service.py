@@ -71,6 +71,76 @@ class TeamServiceTests(unittest.TestCase):
     def wire(self):
         return SharedWorkspace(self.share).read_events()[0]
 
+    def test_independent_remote_body_and_local_highlight_edits_do_not_duplicate(self):
+        alice, an, at, ae = self.client('Alice')
+        bob, bn, bt, be = self.client('Bob')
+        note = an.save_note(None, 'Parts', 'Original PART-1 text', 0)
+        self.sync(at)
+        self.sync(bt)
+
+        # Alice is still on the original version while Bob saves new text.
+        bn.save_note(note['id'], 'Parts', 'Bob added new PART-1 text', 0)
+        self.sync(bt)
+        an.save_note(note['id'], 'Parts', 'Original PART-1 text', 0,
+                     details={'highlights': ['PART-1']})
+        for _ in range(3):
+            self.sync(at)
+            self.sync(bt)
+        for store in (alice, bob):
+            self.assertEqual(len(store.notes), 1)
+            self.assertEqual(store.notes[0]['body'], 'Bob added new PART-1 text')
+            self.assertEqual(store.notes[0]['highlights'], ['PART-1'])
+        cache = TeamStore(at.profile_path)
+        try:
+            self.assertFalse(cache.get_entity('note', note['id'])['conflict'])
+        finally:
+            cache.close()
+        self.assertEqual(ae + be, [])
+
+    def test_concurrent_highlight_removal_and_addition_merge_without_duplicates(self):
+        alice, an, at, ae = self.client('Alice')
+        bob, bn, bt, be = self.client('Bob')
+        note = an.save_note(None, 'Stock', 'PART-A and PART-B', 0,
+                            details={'highlights': ['PART-A']})
+        self.sync(at)
+        self.sync(bt)
+        bn.save_note(note['id'], 'Stock', 'PART-A and PART-B', 0,
+                     details={'highlights': ['PART-A', 'PART-B']})
+        self.sync(bt)
+        an.save_note(note['id'], 'Stock', 'PART-A and PART-B', 0,
+                     details={'highlights': []})
+        for _ in range(3):
+            self.sync(at)
+            self.sync(bt)
+        for store in (alice, bob):
+            self.assertEqual(len(store.notes), 1)
+            self.assertEqual(store.notes[0]['highlights'], ['PART-B'])
+        self.assertEqual(ae + be, [])
+
+    def test_stale_local_delete_does_not_restore_remote_edited_note(self):
+        alice, an, at, ae = self.client('Alice')
+        bob, bn, bt, be = self.client('Bob')
+        note = an.save_note(None, 'Temporary note', 'Needs deletion', 0)
+        self.sync(at)
+        self.sync(bt)
+        bn.save_note(note['id'], 'Temporary note', 'Edited before deletion synced', 0)
+        self.sync(bt)
+
+        # Delete based on the older local revision. The remote version must
+        # not be re-created by a later incoming sync or future polls.
+        an.delete(note['id'])
+        for _ in range(4):
+            self.sync(at)
+            self.sync(bt)
+        self.assertEqual(alice.notes, [])
+        self.assertEqual(bob.notes, [])
+        cache = TeamStore(at.profile_path)
+        try:
+            self.assertTrue(cache.get_entity('note', note['id'])['deleted'])
+        finally:
+            cache.close()
+        self.assertEqual(ae + be, [])
+
     def test_legacy_highlight_omission_does_not_spawn_notes_or_sync_writes(self):
         a, an, at, ae = self.client('Alice')
         b, bn, bt, be = self.client('Bob')

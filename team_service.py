@@ -68,6 +68,57 @@ def shared_note_payload(note):
     return payload
 
 
+def _merge_nonconflicting_note_edits(base, local, remote):
+    """Rebase independent edits, rather than turning them into duplicate notes.
+
+    A shared note may be edited while another computer's version is in flight.
+    Only combine changes whose fields do not disagree with the saved baseline.
+    Highlight markers are a set of independent additions/removals, so those
+    operations can merge even when both computers edit the marker list.
+    Competing edits to the same text or other business field remain conflicts.
+    """
+    from note_highlights import MAX_HIGHLIGHTS, validated_highlights
+
+    missing = object()
+    fields = set(base) | set(local) | set(remote)
+    local_changes = {key for key in fields if base.get(key, missing) != local.get(key, missing)}
+    remote_changes = {key for key in fields if base.get(key, missing) != remote.get(key, missing)}
+    conflicting = {key for key in local_changes & remote_changes
+                   if local.get(key, missing) != remote.get(key, missing)}
+    merged_markers = None
+    if 'highlights' in conflicting:
+        base_terms = validated_highlights(base.get('highlights', []))
+        local_terms = validated_highlights(local.get('highlights', []))
+        remote_terms = validated_highlights(remote.get('highlights', []))
+        removed = {term.casefold() for term in base_terms} - {term.casefold() for term in local_terms}
+        merged_markers = [term for term in remote_terms if term.casefold() not in removed]
+        present = {term.casefold() for term in merged_markers}
+        baseline = {term.casefold() for term in base_terms}
+        for term in local_terms:
+            if term.casefold() not in baseline and term.casefold() not in present:
+                merged_markers.append(term)
+                present.add(term.casefold())
+        if len(merged_markers) > MAX_HIGHLIGHTS:
+            return None
+        conflicting.remove('highlights')
+    if 'written' in conflicting:
+        # A timestamp is not competing user content.
+        conflicting.remove('written')
+    if conflicting:
+        return None
+    result = copy.deepcopy(remote)
+    for field in local_changes:
+        if field in local:
+            result[field] = copy.deepcopy(local[field])
+        else:
+            result.pop(field, None)
+    if merged_markers is not None:
+        result['highlights'] = merged_markers
+    if 'written' in local_changes and 'written' in remote_changes:
+        result['written'] = max(local['written'], remote['written'])
+    return result
+
+
 class _Baseline:
     """Confirmed local projections, separate from the transport's event cache."""
     def __init__(self, path):
@@ -631,6 +682,19 @@ class TeamService(QObject):
                 parents = note.get('team_revisions') if note.get('team_id') == payload['id'] else []
                 if previous and not parents and previous['entity_id'] == payload['id']:
                     parents = previous['revisions']
+                # Rebase a local edit onto an already-synced remote head when
+                # both changed independent fields. Otherwise the two children
+                # of an old revision become separate visible notebook entries.
+                if (current and not current['deleted'] and not current['conflict']
+                        and previous and not previous['deleted']
+                        and previous['entity_id'] == payload['id']
+                        and set(parents or []) != set(current['revisions'])
+                        and not (current['payload'].get('document') != previous['payload'].get('document'))):
+                    rebased = _merge_nonconflicting_note_edits(
+                        previous['payload'], payload, current['payload'])
+                    if rebased is not None:
+                        payload = rebased
+                        parents = current['revisions']
                 recover = False
                 recovery_warning = ''
                 if current and current['deleted']:
@@ -699,7 +763,20 @@ class TeamService(QObject):
                             raise ValueError('The selected deletion is waiting for its shared revisions.')
                         marker = deletion_markers[local_id]
                         selected = marker.get('team_conflict_revision') or next(iter(marker.get('team_revisions') or previous['revisions']), '')
-                        revisions = store.discard_note_version(previous['entity_id'], selected)
+                        if current['conflict'] and selected in current['revisions']:
+                            # Removing one displayed conflict copy must retain
+                            # the other versions of the same shared note.
+                            revisions = store.discard_note_version(previous['entity_id'], selected)
+                        elif marker.get('team_conflict_revision'):
+                            # Someone already resolved this branch; never delete
+                            # the surviving version because its revision moved.
+                            revisions = current['revisions']
+                        else:
+                            # A user deleted the entire ordinary note. If the
+                            # remote head advanced before sync, delete that
+                            # latest head instead of resurrecting its stale copy.
+                            revisions = [store.delete_note(previous['entity_id'],
+                                base_revisions=current['revisions'])['event_id']]
                     else:
                         revisions = current['revisions'] if current else previous['revisions']
                     ledger.save(workspace, local_id, previous['entity_id'], previous['payload'], revisions, True)
@@ -925,8 +1002,9 @@ class TeamService(QObject):
                     deletion_pending = any(
                         (not marker.get('team_workspace_id') or marker['team_workspace_id'] == self._identity['workspace_id'])
                         and _entity_id(marker) == row['entity_id']
-                        and (bool(set(marker.get('team_revisions') or []) & set(row['revisions']))
-                             or not marker.get('team_revisions') and marker['id'] == row['local_id'])
+                        and (marker['id'] == row['local_id']
+                             or (not marker.get('team_conflict_revision')
+                                 and not row['conflict_revision']))
                         for marker in store.state.get('deleted_notes', []))
                     if deletion_pending and not row['deleted']:
                         continue  # Never materialize a deleted row from an older in-flight snapshot.
