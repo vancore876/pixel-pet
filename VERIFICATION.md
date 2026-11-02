@@ -1,5 +1,19 @@
 # Jeffery 6.0 verification
 
+The bundled offline assistant update passed **1,087 tests** out of **1,091** on
+Python 3.12/Linux offscreen Qt; four Windows Shell metadata tests were skipped.
+A fresh BuddyApp profile automatically loaded all **46,848** supplied parts and
+**1,014** chassis numbers without Groq. Fresh-profile and upgrade tests confirm
+existing parts are not replaced and added chassis numbers remain. Chat tests cover
+local conversation, exact chassis checks, unsupported fitment, part follow-ups,
+explicit cloud opt-in and preserving the prior lists after invalid input.
+
+The supplied CSV and chassis text are bundled in the repository and desktop assets
+at the owner's request; the generated local databases remain on each PC. Chassis
+identifiers do not include vehicle or part associations. The CSV is a dated
+reference and is not live shared stock. Windows deployment and the office network
+were not tested in this Linux environment. Earlier verification follows.
+
 The offline parts and companion update passed **1,079 tests** out of **1,083**
 on Python 3.12/Linux offscreen Qt; four Windows Shell metadata tests were skipped
 because PowerShell was unavailable. The Home and Jeffery GUI workflows, desktop
@@ -10,8 +24,9 @@ Real-file checks included abbreviated descriptions and exact part numbers. Tests
 cover failed-import rollback, negative and fractional source quantities, missing
 locations, concurrent replacement without mismatching dates, cost-price exclusion,
 offline chat routing, explicit cloud consent, and exact read-only scanner lookup.
-The private CSV and generated catalogue database are not included in the Git
-repository. The reference import does not update shared stock or prove fitment.
+At the time, the CSV and generated catalogue database were not included in Git.
+A subsequent update bundles the original CSV and chassis list at the owner's
+request. The reference import does not update shared stock or prove fitment.
 
 Companion checks cover optional accessories, personality and activity controls,
 fractional eye movement and blinks, character sizes and directions, and the

@@ -109,7 +109,8 @@ def main():
             settings.values["interface_appearance"] = "light"
             ai.configure()
             ai.show()
-            assert ai.tabs.currentIndex() == 1  # Missing key has a clear setup route.
+            assert ai.tabs.currentIndex() == 0  # Offline conversation works without a key.
+            ai.tabs.setCurrentIndex(1)  # Optional Groq setup remains available.
             capture(ai, "assistant-setup")
             ai.advanced_toggle.click()
             assert ai.advanced_panel.isVisible()

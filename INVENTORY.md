@@ -12,8 +12,8 @@ action are described in [WORK_CHAT.md](WORK_CHAT.md#office-backups-and-recovery)
 
 ## Ask Jeffery offline about the parts catalogue
 
-In **Ask Jeffery**, choose **Import parts list** and select the Famous Twins CSV.
-After import, ask a question such as “Where is part 123?”, “Do we have brake
+The supplied Famous Twins CSV and chassis list are bundled with Jeffery and load
+into a local profile on first start. In **Ask Jeffery**, ask “Where is part 123?”, “Do we have brake
 pads?” or “How much is the oil filter?” You can also enter a part number. Matching
 records come from a locally indexed snapshot and do not require Groq or internet.
 Results show the source date when the filename contains one, and may include
@@ -26,9 +26,11 @@ sharing setting. Keep the checkbox off to use the local catalogue.
 The local catalogue is separate from the shared inventory and cannot change
 stock. Negative and fractional source quantities are retained as supplied. The
 CSV and its local database can contain confidential business information; keep
-them in a location accessible only to authorized staff. Import the file on each
-PC that needs offline answers. Reimport an updated CSV to refresh that PC's
+them in a location accessible only to authorized staff. Use **Import parts list**
+to replace the snapshot with an updated CSV on that PC. Reimport to refresh that PC's
 snapshot; this does not synchronize it to the other PCs or the office server.
+Use **Import chassis list** to add additional chassis numbers locally. The list
+contains numbers only and does not establish vehicle models or fitment.
 In **Inventory → Scan barcode**, **Find part in imported catalogue** checks an
 exact part, alternate or substitute number against the same local snapshot.
 The result is read-only; use the ordinary inventory lookup and review controls

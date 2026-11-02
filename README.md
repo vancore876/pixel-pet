@@ -300,11 +300,14 @@ animation and smooth eye tracking. Low power keeps movement speed consistent
 while reducing updates; resting characters update more slowly and hidden pets
 stop their animation timer.
 
-For offline parts questions, open **Ask Jeffery → Import parts list** and select
-the Famous Twins CSV. Ask by part number or description without Groq; answers
-identify the imported snapshot and do not change shared stock. Import the file on
-each PC and refresh it when the export changes. See [parts inventory](INVENTORY.md)
-for setup and how snapshot values differ from current office inventory.
+**Ask Jeffery** works offline for simple conversation, part searches and chassis
+list checks. The supplied parts CSV and chassis list are bundled and loaded into
+each PC's local profile on first start; the built-in parts list does not overwrite
+an existing imported catalogue. Ask “Where is part 123?” or “Is chassis ABC12345
+on the list?”. The chassis list contains identifiers only, so it cannot establish
+vehicle details or part fitment. Answers identify the dated parts snapshot and do
+not change shared stock. Groq is optional and must be selected in the conversation
+window. See [parts inventory](INVENTORY.md) for updating the local snapshot.
 
 **Play with Jeffery → Companion Moves** adds head tilting, sniffing, listening,
 knocking, dusting, inspecting, perching, fluttering, fetching, and curling up.

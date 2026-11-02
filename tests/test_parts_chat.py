@@ -94,6 +94,47 @@ class PartsChatTests(unittest.TestCase):
         self.assertEqual(len(self.client.calls), 1)
         self.assertEqual(self.client.calls[0][-1]['content'], 'Where is part BP-44?')
 
+    def test_conversation_and_chassis_are_local_without_a_key(self):
+        path = Path(self.temp.name) / 'frames.txt'
+        path.write_text('AB12345678\n', encoding='utf-8')
+        self.chat.chassis_catalog.import_text(path)
+        replies = []
+        self.chat.reply_ready.connect(replies.append)
+        for message in ('Hello', 'My name is Sam', 'What is my name?',
+                        'Is chassis AB12345678 on the list?', 'chassis ZZ99999999',
+                        'Tell me something unexpected'):
+            self.chat.input.setText(message)
+            self.chat.submit()
+        self.assertIn('Hello', replies[0])
+        self.assertIn('Sam', replies[2])
+        self.assertIn('is in the saved chassis list', replies[3])
+        self.assertIn('does not identify the vehicle', replies[3])
+        self.assertIn('not found', replies[4])
+        self.assertIn('do not understand', replies[5])
+        self.assertIn('is in the saved chassis list', self.chat.local_chassis_reply('AB12345678'))
+        self.assertIsNone(self.chat.local_chassis_reply('BP-44'))
+        self.assertEqual(self.client.calls, [])
+
+    def test_part_followup_requires_a_single_previous_result(self):
+        self.chat.input.setText('BP-44')
+        self.chat.submit()
+        self.chat.input.setText('Where is it?')
+        self.chat.submit()
+        self.assertIn('A-12', self.chat.transcript.toPlainText())
+        frames = Path(self.temp.name) / 'frames.txt'
+        frames.write_text('AB12345678\n', encoding='utf-8')
+        self.chat.chassis_catalog.import_text(frames)
+        self.chat.input.setText('chassis AB12345678')
+        self.chat.submit()
+        self.chat.input.setText('Where is it?')
+        self.chat.submit()
+        self.assertIn('which part number', self.chat.transcript.toPlainText())
+        self.chat.clear_conversation()
+        self.chat.input.setText('Where is it?')
+        self.chat.submit()
+        self.assertIn('which part number', self.chat.transcript.toPlainText())
+        self.assertEqual(self.client.calls, [])
+
     def test_parts_question_without_catalogue_explains_import(self):
         with tempfile.TemporaryDirectory() as root:
             from parts_catalog import PartsCatalog

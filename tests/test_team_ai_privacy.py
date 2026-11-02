@@ -77,6 +77,7 @@ class TeamAIPrivacyTests(unittest.TestCase):
         self.chat = ChatWindow(self.settings, Credentials(), self.context, lambda _: "ok",
             client=self.client, notebook_store=self.store, memory_store=self.memory,
             semantic_service=self.semantic)
+        self.chat.general_use_groq.setChecked(True)
         self.smart_client = Client()
         self.smart = SmartNoteAssistant(self.service, self.settings, Credentials(), client=self.smart_client)
 

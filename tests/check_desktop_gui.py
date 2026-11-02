@@ -207,6 +207,7 @@ def ai_checks():
         reply = 'Hey! I’m here.\nYour notes are ready when you need them.\nI found a little place to perch.'
         chat_client = ScriptedClient(reply)
         chat = ChatWindow(buddy.settings, key, buddy.ai_context, buddy.run_buddy_action, client=chat_client)
+        chat.general_use_groq.setChecked(True)
         state['chat'], state['chat_client'] = chat, chat_client
         chat.show()
         chat.input.setText('Are you here, Jeffery?')

@@ -173,6 +173,9 @@ def hidden_checks():
         blocked = buddy.run_buddy_action({"action": "draft_note", "body": "Replace draft"})
         assert "unsaved" in blocked
         assert buddy.notepad.body.toPlainText() == "Review the new website"
+        assert not buddy.notepad.save_note()  # Office sync is not signed in here.
+        assert buddy.notepad.dirty and buddy.notepad.body.toPlainText() == "Review the new website"
+        buddy.notepad.shared_business = None  # Continue with the standalone notebook fixture.
         assert buddy.notepad.save_note()
         secret = "Private note body for context testing"
         assert secret not in json.dumps(buddy.ai_context(True, False))
@@ -183,6 +186,7 @@ def hidden_checks():
         credentials.save("gsk_" + "testplaceholder" * 3, remember=False)
         fake = ScriptedClient()
         chat = ChatWindow(buddy.settings, credentials, buddy.ai_context, buddy.run_buddy_action, client=fake)
+        chat.general_use_groq.setChecked(True)
         chat.preferences_changed.connect(buddy.persist)
         # Sharing is on by default in 5.1; this turn deliberately tests opting out.
         chat.notes.setChecked(False)

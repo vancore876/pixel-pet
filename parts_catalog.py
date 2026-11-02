@@ -76,7 +76,7 @@ class PartsCatalog:
         with closing(self._connect()) as db:
             return self._read_metadata(db)
 
-    def import_csv(self, path):
+    def import_csv(self, path, *, only_if_empty=False):
         source = Path(path)
         try:
             if source.stat().st_size > MAX_FILE_BYTES:
@@ -88,6 +88,10 @@ class PartsCatalog:
                 names = ','.join('"' + field + '"' for field in COLUMNS)
                 sql = f"INSERT INTO catalog_parts ({names}) VALUES ({','.join('?' for _ in COLUMNS)})"
                 db.execute('BEGIN IMMEDIATE')
+                # The built-in catalogue must never overwrite a user's import,
+                # including when another process imports while startup runs.
+                if only_if_empty and db.execute('SELECT 1 FROM catalog_parts LIMIT 1').fetchone():
+                    return self._read_metadata(db)
                 db.execute('DELETE FROM catalog_parts')
                 count = 0
                 for row in reader:

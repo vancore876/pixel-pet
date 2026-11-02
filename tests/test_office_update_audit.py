@@ -59,6 +59,7 @@ class InventoryCloudConsentTests(unittest.TestCase):
         # These checks specifically exercise the optional cloud path; local
         # catalogue questions normally stay on the PC without calling Groq.
         self.chat.parts_use_groq.setChecked(True)
+        self.chat.general_use_groq.setChecked(True)
 
     def tearDown(self):
         self.chat.shutdown()

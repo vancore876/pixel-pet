@@ -16,6 +16,8 @@ from content_intake import IntakeService, cleanup_result
 from ai_privacy import (filtered_ai_context, note_allowed_for_ai, notes_allowed_for_ai,
                         permissions_withdrawn, sharing_permissions)
 from parts_catalog import PartsCatalog
+from chassis_catalog import ChassisCatalog
+from offline_assistant import OfflineAssistant
 from inventory_service import _DaemonExecutor
 
 ENDPOINT = "https://api.groq.com/openai/v1/chat/completions"
@@ -273,8 +275,13 @@ class ChatWindow(QDialog):
         super().__init__()
         self.settings, self.credentials = settings, credentials
         self.parts_catalog = PartsCatalog(settings.path.parent / 'parts-catalog.sqlite')
+        self.chassis_catalog = ChassisCatalog(settings.path.parent / 'chassis.sqlite')
+        self.offline_assistant = OfflineAssistant(settings['pet_name'])
+        self._last_parts_query = None
         self._parts_executor = _DaemonExecutor()
         self._parts_future = None
+        self._chassis_future = None
+        self._builtin_future = None
         self._parts_timer = QTimer(self)
         self._parts_timer.setInterval(100)
         self._parts_timer.timeout.connect(self._parts_import_finished)
@@ -365,6 +372,10 @@ class ChatWindow(QDialog):
         self.parts_import.setToolTip("Import a dated Famous Twins CSV for local offline questions; this does not change office stock.")
         self.parts_import.clicked.connect(self.import_parts_list)
         quick.addWidget(self.parts_import)
+        self.chassis_import = QPushButton('Import chassis list')
+        self.chassis_import.setToolTip('Add chassis numbers from a text file on this PC.')
+        self.chassis_import.clicked.connect(self.import_chassis_list)
+        quick.addWidget(self.chassis_import)
         play = QPushButton("Play with Jeffery")
         play_menu = QMenu(play)
         for label, action in (("Wave hello", "wave"), ("Hide", "hide"), ("Come out", "come_out"), ("Play with selected text", "selected_text")):
@@ -373,7 +384,7 @@ class ChatWindow(QDialog):
         play.setMenu(play_menu)
         quick.addWidget(play)
         quick.addStretch(1)
-        self.memory_hint = QLabel("This is your AI conversation. Use Coworkers to message your team.")
+        self.memory_hint = QLabel("Talk to Jeffery locally, or choose Groq for general chat. Use Coworkers to message your team.")
         self.memory_hint.setObjectName("hint")
         self.memory_hint.setWordWrap(True)
         chat.addWidget(self.memory_hint)
@@ -396,6 +407,9 @@ class ChatWindow(QDialog):
         self.parts_use_groq = QCheckBox('Use Groq for parts questions')
         self.parts_use_groq.setToolTip('Send parts questions to Groq instead of searching the local snapshot. Inventory records are only shared when inventory sharing is enabled in Settings.')
         chat.addWidget(self.parts_use_groq)
+        self.general_use_groq = QCheckBox('Use Groq for general chat')
+        self.general_use_groq.setToolTip('Send general conversation to Groq. Leave this off for local, rule-based replies.')
+        chat.addWidget(self.general_use_groq)
         reset = QPushButton("Clear conversation")
         reset.clicked.connect(self.clear_conversation)
         self.clear_button = reset
@@ -539,7 +553,7 @@ class ChatWindow(QDialog):
         connection_scroll.setWidget(connection)
         self.tabs.addTab(connection_scroll, "AI setup")
         self.tabs.addTab(web_page, "Web sources")
-        self.status = QLabel("Ask about imported parts offline, or add a Groq key for general chat.")
+        self.status = QLabel("Ask about parts or chassis, or talk with Jeffery offline.")
         self.status.setObjectName("hint")
         self.status.setWordWrap(True)
         layout.addWidget(self.status)
@@ -557,7 +571,7 @@ class ChatWindow(QDialog):
         except (AttributeError, OSError, UnicodeError, ValueError):
             has_key = False
         if not has_key:
-            self.tabs.setCurrentIndex(1)
+            self.tabs.setCurrentIndex(0)
 
     def configure(self):
         apply_workspace_window_controls(self)
@@ -593,23 +607,76 @@ class ChatWindow(QDialog):
         self.transcript.appendPlainText(text)
         self._style_transcript_cards()
 
+    def start_builtin_import(self):
+        """Load bundled reference files on a worker, without overwriting a custom list."""
+        if self._builtin_future is not None or self._parts_future is not None or self._chassis_future is not None:
+            return
+        from offline_builtin_data import ensure_builtin_data
+        self._builtin_future = self._parts_executor.submit(ensure_builtin_data, self.settings.path.parent)
+        self.parts_import.setEnabled(False)
+        self.chassis_import.setEnabled(False)
+        self.status.setText('Loading built-in parts and chassis lists…')
+        self._parts_timer.start()
+
+    def import_chassis_list(self):
+        if self._parts_future is not None or self._chassis_future is not None or self._builtin_future is not None:
+            return
+        path, _ = QFileDialog.getOpenFileName(self, 'Import chassis list', '', 'Text files (*.txt);;All files (*)')
+        if not path:
+            return
+        self._chassis_future = self._parts_executor.submit(self.chassis_catalog.import_text, path)
+        self.parts_import.setEnabled(False)
+        self.chassis_import.setEnabled(False)
+        self.status.setText('Importing chassis numbers on this PC…')
+        self._parts_timer.start()
+
     def import_parts_list(self):
-        if self._parts_future is not None:
+        if self._parts_future is not None or self._chassis_future is not None or self._builtin_future is not None:
             return
         path, _ = QFileDialog.getOpenFileName(self, 'Import parts snapshot', '', 'CSV files (*.csv)')
         if not path:
             return
         self._parts_future = self._parts_executor.submit(self.parts_catalog.import_csv, path)
         self.parts_import.setEnabled(False)
+        self.chassis_import.setEnabled(False)
         self.status.setText('Importing parts on this PC; existing shared stock will not change…')
         self._parts_timer.start()
 
     def _parts_import_finished(self):
+        if self._builtin_future is not None:
+            if not self._builtin_future.done():
+                return
+            future, self._builtin_future = self._builtin_future, None
+            self._parts_timer.stop()
+            self.parts_import.setEnabled(True)
+            self.chassis_import.setEnabled(True)
+            try:
+                future.result()
+            except Exception as exc:
+                self.status.setText('Could not load the built-in lists. You can import them manually: ' + redact(exc))
+                return
+            self.status.setText('Built-in parts and chassis lists are ready for offline questions.')
+            return
+        if self._chassis_future is not None:
+            if not self._chassis_future.done():
+                return
+            future, self._chassis_future = self._chassis_future, None
+            self._parts_timer.stop()
+            self.parts_import.setEnabled(True)
+            self.chassis_import.setEnabled(True)
+            try:
+                result = future.result()
+            except Exception as exc:
+                self.status.setText('Chassis import failed; the saved list remains available: ' + redact(exc))
+                return
+            self.status.setText(f"Chassis list updated: {result['total']:,} saved on this PC.")
+            return
         if self._parts_future is None or not self._parts_future.done():
             return
         future, self._parts_future = self._parts_future, None
         self._parts_timer.stop()
         self.parts_import.setEnabled(True)
+        self.chassis_import.setEnabled(True)
         try:
             metadata = future.result()
         except Exception as exc:
@@ -639,9 +706,32 @@ class ChatWindow(QDialog):
             # Generic questions like “Where is the notepad?” remain normal chat.
             if not explicit and not rows:
                 return None
+            self._last_parts_query = rows[0]['part_number'] if len(rows) == 1 else None
             return parts_answer(query, metadata, rows)
         except (OSError, sqlite3.Error, ValueError) as exc:
             return 'The local parts catalogue could not be searched: ' + redact(exc)
+
+    def local_chassis_reply(self, text):
+        explicit = bool(re.search(r'\b(?:chassis|vin|frame)\b', text, re.I))
+        tokens = re.findall(r'(?<![\w-])[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*(?![\w-])', text)
+        candidates = [token for token in tokens if 8 <= len(token.replace('-', '')) <= 32
+                      and any(c.isdigit() for c in token)]
+        if not candidates:
+            return ('Please provide a chassis or frame number to check.' if explicit else None)
+        code = candidates[0]
+        try:
+            found = self.chassis_catalog.contains(code)
+            if not explicit and (len(tokens) != 1 or not found):
+                return None
+            if not explicit and self.parts_catalog.lookup_exact(code, limit=1)[1]:
+                return 'That number matches both a part and a chassis entry. Please say “part” or “chassis” to choose.'
+            if found:
+                return (f'{code} is in the saved chassis list. The list does not identify the vehicle '
+                        'or which parts fit it; confirm fitment separately.')
+            return (f'{code} was not found in the saved chassis list. This does not prove it is invalid. '
+                    'The list does not establish vehicle details or parts fitment.')
+        except (OSError, sqlite3.Error, ValueError):
+            return 'The saved chassis list could not be read. Please try again.'
 
     def set_busy(self, busy):
         busy = busy or self.web_loading or self.semantic_loading
@@ -773,13 +863,29 @@ class ChatWindow(QDialog):
                 (" Try " + ", ".join("/" + suggestion for suggestion in suggestions) + "." if suggestions else
                  " Try /wave, /hide, /peek, or /tab."))
             return
-        local = None if self.parts_use_groq.isChecked() else self.local_parts_reply(text)
+        cloud_parts = self.parts_use_groq.isChecked() and parts_query(text) is not None
+        if (self._builtin_future is not None and not self._builtin_future.done()
+                and (parts_query(text) is not None or re.search(r'\b(?:chassis|vin|frame)\b', text, re.I))):
+            local = 'The built-in parts and chassis lists are still loading. Please try your lookup again shortly.'
+        else:
+            local = self.local_chassis_reply(text)
+            if local is not None:
+                self._last_parts_query = None
+        if local is None and not cloud_parts:
+            if re.fullmatch(r'\s*(?:where is it|where is that|how much is it|what is its price)[?.!]*\s*', text, re.I):
+                local = (self.local_parts_reply('part ' + self._last_parts_query) if self._last_parts_query
+                         else 'Please tell me which part number you mean.')
+            else:
+                local = self.local_parts_reply(text)
+        if local is None and not self.general_use_groq.isChecked() and not cloud_parts:
+            self.offline_assistant.name = self.settings['pet_name']
+            local = self.offline_assistant.reply(text)
         if local is not None:
             self._append_message('You: ' + redact(text))
             self.input.clear()
             self._append_message(f"{self.settings['pet_name']}: {local}\n")
             self.reply_ready.emit(local)
-            self.status.setText('Answered from the local parts snapshot; no Groq request was sent.')
+            self.status.setText('Answered locally; no Groq request was sent.')
             return
         model = self.preferences()
         if not model:
@@ -1030,6 +1136,8 @@ class ChatWindow(QDialog):
 
     def clear_conversation(self):
         self.history = []
+        self._last_parts_query = None
+        self.offline_assistant.user_name = None
         self.semantic_notes = []
         self.transcript.clear()
         self.empty_state.show()

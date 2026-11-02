@@ -47,6 +47,7 @@ class ScaledRecallTests(unittest.TestCase):
         self.chat = ChatWindow(self.settings, SimpleNamespace(get=lambda: "scripted-key"),
             lambda metrics, notes: {}, lambda action: "ok", client=self.client,
             memory_store=self.memory, notebook_store=self.store)
+        self.chat.general_use_groq.setChecked(True)
 
     def tearDown(self):
         self.chat.shutdown()

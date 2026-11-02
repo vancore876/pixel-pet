@@ -2,3 +2,6 @@
 Start_Work_Server.bat -text whitespace=cr-at-eol
 Setup_Work_Server.bat -text whitespace=cr-at-eol
 Start_Work_Buddy.bat -text whitespace=cr-at-eol
+# Preserve the supplied CSV byte-for-byte, including Windows line endings.
+assets/offline_defaults/*.csv -text whitespace=-trailing-space,cr-at-eol
+assets/offline_defaults/*.txt -text whitespace=cr-at-eol

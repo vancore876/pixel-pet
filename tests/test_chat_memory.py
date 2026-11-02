@@ -49,6 +49,7 @@ class ChatMemoryTests(unittest.TestCase):
         self.client = Client()
         self.chat = ChatWindow(self.settings, Credentials(), lambda metrics, notes: {}, lambda action: 'ok',
             client=self.client, memory_store=self.store, notebook_store=self.notes)
+        self.chat.general_use_groq.setChecked(True)
         self.learner_client = Client()
         self.learner = MemoryLearner(self.store, self.settings, Credentials(), client=self.learner_client)
         self.chat.user_message.connect(self.learner.observe)

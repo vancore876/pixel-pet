@@ -119,6 +119,7 @@ class BuddyApp(QObject):
         self.latest_snapshot = None
         self.chat = ChatWindow(self.settings, self.credentials, self.ai_context, self.run_buddy_action,
             memory_store=self.memory_store, notebook_store=self.notes_store, semantic_service=self.semantic)
+        self.chat.start_builtin_import()
         self.work_chat = WorkChatWindow(self.settings)
         self.it_window = ITWindow(self.settings)
         self.work_notifications = WorkNotificationService(self.settings, can_notify=self.work_can_notify, parent=self)
