@@ -55,6 +55,7 @@ from work_notification_popup import WorkNotificationPopup
 from notification_sounds import NotificationSounds
 from inventory_service import InventoryService
 from inventory_window import InventoryWindow
+from vehicle_fitment_window import VehicleFitmentWindow
 from order_escalation import OrderEscalationService
 from overdue_orders_window import OverdueOrdersWindow, OverdueOrderPopup
 
@@ -120,6 +121,7 @@ class BuddyApp(QObject):
         self.chat = ChatWindow(self.settings, self.credentials, self.ai_context, self.run_buddy_action,
             memory_store=self.memory_store, notebook_store=self.notes_store, semantic_service=self.semantic)
         self.chat.start_builtin_import()
+        self.fitment_window = VehicleFitmentWindow(self.chat.fitment_store, self.chat.parts_catalog, self.settings)
         self.work_chat = WorkChatWindow(self.settings)
         self.it_window = ITWindow(self.settings)
         self.work_notifications = WorkNotificationService(self.settings, can_notify=self.work_can_notify, parent=self)
@@ -298,6 +300,7 @@ class BuddyApp(QObject):
             sections.addAction(label, lambda checked=False, value=section: self.show_business_workspace(value))
         sections.addAction("Shared-folder setup", self.show_team)
         sections.addAction("Stock inventory", self.show_inventory)
+        sections.addAction("Vehicle and parts mapping", self.show_vehicle_fitment)
         sections.addAction("Scan barcode", self.show_barcode_scanner)
         sections.addAction("Overdue customer orders", self.show_overdue_orders)
         create = notes.addMenu("Create")
@@ -451,6 +454,7 @@ class BuddyApp(QObject):
         self.work_popup.configure()
         self.inventory.configure()
         self.inventory_window.configure()
+        self.fitment_window.configure()
         self.team_window.configure()
         self.launcher_window.configure()
         self.chat.configure()
@@ -598,6 +602,12 @@ class BuddyApp(QObject):
         self.inventory_window.show()
         self.inventory_window.raise_()
         self.inventory_window.activateWindow()
+
+    def show_vehicle_fitment(self):
+        self.fitment_window.configure()
+        self.fitment_window.show()
+        self.fitment_window.raise_()
+        self.fitment_window.activateWindow()
 
     def show_barcode_scanner(self):
         self.show_inventory()
@@ -965,6 +975,7 @@ class BuddyApp(QObject):
                    'it': self.show_it,
                    'scan': self.show_barcode_scanner, 'overdue': self.show_overdue_orders,
                    'inventory': self.show_inventory,
+                   'vehicle_fitment': self.show_vehicle_fitment,
                    'assistant': self.show_chat, 'settings': self.show_settings,
                    'monitor': self.show_overlay, 'processes': self.show_processes,
                    'quick_launch': self.show_launcher, 'memory': self.show_memory}
@@ -979,7 +990,7 @@ class BuddyApp(QObject):
         for window in (self.home, self.dialog, self.notepad, self.work_chat, self.it_window, self.chat,
                        self.memory_window, self.process_window, self.launcher_window,
                        self.note_popup, self.team_popup, self.team_window, self.work_popup,
-                       self.inventory_window, self.overdue_window, self.overdue_popup,
+                       self.inventory_window, self.fitment_window, self.overdue_window, self.overdue_popup,
                        self.desktop.panel, self.desktop.text_window):
             window.configure()
         for sticky in self.stickies.values():
@@ -1236,6 +1247,7 @@ class BuddyApp(QObject):
         self.shutting_down = True
         self.inventory.stop()
         self.inventory_window.shutdown()
+        self.fitment_window.shutdown()
         self.work_notifications.stop()
         self.work_popup.clear_session()
         self.order_escalations.stop()

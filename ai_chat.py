@@ -18,6 +18,7 @@ from ai_privacy import (filtered_ai_context, note_allowed_for_ai, notes_allowed_
 from parts_catalog import PartsCatalog
 from chassis_catalog import ChassisCatalog
 from offline_assistant import OfflineAssistant
+from vehicle_fitment import FitmentStore, candidate_parts
 from inventory_service import _DaemonExecutor
 
 ENDPOINT = "https://api.groq.com/openai/v1/chat/completions"
@@ -276,6 +277,7 @@ class ChatWindow(QDialog):
         self.settings, self.credentials = settings, credentials
         self.parts_catalog = PartsCatalog(settings.path.parent / 'parts-catalog.sqlite')
         self.chassis_catalog = ChassisCatalog(settings.path.parent / 'chassis.sqlite')
+        self.fitment_store = FitmentStore(settings.path.parent / 'vehicle-fitment.sqlite')
         self.offline_assistant = OfflineAssistant(settings['pet_name'])
         self._last_parts_query = None
         self._parts_executor = _DaemonExecutor()
@@ -733,6 +735,89 @@ class ChatWindow(QDialog):
         except (OSError, sqlite3.Error, ValueError):
             return 'The saved chassis list could not be read. Please try again.'
 
+    def local_vehicle_reply(self, text):
+        """Use staff-entered mappings and clearly separate description candidates."""
+        if re.search(r'\b(?:tell|write|make|say|give)\b.*\b(?:joke|story|poem|riddle)\b', text, re.I):
+            return None
+        chassis_intent = bool(re.search(r'\b(?:chassis|vin|frame)\b', text, re.I))
+        fitment_intent = bool(re.search(r'\b(?:fit|fits|fitment|compatible|compatibility|suitable)\b', text, re.I))
+        part_intent = bool(re.search(r'\b(?:part|parts|brake|brakes|pad|pads|filter|filters|plug|plugs|belt|belts|rotor|rotors)\b', text, re.I))
+        tokens = re.findall(r'(?<![\w-])[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*(?![\w-])', text)
+        codes = [token for token in tokens if 8 <= len(token.replace('-', '')) <= 32
+                 and any(char.isdigit() for char in token)]
+        bare = len(tokens) == 1 and len(codes) == 1
+        try:
+            mapped = []
+            if chassis_intent or fitment_intent or bare:
+                for code in codes:
+                    vehicle, links = self.fitment_store.fitment_view(code)
+                    if vehicle and all(row[0]['chassis'] != vehicle['chassis'] for row in mapped):
+                        mapped.append((vehicle, links))
+            if len(mapped) > 1:
+                return 'More than one saved chassis appears in your question. Please ask about one chassis at a time.'
+            if mapped:
+                vehicle, links = mapped[0]
+                if bare and self.parts_catalog.lookup_exact(codes[0], limit=1)[1]:
+                    return 'That number matches both a part and a chassis entry. Please say “part” or “chassis” to choose.'
+                make, model = vehicle['make'], vehicle['model']
+            elif chassis_intent and fitment_intent:
+                if not codes:
+                    return 'Please provide a chassis number so I can look for a saved vehicle mapping.'
+                return ('No vehicle mapping is saved for that chassis. Add its verified make and model '
+                        'in Vehicle fitment before checking parts. A chassis number alone does not establish fitment.')
+            else:
+                vehicle = None
+                if not (part_intent or fitment_intent):
+                    return None
+                match = re.search(r'\b(toyota|honda|nissan|mitsubishi|mazda|suzuki|ford|hyundai|kia|bmw|mercedes|isuzu|subaru|daihatsu|volkswagen)\s+([a-z0-9][a-z0-9-]*)\b', text, re.I)
+                if not match:
+                    return None
+                make, model = match.groups()
+
+            make_model = f'{make} {model}'
+            if vehicle:
+                details = ' '.join(str(value) for value in (vehicle.get('year'), vehicle.get('engine')) if value)
+                answer = [f"Saved vehicle for chassis {vehicle['chassis']}: {make_model}" + (f' ({details})' if details else '') + '.']
+                if links:
+                    answer.append('Staff-entered part links for this chassis (not filtered by part type):')
+                    for link in links[:20]:
+                        status = 'current vehicle details' if link.get('confirmed_for_current_vehicle') else 'needs re-confirmation after vehicle details changed'
+                        source = f"; source: {link['source']}" if link.get('source') else ''
+                        note = f"; note: {link['note']}" if link.get('note') else ''
+                        answer.append(f"- {link['part_number']} ({status}{source}{note})")
+                else:
+                    answer.append('No staff-entered part links are saved for this chassis yet.')
+            else:
+                answer = [f'Looking for catalogue descriptions mentioning {make_model}.']
+            if part_intent or fitment_intent:
+                stop = {'what', 'which', 'where', 'who', 'is', 'are', 'do', 'does', 'we', 'you', 'have', 'can', 'i',
+                        'the', 'a', 'an', 'for', 'to', 'of', 'on', 'my', 'this', 'that', 'with', 'please',
+                        'part', 'parts', 'fit', 'fits', 'fitment', 'compatible', 'compatibility', 'suitable',
+                        'chassis', 'frame', 'vin', 'number', 'vehicle', 'car', 'me', 'show', 'find',
+                        make.casefold(), model.casefold()}
+                if vehicle:
+                    stop.add(vehicle['chassis'].casefold())
+                    stop.update(code.casefold() for code in codes)
+                terms = [word for word in re.findall(r'[a-z0-9-]+', text.casefold())
+                         if word not in stop and not re.fullmatch(r'(?:19|20)\d{2}', word)]
+                query = ' '.join(terms)
+                metadata, rows = {}, []
+                for variant in parts_query_variants(query) if query else ['']:
+                    metadata, rows = candidate_parts(self.parts_catalog, make, model, query=variant, limit=5)
+                    if rows:
+                        break
+                date = metadata.get('source_date') or 'date not specified'
+                if rows:
+                    answer.append(f'Possible description matches from the {date} catalogue (unverified):')
+                    for row in rows:
+                        answer.append(f"- {row.get('part_number', '')} · {row.get('description', '')}")
+                else:
+                    answer.append(f'No matching description found in the {date} catalogue. This does not prove the part is unavailable.')
+            answer.append('Confirm part number, vehicle year, engine and fitment independently before a sale; catalogue descriptions and saved links can be outdated.')
+            return '\n'.join(answer)
+        except (OSError, sqlite3.Error, ValueError):
+            return 'The vehicle mapping or catalogue could not be read. Please check the saved data and try again.'
+
     def set_busy(self, busy):
         busy = busy or self.web_loading or self.semantic_loading
         self.send_button.setEnabled(not busy)
@@ -868,7 +953,9 @@ class ChatWindow(QDialog):
                 and (parts_query(text) is not None or re.search(r'\b(?:chassis|vin|frame)\b', text, re.I))):
             local = 'The built-in parts and chassis lists are still loading. Please try your lookup again shortly.'
         else:
-            local = self.local_chassis_reply(text)
+            local = self.local_vehicle_reply(text)
+            if local is None:
+                local = self.local_chassis_reply(text)
             if local is not None:
                 self._last_parts_query = None
         if local is None and not cloud_parts:

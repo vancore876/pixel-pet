@@ -36,6 +36,26 @@ exact part, alternate or substitute number against the same local snapshot.
 The result is read-only; use the ordinary inventory lookup and review controls
 when recording a stock movement.
 
+## Map vehicles and parts
+
+Open **Home → Vehicle and parts mapping**. Enter a chassis number and its
+confirmed make and model, adding the year, engine and source when known, then
+save the vehicle. Search the catalogue for possible parts; the original item
+description is evidence for review, not a guarantee of fitment. Double-click a
+suggestion, check it against a reliable source and enter that source before
+saving a confirmed part link. You can also enter a checked part number directly.
+
+In **Ask Jeffery**, ask for parts for a saved chassis or by make and model.
+Saved links and unverified description matches are reported separately. If the
+vehicle's make, model, year or engine changes, its existing part links remain
+visible but need re-confirmation. The provided chassis list contains identifiers
+only, so it cannot automatically identify each vehicle or prove what fits it.
+
+Mappings stay on this PC. To share them, export a mapping file to the shared
+folder and import it on another PC. The import refuses conflicting saved
+records rather than overwriting them; review those records before importing.
+Sharing is manual; keep exports current and review any import conflicts.
+
 ## Import an Excel stock list
 
 1. Choose **Import stock list**, then select an `.xlsx`, `.xlsm`, `.xls`, or

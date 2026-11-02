@@ -1,5 +1,25 @@
 # Jeffery 6.0 verification
 
+The vehicle-mapping and visible companion update passed **1,108 tests** out of
+**1,112** on Python 3.12/Linux offscreen Qt; four Windows Shell metadata tests
+were skipped. The Home GUI, desktop startup, dependency checks and whitespace
+checks passed. A fresh BuddyApp workflow opened the mapping window, saved a
+vehicle and a source-backed part, and obtained the saved link in offline chat.
+
+Tests cover unverified catalogue-description matches, exact chassis IDs, saved
+links and their sources, vehicle corrections requiring reconfirmation, stale
+concurrent edits, and atomic mapping import/export including deleted-link markers.
+The supplied chassis list contains no vehicle or part associations, so employees
+must supply confirmed details; description matches alone do not prove fitment.
+Mappings stay local and require explicit export/import to share across PCs.
+
+The seven companion designs were rendered in idle and wave previews and inspected.
+All-character animation, direction, size, accessory and footprint checks passed.
+The default robot has a new rounded shell and face; animal companions are larger
+and more shaded. Custom sprite files can override the built-in renderer. Actual
+Windows rendering, the office network and installed update were not tested here.
+Earlier verification follows.
+
 The bundled offline assistant update passed **1,087 tests** out of **1,091** on
 Python 3.12/Linux offscreen Qt; four Windows Shell metadata tests were skipped.
 A fresh BuddyApp profile automatically loaded all **46,848** supplied parts and

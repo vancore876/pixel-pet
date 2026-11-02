@@ -303,6 +303,16 @@ def draw_character(p: QPainter, size: int, height=None, frame=0, state="IDLE", d
         p.translate(0, 23 * (1 - squish))
         p.scale(1, squish)
     organic = character in ("cat", "dog", "fox", "owl", "dragon")
+    if organic:
+        # Give the animals a more substantial presence on screen. Scale around
+        # their feet so the same desktop position and interaction target remain
+        # valid while their faces and natural coats are easier to see.
+        p.save()
+        p.translate(12, 21)
+        # Tilt and airborne poses already extend near the widget edges.
+        scale = 1.0 if state in ("LEAN", "SLIDE", "BALANCE", "SNEEZE", "JUMP", "HOP", "BOUNCE") else 1.14
+        p.scale(scale, scale)
+        p.translate(-12, -21)
     coats = {"cat": (highlight, light, middle),
              "dog": ("#e7c497", "#c39463", "#765238"),
              "fox": ("#ffd59e", "#e7954e", "#a84f29"),
@@ -346,6 +356,7 @@ def draw_character(p: QPainter, size: int, height=None, frame=0, state="IDLE", d
         curve(18.5, 11 + drift, 20, 11.2 + drift, 21, 10.7 + drift, "#afa2e3", 0.65)
         if state == "CURL_UP":
             curve(5, 11.7, 8 + math.sin(frame * 0.3), 10.7, 11, 11.5, tint(coat[0], 180), 0.5)
+        p.restore()
     elif state in ("SLEEP", "CURL_UP"):
         panel(3.8, 15.8, 16.4, 6, highlight if character != "knight" else "#e4f2ff",
               light if character != "knight" else "#b3c2d8",
@@ -395,6 +406,14 @@ def draw_character(p: QPainter, size: int, height=None, frame=0, state="IDLE", d
             head.cubicTo(20, 11.2, 18.3, 15.5, 12, 15.9)
             head.cubicTo(6.3, 15.7, 4.2, 11.8, 5.5, 8)
             shape(head, highlight, light, middle, dark)
+            # Soft cheek and forehead modelling makes the fur feel rounded
+            # rather than like a flat colour fill, including at small sizes.
+            soft_oval(5.9, 6.2, 12.2, 7.9, tint(highlight, 210), tint(light, 110), tint(middle, 0))
+            for side in (-1, 1):
+                for strand in range(3):
+                    y = 8 + strand * 1.5
+                    curve(12 + side * 5.3, y, 12 + side * 5.8, y + .7,
+                          12 + side * 5.1, y + 1.25, tint(dark, 75), .25)
             oval(7.5, 11.8, 9, 3.3, tint(highlight, 225))
             eyes(9, blink, organic=True)
             # Short forehead markings and whiskers add detail without visual noise.
@@ -452,6 +471,12 @@ def draw_character(p: QPainter, size: int, height=None, frame=0, state="IDLE", d
             head.cubicTo(20.4, 11.2, 16.1, 14.5, 12, 16)
             head.cubicTo(7.9, 14.5, 3.6, 11.2, 5.8, 8.2)
             shape(head, *coat, outline=coat[2])
+            soft_oval(6.4, 5.1, 11.2, 7.3, tint(coat[0], 185), tint(coat[1], 95), tint(coat[2], 0))
+            for side in (-1, 1):
+                for strand in range(3):
+                    y = 7.1 + strand * 1.2
+                    curve(12 + side * 5, y, 12 + side * 5.4, y + .55,
+                          12 + side * 4.9, y + 1.15, tint(coat[2], 105), .3)
             if fox:
                 cheeks = QPainterPath(QPointF(5.5, 10.7))
                 cheeks.cubicTo(8, 10.4, 10.4, 12.3, 12, 12.7)
@@ -556,24 +581,29 @@ def draw_character(p: QPainter, size: int, height=None, frame=0, state="IDLE", d
             curve(10.6, 17, 12, 17.5, 13.4, 17, tint(highlight, 225), 0.6)
             glow(12, 17.1, 2.4, "#78e6ff", 40)
         else:
-            panel(10.6, 1.8, 2.8, 4.2, highlight, middle, dark, 0.8)
+            # Jeffery's default robot now has a larger, curved helmet and a
+            # layered glass face. Strong highlights and a contrasting metal
+            # rim remain visible at ordinary desktop sizes.
+            panel(10.8, 1.2, 2.4, 4.5, "#e5f8f4", middle, dark, 0.9)
             antenna = "#ffd786" if state == "EXCITED" else "#a7ffff"
-            glow(12, 1.7, 2.5, antenna, 80 + round(math.sin(frame * 0.4) * 20))
-            panel(10.2, 0.6, 3.6, 2.2, "#efffff", antenna, middle, 1)
-            panel(7, 14.8, 10, 5.9, highlight, middle, dark, 2)
-            panel(4.8, 5, 14.4, 10.9, highlight, light, middle, 3)
-            panel(3.9, 8.5, 1.5, 3.7, highlight, middle, dark, 0.7)
-            panel(18.6, 8.5, 1.5, 3.7, light, middle, dark, 0.7)
-            panel(6.4, 7.6, 11.2, 6.1, "#31586a", "#182f42", "#081a2b", 2, dark)
-            curve(7.6, 8.5, 10, 7.7, 13, 8.3, tint("#c3fcff", 90), 0.4)
-            eyes(9.5, blink)
-            curve(10.5, 12.5, 12, 13.4, 13.5, 12.5, "#82dbde", 0.35)
-            curve(6.4, 6.4, 11.1, 5.3, 15.9, 6.3, tint("#ffffff", 165), 0.35)
-            panel(9.6, 16.6, 4.8, 2.9, "#ffebb5", "#ffd18a", "#d99452", 1, dark)
-            glow(12, 18, 2.8, "#ffcb77", 50)
-            for x in (10.5, 11.5, 12.5):
-                curve(x, 17.3, x, 17.9, x, 18.4, "#fff5d6", 0.35)
-            oval(15, 17.8, 0.7, 0.7, "#a6ffef")
+            glow(12, 1.4, 2.4, antenna, 80 + round(math.sin(frame * 0.4) * 20))
+            soft_oval(10.25, 0, 3.5, 3.5, "#ffffff", antenna, middle, dark)
+            panel(5.6, 13.8, 12.8, 7.6, highlight, middle, dark, 2.8)
+            panel(7.1, 15, 9.8, 5.5, "#d9f5ee", light, middle, 2)
+            panel(8.6, 16.1, 6.8, 3.7, "#354e5c", "#17313e", "#102434", 1.1, dark)
+            glow(12, 17.9, 2.5, "#8affdf", 100)
+            soft_oval(10.7, 16.55, 2.6, 2.6, "#eaffff", "#89f6dc", "#25a5a6")
+            for x in (9.2, 14.3):
+                oval(x, 19, 0.6, 0.6, "#dffbdb")
+            panel(2.8, 7.4, 3, 5.8, "#d6fbf4", middle, dark, 1.3)
+            panel(18.2, 7.4, 3, 5.8, "#d6fbf4", middle, dark, 1.3)
+            soft_oval(3.4, 3.6, 17.2, 12.8, "#ffffff", light, middle, dark)
+            curve(5.2, 7, 7.2, 3.4, 12, 4.3, tint("#ffffff", 210), .7)
+            panel(4.5, 6.8, 15, 7.7, "#547783", "#1b3b4a", "#081821", 3, dark)
+            panel(5.1, 7.3, 13.8, 6.5, "#3b6c7e", "#123440", "#091b29", 2.5, "#355f68")
+            curve(5.9, 8.3, 10.5, 6.7, 15.4, 7.7, tint("#d8ffff", 145), 0.45)
+            eyes(9.1, blink)
+            curve(10.3, 12.3, 12, 13.25, 13.7, 12.3, "#a0fff0", 0.45)
         raised = state in ("WAVE", "DANCE", "CELEBRATE", "PARACHUTE", "DRAG", "HOP", "PEEK", "PUSH", "STRETCH", "JUGGLE", "MAGIC", "HANG", "SCARED", "SALUTE", "UMBRELLA", "HIGH_FIVE", "WRENCH", "SCAN_PART", "CHECK_STOCK", "KNOCK", "DUST", "INSPECT", "WING_FLAP", "LISTEN", "STOCK_OK", "FIND_SHELF", "PAPER_PLANE", "BLOW_BUBBLES", "STARGAZE")
         for x, y in ((4, 12 if raised else 16 + (swing if moving else 0)),
                      (18, 10 + math.sin(frame * 0.65) if raised else 16 - (swing if moving else 0))):
@@ -650,6 +680,9 @@ def draw_character(p: QPainter, size: int, height=None, frame=0, state="IDLE", d
             shape(shield, "#edf6ff", "#a8c2d5", "#5f819c", "#47667e")
             curve(12, 16.9, 12, 18, 12, 19.8, "#b14c53", 0.55)
             curve(10.9, 18, 12, 18, 13.1, 18, "#b14c53", 0.55)
+        if organic:
+            # Activity props keep their original coordinates and footprint.
+            p.restore()
         if state == "LAUGH":
             block(10, 13, 5, 2, "#243647")
             block(11, 14, 3, 1, "#f4a4c7")

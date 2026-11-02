@@ -309,6 +309,12 @@ vehicle details or part fitment. Answers identify the dated parts snapshot and d
 not change shared stock. Groq is optional and must be selected in the conversation
 window. See [parts inventory](INVENTORY.md) for updating the local snapshot.
 
+Use **Home → Vehicle and parts mapping** to record verified vehicle details for
+a chassis and the parts checked against that vehicle. Jeffery can also suggest
+possible matches from the catalogue descriptions; confirm fitment before a sale.
+Mappings are local and can be exchanged between PCs with export/import. The
+supplied chassis numbers do not themselves identify vehicle models or fitment.
+
 **Play with Jeffery → Companion Moves** adds head tilting, sniffing, listening,
 knocking, dusting, inspecting, perching, fluttering, fetching, and curling up.
 Eight more moves add carrying a delivery, a stock celebration, finding a shelf,
