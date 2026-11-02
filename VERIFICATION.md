@@ -1,5 +1,31 @@
 # Jeffery 6.0 verification
 
+The November 2, 2026 note-edit sync repair passed **1,060 tests** out of **1,064**
+on Python 3.12/Linux offscreen Qt. Four isolated Windows Shell metadata tests
+were skipped because PowerShell was unavailable. The two-PC BuddyApp GUI
+workflow, all four shared-business HTTP integration cases, isolated desktop
+startup, dependency checks, and whitespace checks also passed.
+
+The October 26 GitHub update (`387876c`) fixed a simple delayed-save case but
+could still retain an earlier local save as a third copy when another PC edited
+the same note. Three-PC regressions now preserve only the latest local save and
+the genuine coworker conflict, including after restarting before a sync result
+arrives. Persisted ancestry checks distinguish devices even when they use the
+same employee identity and reject deletion chains or unrelated records.
+Missing revision history is checked before merging so the original shared note
+survives recovery. API edits against deleted or missing cache entries preserve
+the open draft and never silently create a replacement identifier.
+
+The GUI test saves twice while the first sync result is delayed and verifies
+one note on both PCs, stable editor identity, and intact highlights. Controller
+and editor regressions cover remote deletion, missing cache rows, and account
+changes. Existing integration fixtures were updated for automatic Writing
+sharing and the server's current health capabilities. No dependencies changed.
+Actual Windows SMB access, the office deployment, and a Windows executable build
+were not verified here. Update and restart every participating client while
+retaining the existing workspace and reviewing any existing duplicate copies.
+Earlier feature-specific validation follows.
+
 The office expansion, shared-note sync repair, and notification sounds passed
 all **967 unit tests**, all **15 Qt GUI workflows**, and isolated desktop startup
 with Python 3.12/Linux offscreen Qt. Three shared-business HTTP integration cases

@@ -392,6 +392,14 @@ class SharedBusinessController(QObject):
         try:
             now = time.time()
             old = self.store.find(identifier) if identifier else None
+            if identifier is not None and old is None:
+                # A dirty editor can outlive a remote deletion, account switch,
+                # or missing cache row. Editing must never silently create a
+                # replacement with the new-entry identifier.
+                record = self._records.get(identifier)
+                if record and record.get('deleted'):
+                    raise ValueError('This shared entry was deleted. To save a separate entry, copy your draft first, then choose New and paste it.')
+                raise ValueError('This shared entry is not currently loaded. Wait for sync or reload its saved version before trying again; your draft will not be copied into a new entry.')
             if old:
                 entry = copy.deepcopy(old)
                 entry.update(details or {})

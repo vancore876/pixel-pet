@@ -90,7 +90,9 @@ class WorkServerHTTPTests(unittest.TestCase):
         self.assertFalse(self.app._native_telemetry.enabled())
         status, payload, headers = self.request("/api/health")
         self.assertEqual(status, 200)
-        self.assertEqual(payload, {"status": "ok", "service": "Jeffery Work Chat", "version": 1})
+        self.assertEqual(payload, {"status": "ok", "service": "Jeffery Work Chat", "version": 1,
+                                   "notebook_schema": 2, "it_administration": True,
+                                   "notebook_features": ["writing_notes", "highlights", "server_authorship"]})
         self.assertEqual(headers["Cache-Control"], "no-store")
         self.assertEqual(headers["X-Content-Type-Options"], "nosniff")
         self.assertIn("frame-ancestors 'none'", headers["Content-Security-Policy"])

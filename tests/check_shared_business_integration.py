@@ -110,10 +110,13 @@ class SharedOfficeTests(harness.RealServerTests):
         self.assertTrue(bw.body.extraSelections())
         self.assertIn('Server notes need attention', bw._server_status[0])
 
-    def test_shared_orders_checklists_conflict_delete_and_personal_writing(self):
+    def test_shared_orders_checklists_conflict_delete_and_private_document(self):
         alice, ac, a, aw = self.coworker('parts_alice')
         bob, bc, b, bw = self.coworker('parts_bob')
-        private = a.store.add('Personal writing', 'Only on Alice profile', repeat=0)
+        # Plain Writing now migrates into the signed-in office automatically.
+        # Full documents remain local to this profile and must survive logout.
+        prepared = a.store.documents.prepare_text('Only on Alice profile', title='Private reference')
+        private = a.add_prepared_document(prepared, 'Private reference', 'private-reference.txt')
         order = self.saved(ac)
         identifier = order['id']
         self.sync(bc, lambda: b.store.find(identifier) is not None)

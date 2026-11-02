@@ -682,6 +682,15 @@ class TeamService(QObject):
                 parents = note.get('team_revisions') if note.get('team_id') == payload['id'] else []
                 if previous and not parents and previous['entity_id'] == payload['id']:
                     parents = previous['revisions']
+                elif (previous and not previous['deleted'] and previous['entity_id'] == payload['id']
+                        and previous['conflict_revision'] == note.get('team_conflict_revision', '')
+                        and set(parents or []) != set(previous['revisions'])
+                        and store.is_local_successor('note', payload['id'], parents, previous['revisions'])):
+                    # A later local save can arrive before our previous sync's
+                    # completion reaches the notebook. Continue our published
+                    # branch even when another PC also has a concurrent edit.
+                    # Never consume that unseen coworker's version here.
+                    parents = previous['revisions']
                 # Rebase a local edit onto an already-synced remote head when
                 # both changed independent fields. Otherwise the two children
                 # of an old revision become separate visible notebook entries.
@@ -689,6 +698,7 @@ class TeamService(QObject):
                         and previous and not previous['deleted']
                         and previous['entity_id'] == payload['id']
                         and set(parents or []) != set(current['revisions'])
+                        and store.has_revisions('note', payload['id'], parents or [])
                         and not (current['payload'].get('document') != previous['payload'].get('document'))):
                     rebased = _merge_nonconflicting_note_edits(
                         previous['payload'], payload, current['payload'])

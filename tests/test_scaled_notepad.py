@@ -104,6 +104,39 @@ class ScaledNotepadTests(unittest.TestCase):
             controller.shutdown()
             self.window.shared_business = None
 
+    def test_deleted_shared_note_edit_keeps_draft_without_creating_duplicate(self):
+        from shared_business import SharedBusinessController
+        from test_work_chat import ScriptedApi
+        api = ScriptedApi()
+        controller = SharedBusinessController(self.service, api=api)
+        self.window.shared_business = controller
+        original = self.store.new_note('Shared writing', 'Original text', 0, None, 1800000000,
+                                       details={'kind': 'note', 'highlights': ['Original']})
+        try:
+            controller.set_session('http://localhost', 'token', {'username': 'alice'})
+            api.finish(api.pending('/api/business?', 'GET'), {'entries': [
+                {'id': original['id'], 'revision': 1, 'deleted': False, 'entry': original}],
+                'cursor': 1, 'has_more': False})
+            controller.timer.stop()
+            self.window.load_note(original['id'])
+            self.window.body.setPlainText('My edited draft must stay here')
+            controller._apply_record({'id': original['id'], 'revision': 2,
+                                      'deleted': True, 'entry': None})
+            self.service.changed.emit(original['id'])
+            for _attempt in range(2):
+                self.assertFalse(self.window.save_note())
+                self.assertEqual(self.window.editing_id, original['id'])
+                self.assertTrue(self.window.dirty)
+                self.assertFalse(self.window.business_pending)
+                self.assertEqual(self.window.body.toPlainText(), 'My edited draft must stay here')
+                self.assertIn('was deleted', self.window.status.text())
+                self.assertIn('Your draft is preserved', self.window.status.text())
+                self.assertFalse(any(call['method'] == 'PUT' for call in api.calls))
+                self.assertEqual(self.store.notes, [])
+        finally:
+            controller.shutdown()
+            self.window.shared_business = None
+
     def test_server_that_drops_highlights_preserves_visible_draft(self):
         from shared_business import SharedBusinessController
         from test_work_chat import ScriptedApi

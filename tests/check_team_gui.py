@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 import sys
 import tempfile
+import threading
 import time
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -301,6 +302,47 @@ def run():
             assert window.save_note()
             wait_for(lambda: note_by_team_id(bob, order_id)['order_status'] == 'delivered'
                      and not bob.team_popup.isVisible(), 'Delivered cancels the remote customer popup')
+
+            # Save again while the first edit is already published, but its
+            # completion has not reached the editor. Both saves belong to one
+            # note; the delayed echo must not fork them into conflict copies.
+            wait_for(lambda: not alice.team._busy, 'idle before rapid editing')
+            first_edit = 'First edited pickup instructions: check PAD-001.'
+            final_edit = 'Final pickup instructions: check PAD-001 and call the customer.'
+            published, release = threading.Event(), threading.Event()
+            original_sync = alice.team._sync
+
+            def delayed_edit_sync(state, snapshot, cancel, notify):
+                result = original_sync(state, snapshot, cancel, notify)
+                if not published.is_set() and any(note['body'] == first_edit for note in snapshot['notes']):
+                    published.set()
+                    if not release.wait(5):
+                        raise AssertionError('The GUI did not complete its second edit in time.')
+                return result
+
+            with patch.object(alice.team, '_sync', side_effect=delayed_edit_sync):
+                try:
+                    window.body.setPlainText(first_edit)
+                    assert window.save_note()
+                    wait_for(published.is_set, 'first edit published before sync completion')
+                    window.body.setPlainText(final_edit)
+                    window.highlight_terms = ['PAD-001']
+                    assert window.save_note()
+                    assert window.editing_id == order_local_id
+                finally:
+                    release.set()
+                wait_for(lambda: all((note_by_team_id(buddy, order_id) or {}).get('body') == final_edit
+                                    and not buddy.team._busy for buddy in (alice, bob)),
+                         'successive editor saves reach both PCs without duplicate notes')
+            for buddy in (alice, bob):
+                copies = [note for note in buddy.notes_store.notes if note.get('team_id') == order_id]
+                assert len(copies) == 1, 'Editing during sync created a duplicate note'
+                assert copies[0]['highlights'] == ['PAD-001']
+                entity = next(row for row in buddy.team.entities('note') if row['id'] == order_id)
+                assert not entity['conflict'], 'Successive saves became a false concurrent conflict'
+            assert window.editing_id == order_local_id
+            assert window.body.toPlainText() == final_edit
+            screenshot(window, 'team-edited-note-no-duplicates.png')
 
             # Full text uses a shared blob and an independent local document DB.
             full_text = ('Customer handbook: pickup verification and daily desk tasks.\n' * 600).strip()

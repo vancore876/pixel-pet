@@ -212,6 +212,15 @@ note, and a problem with one note no longer blocks unrelated notes from syncing.
 Pending full-document transfers preserve the local edit while waiting. Genuine
 simultaneous edits still appear as conflicts for review.
 
+**Fix for notes duplicating after editing:** repeated saves on one PC now continue
+that PC's latest saved version, even if a sync result arrives late or Jeffery
+restarts during syncing. A different employee's conflicting edit remains available
+for review. If an office-server note was deleted or is no longer loaded, saving
+an open editor preserves the draft and explains what happened instead of creating
+a new note automatically. To save a separate entry, copy your draft first, then
+choose **New** and paste it.
+Existing copies are retained for review so distinct text is not discarded.
+
 Install the update on every participating PC (or update the shared application
 folder after everyone exits), then restart Jeffery. Keep all PCs connected to
 the same writable team folder. The office web server must also be updated and

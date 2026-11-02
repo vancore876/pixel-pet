@@ -139,6 +139,47 @@ class SharedBusinessTests(unittest.TestCase):
         self.assertEqual([note['id'] for note in self.store.notes], [row['id']])
         self.assertFalse(any(call['method'] == 'PUT' for call in self.api.calls))
 
+    def test_edit_of_deleted_entry_does_not_create_replacement_identifier(self):
+        row = self.record(kind='note')
+        self.login([row])
+        self.sync.mark_editing(row['id'])
+        self.sync._apply_record({'id': row['id'], 'revision': 2, 'deleted': True, 'entry': None})
+        new_identifier = self.sync._new_identifier
+        results = self.save(row['id'])
+        self.assertIn('was deleted', results[0][1])
+        self.assertFalse(any(call['method'] == 'PUT' for call in self.api.calls))
+        self.assertEqual(self.store.notes, [])
+        self.assertEqual(self.sync._new_identifier, new_identifier)
+        self.assertEqual(self.sync._editing_id, row['id'])
+
+    def test_missing_live_cache_blocks_edit_until_original_id_is_rehydrated(self):
+        row = self.record(kind='note')
+        self.login([row])
+        self.sync.mark_editing(row['id'])
+        self.store.transaction(lambda: self.store.state.update(notes=[]))
+        results = self.save(row['id'])
+        self.assertIn('not currently loaded', results[0][1])
+        self.assertFalse(any(call['method'] == 'PUT' for call in self.api.calls))
+        self.sync.refresh()
+        self.page()
+        self.assertEqual([note['id'] for note in self.store.notes], [row['id']])
+        self.save(row['id'])
+        call = self.api.pending('/api/business/', 'PUT')
+        self.assertEqual(call['path'], '/api/business/' + row['id'])
+        self.assertEqual(call['body']['entry']['id'], row['id'])
+        self.assertEqual(call['body']['expected_revision'], 1)
+
+    def test_old_editor_id_cannot_become_new_entry_after_account_change(self):
+        row = self.record(kind='note')
+        self.login([row])
+        self.sync.mark_editing(row['id'])
+        self.sync.set_session('http://127.0.0.1:9876', 'other-office-token', {'username': 'bob'})
+        self.page()
+        results = self.save(row['id'])
+        self.assertIn('not currently loaded', results[0][1])
+        self.assertFalse(any(call['method'] == 'PUT' for call in self.api.calls))
+        self.assertEqual(self.store.notes, [])
+
     def test_folder_sync_blocks_automatic_api_note_migration(self):
         self.store.add('Folder note', 'Use existing workspace', repeat=0)
         self.login()

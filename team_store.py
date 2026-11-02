@@ -288,6 +288,42 @@ class TeamStore:
                     return False
         return True
 
+    def is_local_successor(self, kind, entity_id, base_revisions, revisions):
+        """Whether newer parents contain only this PC's intervening edits.
+
+        A notebook save can race the sync result that would update its revision
+        metadata. The bridge may then know our newer revision while the saved
+        note still names its old parents. Only our own uninterrupted put chain
+        can safely advance those parents; another PC's edit must stay a conflict.
+        """
+        if (not base_revisions or not revisions
+                or not self.has_revisions(kind, entity_id, base_revisions)
+                or not self.has_revisions(kind, entity_id, revisions)):
+            return False
+        with self._lock:
+            bases, reached, seen = set(base_revisions), set(), set()
+            pending = list(revisions)
+            workspace, device = self._workspace(), self._meta("device_id")
+            while pending:
+                identifier = pending.pop()
+                if identifier in bases:
+                    reached.add(identifier)
+                    continue
+                if identifier in seen:
+                    continue
+                seen.add(identifier)
+                row = self._db.execute(
+                    "SELECT wire FROM events WHERE event_id=? AND workspace_id=? AND kind=? AND entity_id=?",
+                    (identifier, workspace, kind, entity_id)).fetchone()
+                if row is None:
+                    return False
+                event = json.loads(row[0])
+                if (event['device_id'] != device or event['operation'] != 'put'
+                        or not event['parents']):
+                    return False
+                pending.extend(event['parents'])
+            return reached == bases
+
     def _put(self, kind, entity_id, payload, operation="put", base_revisions=None, now=None, restore=False):
         with self._lock, self._db:
             current = self._view(kind, entity_id)
