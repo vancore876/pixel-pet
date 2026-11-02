@@ -1,11 +1,13 @@
 """Asynchronous Groq chat and small, validated desktop-companion actions."""
 from __future__ import annotations
 import json
+from itertools import product
 import sys
 import re
+import sqlite3
 from PySide6.QtCore import QObject, Signal, QTimer, QUrl, Qt
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkRequest
-from PySide6.QtWidgets import (QApplication, QDialog, QVBoxLayout, QHBoxLayout,
+from PySide6.QtWidgets import (QApplication, QDialog, QFileDialog, QVBoxLayout, QHBoxLayout,
     QLabel, QPlainTextEdit, QLineEdit, QPushButton, QCheckBox, QComboBox, QTabWidget, QWidget, QFormLayout, QSpinBox, QScrollArea, QFrame, QMenu)
 from credentials import redact
 from ui_style import window_style, ui_palette, apply_workspace_window_controls
@@ -13,6 +15,8 @@ from sliding_text import SlideTranscript, plain_reply
 from content_intake import IntakeService, cleanup_result
 from ai_privacy import (filtered_ai_context, note_allowed_for_ai, notes_allowed_for_ai,
                         permissions_withdrawn, sharing_permissions)
+from parts_catalog import PartsCatalog
+from inventory_service import _DaemonExecutor
 
 ENDPOINT = "https://api.groq.com/openai/v1/chat/completions"
 ACTIONS = ("pet", "feed", "wave", "dance", "jump", "nap", "hide", "peek", "come_out",
@@ -40,6 +44,79 @@ def play_requested(text):
     if re.search(r'\b(?:inspect|dust|perch on)\s+(?:(?:this|that|the|my|a)\s+)?(?:file|[\w .-]{1,100})\s+icon\b', text):
         return True
     return bool(re.search(r'\b(?:wave|dance|hide|peek|come out|chase|pet you|feed you|take a nap|follow (?:my|the) mouse|shy|stop play|jump|ride (?:a|the|my)|(?:select|switch to) (?:a |the |my )?(?:tab|.+ tab)|play with|animate|do a|open (?:your |the )?notepad|draft (?:a |me a )?note)\b', text))
+
+
+def parts_query(text):
+    """Return a conservative local inventory search, or None for other chat."""
+    lower = text.casefold().strip()
+    if re.search(r'\b(?:tell|write|make|say|give)\b.*\b(?:joke|story|poem|riddle)\b', lower):
+        return None
+    explicit = bool(re.search(r'\b(?:parts?|stock|inventory|barcode|sku|bin|shelf|restock|reorder)\b', lower))
+    explicit |= bool(re.search(r'\b(?:do (?:we|you) have|how (?:many|much)|where (?:is|are|can i find)|price|cost)\b', lower))
+    explicit |= bool(re.fullmatch(r'-?[a-z0-9][a-z0-9./-]*\d[a-z0-9./-]*', lower))
+    if not explicit:
+        return None
+    stop = {'what', 'where', 'when', 'how', 'is', 'are', 'do', 'we', 'have', 'the', 'a', 'an',
+            'of', 'for', 'in', 'at', 'on', 'me', 'you', 'please', 'find', 'show', 'tell', 'about',
+            'part', 'parts', 'stock', 'inventory', 'barcode', 'sku', 'bin', 'shelf', 'location',
+            'located', 'price', 'cost', 'many', 'much', 'available', 'quantity', 'number', 'any',
+            'jeffery', 'jeffrey', 'can', 'i', 'get', 'there', 'our', 'store', 'warehouse', 'item',
+            'items', 'restock', 'reorder', 'need', 'looking', 'search', 'check', 'which', 'and',
+            'can', 'find', 'my', 'does', 'it'}
+    terms = [word for word in re.findall(r'(?<!\w)-?[\w]+(?:[-./][\w]+)*', lower) if word not in stop]
+    return ' '.join(terms)
+
+
+def parts_query_variants(query):
+    """Try limited catalogue abbreviations while retaining every search term."""
+    words = query.split()
+    singular = [word[:-1] if len(word) > 3 and word.endswith('s') else word for word in words]
+    variants = []
+    if 'brake' in singular and 'pad' in singular and 'pedal' not in singular:
+        # This catalogue predominantly calls brake pads DISC PAD; preferring
+        # that phrase avoids returning brake pedal rubber pads as parts matches.
+        variants.append(' '.join('disc' if word == 'brake' else word for word in singular))
+    variants.extend((query, ' '.join(singular)))
+    alternatives = []
+    for word in singular:
+        replacements = {'front': 'frt', 'toyota': 'toy', 'nissan': 'nis'}
+        if word == 'brake' and 'pad' in singular:
+            alternatives.append(('brake', 'disc'))
+        elif word in replacements:
+            alternatives.append((word, replacements[word]))
+    for flags in product((False, True), repeat=min(len(alternatives), 3)):
+        if not any(flags):
+            continue
+        replacements = {old: new for (old, new), apply in zip(alternatives, flags) if apply}
+        variants.append(' '.join(replacements.get(word, word) for word in singular))
+    return list(dict.fromkeys(variants))
+
+
+def parts_answer(query, metadata, rows):
+    """Describe the imported reference without implying current stock."""
+    if not metadata.get('row_count'):
+        return 'Import a parts CSV using Import parts list first. The file stays on this PC.'
+    date = metadata.get('source_date') or 'date not specified'
+    intro = f'From the imported parts snapshot ({date}); stock and prices may have changed. '
+    if not query:
+        return intro + 'Ask for a part number or description, for example “Where is brake pad 123?”'
+    if not rows:
+        return intro + 'I could not find a match. Check the part number or try a shorter description; this does not prove the part is unavailable.'
+    lines = []
+    for row in rows[:5]:
+        label = ' · '.join(str(row.get(key, '')).strip() for key in ('part_number', 'description') if str(row.get(key, '')).strip())
+        fields = []
+        for title, key in (('store', 'store_location'), ('store bin', 'store_bin1'),
+                           ('store bin 2', 'store_bin2'), ('store bin 3', 'store_bin3'),
+                           ('store quantity', 'store_quantity'), ('warehouse', 'warehouse_location'),
+                           ('warehouse bin', 'warehouse_bin1'), ('warehouse bin 2', 'warehouse_bin2'),
+                           ('warehouse bin 3', 'warehouse_bin3'), ('warehouse quantity', 'warehouse_quantity'),
+                           ('retail price', 'retail_price')):
+            value = str(row.get(key, '')).strip()
+            if value:
+                fields.append(f'{title}: {value}')
+        lines.append(label + (' — ' + '; '.join(fields) if fields else ' — location and quantity not provided'))
+    return intro + '\n' + '\n'.join(lines) + '\nShowing up to five possible matches. Confirm the part number, vehicle fitment, current quantity and price before promising availability.'
 
 
 def validate_action(call):
@@ -195,6 +272,12 @@ class ChatWindow(QDialog):
     def __init__(self, settings, credentials, context, execute_action, client=None, memory_store=None, notebook_store=None, semantic_service=None):
         super().__init__()
         self.settings, self.credentials = settings, credentials
+        self.parts_catalog = PartsCatalog(settings.path.parent / 'parts-catalog.sqlite')
+        self._parts_executor = _DaemonExecutor()
+        self._parts_future = None
+        self._parts_timer = QTimer(self)
+        self._parts_timer.setInterval(100)
+        self._parts_timer.timeout.connect(self._parts_import_finished)
         self.context, self.execute_action = context, execute_action
         self.memory_store, self.notebook_store = memory_store, notebook_store
         self.semantic_service = semantic_service
@@ -278,6 +361,10 @@ class ChatWindow(QDialog):
             button = QPushButton(label)
             button.clicked.connect(signal.emit)
             quick.addWidget(button)
+        self.parts_import = QPushButton("Import parts list")
+        self.parts_import.setToolTip("Import a dated Famous Twins CSV for local offline questions; this does not change office stock.")
+        self.parts_import.clicked.connect(self.import_parts_list)
+        quick.addWidget(self.parts_import)
         play = QPushButton("Play with Jeffery")
         play_menu = QMenu(play)
         for label, action in (("Wave hello", "wave"), ("Hide", "hide"), ("Come out", "come_out"), ("Play with selected text", "selected_text")):
@@ -306,6 +393,9 @@ class ChatWindow(QDialog):
         row.addWidget(self.send_button)
         row.addWidget(self.cancel_button)
         chat.addLayout(row)
+        self.parts_use_groq = QCheckBox('Use Groq for parts questions')
+        self.parts_use_groq.setToolTip('Send parts questions to Groq instead of searching the local snapshot. Inventory records are only shared when inventory sharing is enabled in Settings.')
+        chat.addWidget(self.parts_use_groq)
         reset = QPushButton("Clear conversation")
         reset.clicked.connect(self.clear_conversation)
         self.clear_button = reset
@@ -356,7 +446,7 @@ class ChatWindow(QDialog):
         setup_heading = QLabel("Connect your assistant")
         setup_heading.setObjectName("sectionTitle")
         form.addRow(setup_heading)
-        setup_intro = QLabel("Add your Groq API key to chat with Jeffery. This connection is separate from your office account. Play and local reminders work without a key.")
+        setup_intro = QLabel("Add your Groq API key for general AI chat. Imported parts searches, play and local reminders work without a key. This connection is separate from your office account.")
         setup_intro.setObjectName("hint")
         setup_intro.setWordWrap(True)
         form.addRow(setup_intro)
@@ -449,7 +539,7 @@ class ChatWindow(QDialog):
         connection_scroll.setWidget(connection)
         self.tabs.addTab(connection_scroll, "AI setup")
         self.tabs.addTab(web_page, "Web sources")
-        self.status = QLabel("Add your Groq key in AI setup to chat. Play works offline.")
+        self.status = QLabel("Ask about imported parts offline, or add a Groq key for general chat.")
         self.status.setObjectName("hint")
         self.status.setWordWrap(True)
         layout.addWidget(self.status)
@@ -502,6 +592,56 @@ class ChatWindow(QDialog):
         self.empty_state.hide()
         self.transcript.appendPlainText(text)
         self._style_transcript_cards()
+
+    def import_parts_list(self):
+        if self._parts_future is not None:
+            return
+        path, _ = QFileDialog.getOpenFileName(self, 'Import parts snapshot', '', 'CSV files (*.csv)')
+        if not path:
+            return
+        self._parts_future = self._parts_executor.submit(self.parts_catalog.import_csv, path)
+        self.parts_import.setEnabled(False)
+        self.status.setText('Importing parts on this PC; existing shared stock will not change…')
+        self._parts_timer.start()
+
+    def _parts_import_finished(self):
+        if self._parts_future is None or not self._parts_future.done():
+            return
+        future, self._parts_future = self._parts_future, None
+        self._parts_timer.stop()
+        self.parts_import.setEnabled(True)
+        try:
+            metadata = future.result()
+        except Exception as exc:
+            self.status.setText('Parts import failed; the previous snapshot remains available: ' + redact(exc))
+            return
+        self.status.setText(f"Imported {metadata['row_count']:,} parts for offline search on this PC. Office stock was not changed.")
+
+    def local_parts_reply(self, text):
+        query = parts_query(text)
+        if query is None:
+            return None
+        explicit = bool(re.search(r'\b(?:parts?|stock|inventory|barcode|sku|bin|shelf|restock|reorder)\b', text, re.I))
+        explicit |= bool(re.search(r'\b[a-z]*\d[a-z0-9./-]*\b', text, re.I))
+        explicit |= bool(re.search(r'\b(?:brakes?|pads?|filters?|rotors?|bearings?|plugs?|belts?|hoses?|radiators?|starters?|alternators?|sensors?|bumpers?|fenders?|motors?|clutch|wipers?|batter(?:y|ies))\b', text, re.I))
+        try:
+            metadata, rows = self.parts_catalog.lookup('')
+            if query and metadata.get('row_count'):
+                # Check codes literally before full text: -11044 and 11044 can
+                # be different parts even though FTS tokenizes their punctuation.
+                if ' ' not in query and re.search(r'\d', query):
+                    metadata, rows = self.parts_catalog.lookup_exact(query, limit=5)
+                if not rows:
+                    for variant in parts_query_variants(query):
+                        metadata, rows = self.parts_catalog.lookup(variant)
+                        if rows or not metadata.get('row_count'):
+                            break
+            # Generic questions like “Where is the notepad?” remain normal chat.
+            if not explicit and not rows:
+                return None
+            return parts_answer(query, metadata, rows)
+        except (OSError, sqlite3.Error, ValueError) as exc:
+            return 'The local parts catalogue could not be searched: ' + redact(exc)
 
     def set_busy(self, busy):
         busy = busy or self.web_loading or self.semantic_loading
@@ -632,6 +772,14 @@ class ChatWindow(QDialog):
             self.status.setText("Unknown play command." +
                 (" Try " + ", ".join("/" + suggestion for suggestion in suggestions) + "." if suggestions else
                  " Try /wave, /hide, /peek, or /tab."))
+            return
+        local = None if self.parts_use_groq.isChecked() else self.local_parts_reply(text)
+        if local is not None:
+            self._append_message('You: ' + redact(text))
+            self.input.clear()
+            self._append_message(f"{self.settings['pet_name']}: {local}\n")
+            self.reply_ready.emit(local)
+            self.status.setText('Answered from the local parts snapshot; no Groq request was sent.')
             return
         model = self.preferences()
         if not model:
@@ -873,6 +1021,8 @@ class ChatWindow(QDialog):
         self.status.setText("Request cancelled.")
 
     def shutdown(self):
+        self._parts_timer.stop()
+        self._parts_executor.shutdown(wait=False, cancel_futures=True)
         self.cancel_request()
         self.intake.shutdown()
         self.clear_web_data()

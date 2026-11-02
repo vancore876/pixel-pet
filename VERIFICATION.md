@@ -1,5 +1,25 @@
 # Jeffery 6.0 verification
 
+The offline parts and companion update passed **1,079 tests** out of **1,083**
+on Python 3.12/Linux offscreen Qt; four Windows Shell metadata tests were skipped
+because PowerShell was unavailable. The Home and Jeffery GUI workflows, desktop
+startup, dependency checks, and whitespace checks also passed.
+
+The supplied 46,848-row CSV was imported and queried locally without a Groq key.
+Real-file checks included abbreviated descriptions and exact part numbers. Tests
+cover failed-import rollback, negative and fractional source quantities, missing
+locations, concurrent replacement without mismatching dates, cost-price exclusion,
+offline chat routing, explicit cloud consent, and exact read-only scanner lookup.
+The private CSV and generated catalogue database are not included in the Git
+repository. The reference import does not update shared stock or prove fitment.
+
+Companion checks cover optional accessories, personality and activity controls,
+fractional eye movement and blinks, character sizes and directions, and the
+existing low-power/manual-interaction behavior. The Home workflow covers cached
+status labels, low-stock navigation, overdue orders, and preserved offline drafts.
+Windows installation, the actual office network and physical USB scanner were not
+tested here. Earlier feature-specific validation follows.
+
 The November 2, 2026 note-edit sync repair passed **1,060 tests** out of **1,064**
 on Python 3.12/Linux offscreen Qt. Four isolated Windows Shell metadata tests
 were skipped because PowerShell was unavailable. The two-PC BuddyApp GUI

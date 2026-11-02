@@ -11,11 +11,11 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QImage, QPainter
 from PySide6.QtWidgets import QApplication
 
-from characters import ANIMATION_STATES, CHARACTER_CHOICES, COMPANION_ANIMATIONS, draw_character
+from characters import ANIMATION_STATES, CHARACTER_CHOICES, COMPANION_ANIMATIONS, draw_character, _blink_amount
 
 
 def rendered(character, state="IDLE", frame=4.25, size=96, height=None, direction=1,
-             gaze=(0.2, -0.3), padding=4):
+             gaze=(0.2, -0.3), padding=4, accessory="none"):
     height = height or size
     image = QImage(size + padding * 2, height + padding * 2, QImage.Format_RGBA8888)
     image.fill(Qt.transparent)
@@ -23,7 +23,7 @@ def rendered(character, state="IDLE", frame=4.25, size=96, height=None, directio
     try:
         painter.translate(padding, padding)
         draw_character(painter, size, height=height, frame=frame, state=state,
-                       character=character, direction=direction, gaze=gaze)
+                       character=character, direction=direction, gaze=gaze, accessory=accessory)
     finally:
         painter.end()
     return image
@@ -125,6 +125,36 @@ class CharacterExpansionTests(unittest.TestCase):
                                     pixels(rendered(character, frame=4.3)))
                 self.assertNotEqual(pixels(rendered(character, frame=4, gaze=(0.2, 0.1))),
                                     pixels(rendered(character, frame=4, gaze=(0.7, 0.5))))
+
+    def test_natural_blinks_have_fractional_closure_and_occasional_double_blink(self):
+        self.assertEqual(_blink_amount(12, "IDLE"), 0)
+        self.assertGreater(_blink_amount(17.5, "IDLE"), 0)
+        self.assertLess(_blink_amount(17.5, "IDLE"), 1)
+        self.assertEqual(_blink_amount(18, "IDLE"), 1)
+        self.assertEqual(_blink_amount(78, "IDLE"), 1)
+        self.assertEqual(_blink_amount(81.3, "IDLE"), 1)
+        self.assertEqual(_blink_amount(18, "WALK_LEFT"), 0)
+        self.assertEqual(_blink_amount(12, "PET"), 1)
+        for _, character in CHARACTER_CHOICES:
+            with self.subTest(character=character):
+                self.assertNotEqual(pixels(rendered(character, frame=17.5)),
+                                    pixels(rendered(character, frame=18)))
+
+    def test_accessories_are_optional_distinct_and_fit_each_character(self):
+        for _, character in CHARACTER_CHOICES:
+            for size in (16, 96, 157):
+                for direction in (-1, 1):
+                    with self.subTest(character=character, size=size, direction=direction):
+                        plain = rendered(character, size=size, direction=direction)
+                        mechanic = rendered(character, size=size, direction=direction, accessory="mechanic")
+                        knight = rendered(character, size=size, direction=direction, accessory="knight")
+                        self.assert_inside_footprint(mechanic, size)
+                        self.assert_inside_footprint(knight, size)
+                        self.assertNotEqual(pixels(plain), pixels(mechanic))
+                        self.assertNotEqual(pixels(plain), pixels(knight))
+                        self.assertNotEqual(pixels(mechanic), pixels(knight))
+                        self.assertEqual(pixels(plain), pixels(rendered(character, size=size,
+                                         direction=direction, accessory="unknown")))
 
 
 if __name__ == "__main__":

@@ -73,6 +73,61 @@ class CompanionControlTests(unittest.TestCase):
                 self.pet.animate()
         return self.pet.real_x, self.pet.frame
 
+    def test_personality_and_trick_frequency_save_reload_and_validate(self):
+        window = SettingsWindow(self.settings)
+        try:
+            for key, value in [('pet_personality', 'helpful'), ('pet_trick_frequency', 'less'), ('pet_accessory', 'mechanic')]:
+                control = window.controls[key]
+                index = control.findData(value)
+                self.assertGreaterEqual(index, 0)
+                control.setCurrentIndex(index)
+                self.settings.save({key: control.currentData()})
+            loaded = AppSettings(self.settings.path)
+            self.assertEqual(loaded['pet_personality'], 'helpful')
+            self.assertEqual(loaded['pet_trick_frequency'], 'less')
+            self.assertEqual(loaded['pet_accessory'], 'mechanic')
+            defaults = AppSettings.validate({'pet_personality': 'wrong', 'pet_trick_frequency': 'extreme', 'pet_accessory': 'wrong'})
+            self.assertEqual(defaults['pet_personality'], 'balanced')
+            self.assertEqual(defaults['pet_trick_frequency'], 'normal')
+            self.assertEqual(defaults['pet_accessory'], 'none')
+        finally:
+            window.deleteLater()
+
+    def test_selected_accessory_reaches_builtin_renderer(self):
+        self.pet.sprites.clear()
+        self.pet.state, self.pet.frame = 'IDLE', 0
+        self.settings.values['pet_accessory'] = 'none'
+        plain = bytes(self.pet.grab().toImage().constBits())
+        self.settings.values['pet_accessory'] = 'knight'
+        dressed = bytes(self.pet.grab().toImage().constBits())
+        self.assertNotEqual(plain, dressed)
+
+    def test_personality_controls_automatic_poses_without_blocking_manual_moves(self):
+        self.settings.values.update({'business_mode': True, 'playful': True, 'low_power': False})
+
+        def weights(personality, frequency='normal'):
+            self.settings.values.update({'pet_personality': personality, 'pet_trick_frequency': frequency})
+            self.pet.action_state = None
+            self.pet.next_state = 0
+            with patch('pet.random.choices', return_value=['IDLE']) as choose:
+                self.pet.animate()
+            choices, values = choose.call_args.args
+            return dict(zip(choices, values))
+
+        balanced = weights('balanced')
+        quiet = weights('quiet')
+        self.assertEqual(quiet, {'WALK': 2, 'IDLE': 7, 'SLEEP': 3})
+        self.assertGreater(weights('playful')['WAVE'], balanced['WAVE'])
+        self.assertGreater(weights('helpful')['CHECK_STOCK'], balanced['CHECK_STOCK'])
+        self.assertLess(weights('balanced', 'less')['WAVE'], balanced['WAVE'])
+        self.assertGreater(weights('balanced', 'more')['WAVE'], balanced['WAVE'])
+        self.settings.values['playful'] = False
+        self.assertNotIn('WAVE', weights('playful', 'more'))
+        self.pet.perform('WAVE')
+        self.assertEqual(self.pet.action_state, 'WAVE')
+        self.settings.values.update({'playful': True, 'low_power': True})
+        self.assertNotIn('CHECK_STOCK', weights('helpful'))
+
     def test_smooth_and_low_power_motion_keep_same_speed_and_animation_duration(self):
         smooth = self.walk_for_one_second(1 / 30, False)
         self.assertEqual(self.pet.timer.interval(), 33)

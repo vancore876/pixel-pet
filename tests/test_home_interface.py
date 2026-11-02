@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from PySide6.QtCore import Qt, QCoreApplication, QEvent
+from PySide6.QtCore import Qt, QCoreApplication, QEvent, QObject, Signal
 from PySide6.QtWidgets import QApplication
 from PySide6.QtTest import QTest
 from settings import AppSettings
@@ -79,6 +79,60 @@ class HomeInterfaceTests(unittest.TestCase):
         self.assertEqual(self.window.connection_badge.text(), 'Office not connected')
         self.window.set_connection('Shared with coworkers · alice', True)
         self.assertEqual(self.window.connect_button.text(), 'Open team chat')
+
+    def test_daily_dashboard_marks_cached_data_and_opens_its_sources(self):
+        class Inventory(QObject):
+            changed = Signal()
+            status_changed = Signal(str)
+            summary = {}
+            shared = True
+            online = False
+            status = 'Sign in to Work Chat'
+
+        class Orders(QObject):
+            changed = Signal()
+            _established = False
+            _scope = ''
+            rows = []
+            status = 'Sign in to Work Chat to see overdue customer orders.'
+            shared_business = type('Business', (), {'ready': False})()
+
+        class Team(QObject):
+            status_changed = Signal(str)
+            status = 'Work sync is off.'
+
+        inventory, orders, team = Inventory(), Orders(), Team()
+        self.window.attach_work_services(inventory, orders, team)
+        self.assertIn('not loaded', self.window.daily_stock.text())
+        self.assertIn('sign in', self.window.daily_orders.text())
+        inventory.summary = {'low_stock_count': 4}
+        inventory.status = 'Disconnected. Cached stock may be out of date.'
+        inventory.changed.emit()
+        self.assertIn('4 · cached office stock', self.window.daily_stock.text())
+        self.assertIn('out of date', self.window.daily_stock.toolTip())
+        inventory.online = True
+        inventory.status_changed.emit('Connected')
+        self.assertIn('4 · office stock', self.window.daily_stock.text())
+        orders._scope, orders._established, orders.rows = 'account', True, [{}, {}]
+        orders.changed.emit()
+        self.assertEqual(self.window.daily_orders.text(), 'Overdue customer orders: 2 · cached')
+        orders.shared_business.ready = True
+        orders.changed.emit()
+        self.assertEqual(self.window.daily_orders.text(), 'Overdue customer orders: 2')
+        team.status = 'Shared folder unavailable; edits remain queued.'
+        team.status_changed.emit(team.status)
+        self.assertIn('edits remain queued', self.window.folder_status.text())
+        navigated = []
+        self.window.navigate_requested.connect(navigated.append)
+        for button in (self.window.daily_orders, self.window.daily_stock, self.window.daily_messages):
+            button.click()
+        self.assertEqual(navigated, ['overdue', 'low_stock', 'coworkers'])
+        inventory.summary.clear()
+        orders._scope, orders._established, orders.rows = '', False, []
+        inventory.changed.emit()
+        orders.changed.emit()
+        self.assertIn('not loaded', self.window.daily_stock.text())
+        self.assertIn('sign in', self.window.daily_orders.text())
 
     def test_light_dark_and_compact_layout_preserve_actions(self):
         self.window.show()

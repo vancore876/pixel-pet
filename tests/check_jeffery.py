@@ -3,6 +3,7 @@ import os
 import sys
 import tempfile
 import time
+import traceback
 from pathlib import Path
 from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -35,7 +36,14 @@ def initial_checks():
         buddy.show_notepad()
         buddy.notepad.title.setText("Prepare customer order")
         buddy.notepad.body.setPlainText("Check the stock and pack the order before pickup.")
-        assert buddy.notepad.save_note()
+        # Writing uses office sync when no shared folder is connected. A
+        # disconnected save must preserve the draft instead of appearing saved.
+        assert not buddy.notepad.save_note(), 'An offline office save was reported as successful'
+        assert buddy.notepad.dirty and 'Sign in' in buddy.notepad.status.text()
+        # Continue the reminder and editor checks in the supported standalone
+        # notebook mode; no office server is present in this GUI fixture.
+        buddy.notepad.shared_business = None
+        assert buddy.notepad.save_note(), buddy.notepad.status.text()
         first = buddy.notepad.editing_id
         state["first"] = first
         buddy.note_service.tick()
@@ -109,7 +117,7 @@ def initial_checks():
         assert buddy.pet.queued_action == ("WAVE", 2), "Interaction interrupted the drop"
         QTimer.singleShot(600, finish_checks)
     except Exception as exc:
-        errors.append(str(exc))
+        errors.append(traceback.format_exc())
         app.quit()
 
 
@@ -135,7 +143,7 @@ def finish_checks():
         assert len(reloaded.notes) == len(buddy.notes_store.notes), "Notebook did not persist"
         buddy.menu.actions()[-1].trigger()
     except Exception as exc:
-        errors.append(str(exc))
+        errors.append(traceback.format_exc())
         app.quit()
 
 

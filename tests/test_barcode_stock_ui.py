@@ -1,5 +1,6 @@
 """USB keyboard scanners, reviewed stock changes, and account boundaries."""
 import os
+import csv
 from pathlib import Path
 import sys
 import tempfile
@@ -94,6 +95,38 @@ class BarcodeStockUiTests(unittest.TestCase):
         self.assertIsNone(self.window._scan_item)
         self.assertEqual(self.window.scan_result.text(), "Part not found")
         self.assertFalse(self.window.movement_button.isEnabled())
+
+    def test_imported_catalogue_lookup_is_exact_dated_and_read_only(self):
+        from parts_catalog import FIELDS, PartsCatalog
+        source = self.root / 'parts-2026-10-22.csv'
+        with source.open('w', encoding='utf-8-sig', newline='') as stream:
+            writer = csv.DictWriter(stream, fieldnames=list(FIELDS))
+            writer.writeheader()
+            writer.writerow({'PartNumber': '000222', 'Description': 'Brake pad',
+                             'StoreQuantity': '-1.50', 'StoreBin1': 'A3',
+                             'CostPrice': '99', 'AlternatePartNumber': 'ALT-42'})
+        PartsCatalog(self.root / 'parts-catalog.sqlite').import_csv(source)
+        self.window.show_scanner()
+        QTest.keyClicks(self.window.scan_input, '000222')
+        # The displayed date and part must come from a single catalogue
+        # snapshot, even if another import commits while a scan is running.
+        with patch.object(PartsCatalog, 'exact_matches', side_effect=AssertionError('split read')), \
+             patch.object(PartsCatalog, 'metadata', side_effect=AssertionError('split read')):
+            self.window.snapshot_scan_button.click()
+            wait_for(lambda: self.window.scan_result.text().startswith('000222'))
+        detail = self.window.scan_detail.text()
+        self.assertIn('2026-10-22', detail)
+        self.assertIn('NOT live inventory', detail)
+        self.assertIn('-1.50', detail)
+        self.assertIn('A3', detail)
+        self.assertNotIn('99', detail)
+        self.assertIsNone(self.window._scan_item)
+        self.assertFalse(self.window.movement_button.isEnabled())
+        self.assertFalse(self.window.scan_history_button.isEnabled())
+        self.assertIsNone(self.service.pending_movement)
+        self.window.scan_input.setText('222')
+        self.window.snapshot_scan_button.click()
+        wait_for(lambda: 'No exact match' in self.window.scan_result.text())
 
     def test_unknown_barcode_requires_choose_edit_and_save(self):
         self.scan("00009999")

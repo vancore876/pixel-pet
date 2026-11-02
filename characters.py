@@ -37,8 +37,26 @@ BUSINESS_ANIMATIONS = (("Check stock", "CHECK_STOCK"), ("Scan a part", "SCAN_PAR
                        ("High five", "HIGH_FIVE"), ("Coffee break", "COFFEE"))
 
 
+def _blink_amount(frame, state):
+    """Return a smooth eyelid closure on the renderer's ten-fps timeline."""
+    if state == "PET":
+        return 1.0
+    if state == "LAUGH":
+        return 1.0 if frame % 4 < 2 else 0.0
+    if state not in ("IDLE", "LOOK", "THINK", "TALK", "READ", "YAWN", "SNEEZE", "LISTEN", "PERCH"):
+        return 0.0
+    # About once every six seconds, with an occasional second blink. The
+    # triangular eyelid animation works with fractional frames.
+    phase = frame % 120
+    amount = 0.0
+    for center in (18, 78, 81.3):
+        distance = abs(phase - center)
+        amount = max(amount, max(0.0, 1.0 - distance / 1.35))
+    return amount
+
+
 def draw_character(p: QPainter, size: int, height=None, frame=0, state="IDLE", direction=1,
-                   skin="mint", character="robot", gaze=(0, 0)):
+                   skin="mint", character="robot", gaze=(0, 0), accessory="none"):
     """Keep the original 32-unit footprint and extra parachute space at every size."""
     height = height or size
     # Fractional scale keeps curves and details clear at every desktop/DPI size.
@@ -113,23 +131,33 @@ def draw_character(p: QPainter, size: int, height=None, frame=0, state="IDLE", d
         stroke(path, color, width)
     def eyes(y, closed, organic=False, iris="#50a88f", slit=True):
         """Glass eyes remain readable at the smallest supported pet size."""
+        closure = max(0.0, min(1.0, float(closed)))
         for x in (9.3, 14.7):
-            x += gx * 0.65
-            eye_y = y + gy * 0.4
-            if closed:
+            eye_y = y
+            if closure >= 0.96:
                 curve(x - 0.8, eye_y + 0.5, x, eye_y + (0 if state == "SLEEP" else -0.5),
                       x + 0.8, eye_y + 0.5, dark if organic else "#a0f7ed", 0.6)
-            elif organic:
-                oval(x - 1.05, eye_y - 0.3, 2.1, 2.6, "#f0fff5")
-                oval(x - 0.85, eye_y + 0.05, 1.7, 2.05, iris)
-                oval(x - (0.35 if slit else 0.6), eye_y + 0.05,
-                     0.7 if slit else 1.2, 1.9, "#122a32")
-                oval(x - 0.45, eye_y, 0.48, 0.6, "#ffffff")
             else:
-                glow(x, eye_y + 0.8, 2, "#74edff", 100)
-                panel(x - 0.8, eye_y - 0.2, 1.6, 2.3, "#e5ffff", "#91f8ee", "#36becf",
-                      0.7, "#91f8ee")
-                oval(x - 0.45, eye_y - 0.02, 0.4, 0.45, "#ffffff")
+                p.save()
+                p.translate(x, eye_y + 0.9)
+                p.scale(1, max(0.04, 1.0 - closure))
+                p.translate(-x, -eye_y - 0.9)
+                if organic:
+                    # The eye stays anchored; only the iris follows the cursor.
+                    dx, dy = gx * 0.19, gy * 0.18
+                    soft_oval(x - 1.05, eye_y - 0.3, 2.1, 2.6, "#ffffff", "#f0f4e9", "#b4c4ba")
+                    soft_oval(x - 0.78 + dx, eye_y + 0.05 + dy, 1.56, 2.05,
+                              QColor(iris).lighter(145), iris, QColor(iris).darker(160))
+                    oval(x - (0.32 if slit else 0.53) + dx, eye_y + 0.12 + dy,
+                         0.64 if slit else 1.06, 1.78, "#122a32")
+                    oval(x - 0.42 + dx, eye_y + 0.05 + dy, 0.48, 0.55, "#ffffff")
+                    oval(x + 0.25 + dx, eye_y + 1.25 + dy, 0.18, 0.2, tint("#e8fffa", 175))
+                else:
+                    glow(x + gx * 0.45, eye_y + 0.8 + gy * 0.25, 2, "#74edff", 100)
+                    panel(x - 0.8 + gx * 0.45, eye_y - 0.2 + gy * 0.25, 1.6, 2.3, "#e5ffff", "#91f8ee", "#36becf",
+                          0.7, "#91f8ee")
+                    oval(x - 0.45 + gx * 0.45, eye_y - 0.02 + gy * 0.25, 0.4, 0.45, "#ffffff")
+                p.restore()
     def heart(x, y):
         block(x, y, 2, 1, "#f4a4c7")
         block(x + 3, y, 2, 1, "#f4a4c7")
@@ -338,7 +366,7 @@ def draw_character(p: QPainter, size: int, height=None, frame=0, state="IDLE", d
     else:
         moving = state.startswith("WALK") or state in ("EXCITED", "DANCE", "CELEBRATE", "DRAG", "CHASE", "SHY", "PUSH", "RUN", "TIPTOE", "SKATE", "CLIMB", "GROOM", "SNEAK", "FETCH", "CARRY_BOX", "STOCK_OK")
         swing = math.sin(frame * math.pi / 2)
-        blink = state in ("IDLE", "PET", "YAWN", "LAUGH", "SNEEZE") and frame % (4 if state == "LAUGH" else 20) < 2
+        blink = _blink_amount(frame, state)
         if character == "cat":
             # A curved tail, tapered ears and soft cheek/muzzle shapes suggest fur.
             tail_y = math.sin(frame * 0.45) * (1 if moving else 0.35)
@@ -368,7 +396,7 @@ def draw_character(p: QPainter, size: int, height=None, frame=0, state="IDLE", d
             head.cubicTo(6.3, 15.7, 4.2, 11.8, 5.5, 8)
             shape(head, highlight, light, middle, dark)
             oval(7.5, 11.8, 9, 3.3, tint(highlight, 225))
-            eyes(9, blink or state == "PET", organic=True)
+            eyes(9, blink, organic=True)
             # Short forehead markings and whiskers add detail without visual noise.
             for x in (10.7, 12, 13.3):
                 curve(x, 6.4, x, 7.2, x + (x - 12) * 0.2, 7.7, tint(dark, 80), 0.5)
@@ -433,7 +461,7 @@ def draw_character(p: QPainter, size: int, height=None, frame=0, state="IDLE", d
                 shape(cheeks, "#fff6e1", "#f6dfbb", "#c3a886")
             else:
                 soft_oval(6, 6.4, 4.8, 6.1, coat[0], "#a4734b", coat[2])
-            eyes(8.1, blink or state == "PET", True,
+            eyes(8.1, blink, True,
                  "#7b5a31" if fox else "#784d2d", slit=fox)
             soft_oval(8.5, 11.1, 7, 4.4, "#fff3df", "#e8ccaa", "#b58e69")
             soft_oval(10.5 + gx * 0.3, 11.5, 3, 1.9, "#76817a", "#303d3c", "#1d2929")
@@ -460,13 +488,18 @@ def draw_character(p: QPainter, size: int, height=None, frame=0, state="IDLE", d
             soft_oval(11.8, 5.8, 6.4, 9.3, "#fff3d8", "#ebd4ae", "#b69774")
             for x in (9.1, 14.9):
                 soft_oval(x - 2, 7.5, 4, 4.9, "#846340", "#5c4939", "#332d2a")
-                if blink or state == "PET":
+                if blink >= 0.96:
                     curve(x - 1.1, 10, x, 10.8, x + 1.1, 10, "#e9c57f", 0.6)
                 else:
+                    p.save()
+                    p.translate(x, 10)
+                    p.scale(1, max(0.04, 1.0 - blink))
+                    p.translate(-x, -10)
                     soft_oval(x - 1.55 + gx * 0.3, 8.1 + gy * 0.2, 3.1, 3.7,
                               "#f5da8f", "#ce9a3f", "#885728")
                     oval(x - 0.8 + gx * 0.45, 8.5 + gy * 0.2, 1.6, 2.8, "#1d282a")
                     oval(x - 0.7 + gx * 0.45, 8.6 + gy * 0.2, 0.65, 0.8, "#ffffff")
+                    p.restore()
             beak = QPainterPath(QPointF(11, 12))
             beak.quadTo(12, 10.8, 13, 12)
             beak.quadTo(12.7, 13.8, 12, 14.4)
@@ -501,7 +534,7 @@ def draw_character(p: QPainter, size: int, height=None, frame=0, state="IDLE", d
             soft_oval(5, 4.5, 14, 10.7, *coat, outline=coat[2])
             for x in (10.2, 12, 13.8):
                 soft_oval(x - 0.5, 5.3, 1, 1.8, coat[0], coat[1], coat[2])
-            eyes(8.2, blink or state == "PET", True, "#d5a74e")
+            eyes(8.2, blink, True, "#d5a74e")
             soft_oval(7.5, 11.2, 9, 4.3, "#c9e3bd", "#92c4a0", "#618c7e")
             for x in (9.8, 14.2):
                 oval(x - 0.4, 12.1, 0.8, 0.5, "#3b6d63")
@@ -533,7 +566,7 @@ def draw_character(p: QPainter, size: int, height=None, frame=0, state="IDLE", d
             panel(18.6, 8.5, 1.5, 3.7, light, middle, dark, 0.7)
             panel(6.4, 7.6, 11.2, 6.1, "#31586a", "#182f42", "#081a2b", 2, dark)
             curve(7.6, 8.5, 10, 7.7, 13, 8.3, tint("#c3fcff", 90), 0.4)
-            eyes(9.5, blink or state == "PET")
+            eyes(9.5, blink)
             curve(10.5, 12.5, 12, 13.4, 13.5, 12.5, "#82dbde", 0.35)
             curve(6.4, 6.4, 11.1, 5.3, 15.9, 6.3, tint("#ffffff", 165), 0.35)
             panel(9.6, 16.6, 4.8, 2.9, "#ffebb5", "#ffd18a", "#d99452", 1, dark)
@@ -596,6 +629,27 @@ def draw_character(p: QPainter, size: int, height=None, frame=0, state="IDLE", d
                 panel(x - 0.1, 19.8, 3.2, 2.1, middle, dark, dark, 0.8)
                 curve(x + 0.55, 20.4, x + 1.5, 20.1, x + 2.4, 20.4, tint(highlight, 150), 0.3)
             p.restore()
+        if accessory == "mechanic":
+            # A shop apron leaves the face and paws visible. Use shapes rather
+            # than text so its details remain legible at small desktop sizes.
+            curve(8.2, 14.8, 12, 16.3, 15.8, 14.8, "#cfb58b", 0.7)
+            panel(8.4, 15.8, 7.2, 4.6, "#658899", "#415f72", "#253e50", 0.8, "#324a55")
+            panel(9.4, 17.3, 5.2, 2.1, "#9cb1ae", "#648890", "#46646e", 0.4, "#415e67")
+            # Crossed screwdriver and wrench make this distinct from a shirt.
+            curve(10.4, 18.7, 11.1, 18.1, 11.8, 17.5, "#f2cd7c", 0.45)
+            curve(12.3, 17.5, 13, 18.1, 13.7, 18.7, "#e1eef0", 0.45)
+        elif accessory == "knight":
+            # A small cape clasp and shield pair with any character's anatomy.
+            curve(8.2, 15, 12, 16.7, 15.8, 15, "#a5404b", 1.1)
+            shield = QPainterPath(QPointF(9.7, 16.5))
+            shield.quadTo(12, 15.8, 14.3, 16.5)
+            shield.lineTo(14.1, 19.1)
+            shield.quadTo(13.2, 20.3, 12, 20.8)
+            shield.quadTo(10.8, 20.3, 9.9, 19.1)
+            shield.closeSubpath()
+            shape(shield, "#edf6ff", "#a8c2d5", "#5f819c", "#47667e")
+            curve(12, 16.9, 12, 18, 12, 19.8, "#b14c53", 0.55)
+            curve(10.9, 18, 12, 18, 13.1, 18, "#b14c53", 0.55)
         if state == "LAUGH":
             block(10, 13, 5, 2, "#243647")
             block(11, 14, 3, 1, "#f4a4c7")

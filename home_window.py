@@ -35,6 +35,7 @@ class HomeWindow(QDialog):
         self._connection_text = 'Connect to your office to share orders and checklists.'
         self._columns = 0
         self._compact = None
+        self._inventory_service = self._order_service = self._team_service = None
         self.setWindowTitle('Jeffery · Home')
         self.setMinimumSize(760, 560)
         screen = QApplication.primaryScreen().availableGeometry()
@@ -190,6 +191,24 @@ class HomeWindow(QDialog):
         row.addWidget(self.connect_button)
         main.addWidget(connection)
 
+        daily = QFrame()
+        daily.setObjectName('surface')
+        daily_layout = QVBoxLayout(daily)
+        daily_layout.setContentsMargins(16, 14, 16, 14)
+        daily_layout.addWidget(label('Today at the counter', 'sectionTitle', True))
+        self.daily_orders = QPushButton('Overdue orders: sign in to Work Chat')
+        self.daily_stock = QPushButton('Low stock: inventory not loaded')
+        self.daily_messages = QPushButton('Open Work Chat messages')
+        for button, destination in ((self.daily_orders, 'overdue'),
+                                    (self.daily_stock, 'low_stock'),
+                                    (self.daily_messages, 'coworkers')):
+            button.setAutoDefault(False)
+            button.clicked.connect(lambda checked=False, value=destination: self.navigate_requested.emit(value))
+            daily_layout.addWidget(button)
+        self.folder_status = label('Shared-folder sync: not configured.', 'hint', True)
+        daily_layout.addWidget(self.folder_status)
+        main.addWidget(daily)
+
         main.addWidget(label('Find your work', 'sectionTitle'))
         self.search = QLineEdit()
         self.search.setPlaceholderText('Search customer, part, order reference or saved text…')
@@ -290,6 +309,40 @@ class HomeWindow(QDialog):
         self.connection_badge.style().polish(self.connection_badge)
         self.connection_heading.setText('Your team workspace is connected' if connected else 'Bring your team together')
         self.connect_button.setText('Open team chat' if connected else 'Connect to office')
+
+    def attach_work_services(self, inventory, orders, team):
+        """Show existing service snapshots without triggering stock or note changes."""
+        self._inventory_service, self._order_service, self._team_service = inventory, orders, team
+        inventory.changed.connect(self.refresh_work_overview)
+        inventory.status_changed.connect(self.refresh_work_overview)
+        orders.changed.connect(self.refresh_work_overview)
+        team.status_changed.connect(self.refresh_work_overview)
+        self.refresh_work_overview()
+
+    def refresh_work_overview(self, *_):
+        inventory, orders, team = self._inventory_service, self._order_service, self._team_service
+        if inventory is not None:
+            count = inventory.summary.get('low_stock_count')
+            if type(count) is int and count >= 0:
+                scope = ('local stock' if not inventory.shared else
+                         'office stock' if inventory.online else 'cached office stock')
+                self.daily_stock.setText(f'Low stock: {count} · {scope}')
+                self.daily_stock.setToolTip('Based on saved quantities and reorder levels. ' + inventory.status)
+            else:
+                self.daily_stock.setText('Low stock: inventory not loaded')
+                self.daily_stock.setToolTip(inventory.status or 'Open inventory to load stock.')
+        if orders is not None:
+            if orders._established:
+                count = len(orders.rows)
+                cached = ' · cached' if not orders.shared_business.ready else ''
+                self.daily_orders.setText(f'Overdue customer orders: {count}{cached}')
+            else:
+                self.daily_orders.setText('Overdue orders: waiting for office data' if orders._scope
+                                          else 'Overdue orders: sign in to Work Chat')
+            self.daily_orders.setToolTip(orders.status)
+        if team is not None:
+            self.folder_status.setText('Shared-folder sync: ' + team.status[:240])
+            self.folder_status.setToolTip(team.status)
 
     def refresh(self, *_):
         summary = dashboard_summary(self.service.store.notes)

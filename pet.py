@@ -351,11 +351,18 @@ class PixelPet(QWidget):
                        "PAPER_PLANE", "BLOW_BUBBLES", "TAI_CHI", "TAP_FOOT"]
             if self.settings["character"] in ("owl", "dragon"):
                 tricks.append("WING_FLAP")
-            choices, weights = (["WALK", "IDLE", "SLEEP"] + tricks, [7, 3, 0.5] + [0.45] * len(tricks)) if self.settings["playful"] else (["WALK", "IDLE", "SLEEP"], [7, 3, 1])
-            if self.settings["business_mode"] and self.settings["playful"] and not self.settings["quiet_mode"] and not self.settings["low_power"]:
+            personality = self.settings["pet_personality"]
+            frequency = {"less": 0.3, "normal": 1.0, "more": 1.8}[self.settings["pet_trick_frequency"]]
+            auto_tricks = self.settings["playful"] and personality != "quiet"
+            trick_weight = 0.45 * frequency * (1.7 if personality == "playful" else 1.0)
+            if auto_tricks:
+                choices, weights = ["WALK", "IDLE", "SLEEP"] + tricks, [7, 3, 0.5] + [trick_weight] * len(tricks)
+            else:
+                choices, weights = ["WALK", "IDLE", "SLEEP"], ([2, 7, 3] if personality == "quiet" else [7, 3, 1])
+            if self.settings["business_mode"] and auto_tricks and not self.settings["quiet_mode"] and not self.settings["low_power"]:
                 business_tricks = [state for _, state in BUSINESS_ANIMATIONS if state not in ("HIGH_FIVE", "COFFEE")]
                 choices += business_tricks
-                weights += [0.18] * len(business_tricks)
+                weights += [0.18 * frequency * (3 if personality == "helpful" else 1)] * len(business_tricks)
                 tricks += business_tricks
             self.state = random.choices(choices, weights)[0]
             self.direction, self.vertical_direction = random.choice([-1, 1]), random.uniform(-0.7, 0.7)
@@ -458,7 +465,8 @@ class PixelPet(QWidget):
             p.drawPixmap((self.width() - target.width()) // 2, self.height() - target.height(), image.scaled(target, Qt.KeepAspectRatio, Qt.FastTransformation))
         else:
             gaze = (self.gaze[0] * self.direction, self.gaze[1])
-            draw_character(p, self.width(), self.height(), self.frame, self.state, self.direction, self.settings["pet_palette"], self.settings["character"], gaze)
+            draw_character(p, self.width(), self.height(), self.frame, self.state, self.direction, self.settings["pet_palette"], self.settings["character"], gaze,
+                           accessory=self.settings["pet_accessory"])
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:

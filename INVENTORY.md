@@ -10,6 +10,30 @@ features. Keep its database on the server's local disk and retain your existing
 database when updating. Daily verified office backups and an IT **Back up now**
 action are described in [WORK_CHAT.md](WORK_CHAT.md#office-backups-and-recovery).
 
+## Ask Jeffery offline about the parts catalogue
+
+In **Ask Jeffery**, choose **Import parts list** and select the Famous Twins CSV.
+After import, ask a question such as “Where is part 123?”, “Do we have brake
+pads?” or “How much is the oil filter?” You can also enter a part number. Matching
+records come from a locally indexed snapshot and do not require Groq or internet.
+Results show the source date when the filename contains one, and may include
+locations, quantities and retail prices from that snapshot. Check the current
+stock and price before promising availability: a dated export is not a live count.
+The optional **Use Groq for parts questions** checkbox routes those questions to
+Groq instead; sharing office inventory records also requires the separate inventory
+sharing setting. Keep the checkbox off to use the local catalogue.
+
+The local catalogue is separate from the shared inventory and cannot change
+stock. Negative and fractional source quantities are retained as supplied. The
+CSV and its local database can contain confidential business information; keep
+them in a location accessible only to authorized staff. Import the file on each
+PC that needs offline answers. Reimport an updated CSV to refresh that PC's
+snapshot; this does not synchronize it to the other PCs or the office server.
+In **Inventory → Scan barcode**, **Find part in imported catalogue** checks an
+exact part, alternate or substitute number against the same local snapshot.
+The result is read-only; use the ordinary inventory lookup and review controls
+when recording a stock movement.
+
 ## Import an Excel stock list
 
 1. Choose **Import stock list**, then select an `.xlsx`, `.xlsm`, `.xls`, or
@@ -147,6 +171,8 @@ of matching items or items needing restocking, including their saved locations
 and update times. This is a separate choice from sharing notebook notes.
 
 Without this option, the inventory search and restock view still work locally.
+You can also ask Jeffery about a separately imported parts catalogue without
+Groq or an internet connection, as described below.
 An offline office cache is marked as a saved snapshot and is read-only. Signing
 out clears the visible office list and pending AI context; another account uses
 its own cache. No raw workbook, complete stock list, password, or recovery code

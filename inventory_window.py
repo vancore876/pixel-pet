@@ -66,6 +66,7 @@ class InventoryWindow(QDialog):
         self._building = False
         self._scan_item = None
         self._scan_cached = False
+        self._snapshot_sequence = 0
         self._unknown_code = ""
         self._history_before = None
         self._history_sku = ""
@@ -327,6 +328,9 @@ class InventoryWindow(QDialog):
         self.scan_button = _button("Look up", self._scan, "primary")
         scan_row.addWidget(self.scan_button)
         layout.addLayout(scan_row)
+        self.snapshot_scan_button = _button("Find part in imported catalogue", self._scan_snapshot)
+        self.snapshot_scan_button.setToolTip("Search the dated local parts file; this cannot change stock.")
+        layout.addWidget(self.snapshot_scan_button)
         self.scan_result = _label("Ready for a barcode.", "sectionTitle")
         self.scan_result.setTextInteractionFlags(Qt.TextSelectableByMouse)
         layout.addWidget(self.scan_result)
@@ -416,6 +420,7 @@ class InventoryWindow(QDialog):
         self.scan_input.selectAll()
 
     def _scan_edited(self):
+        self._snapshot_sequence += 1
         self.service.invalidate_scan()
         self._scan_item = None
         self._scan_cached = False
@@ -426,6 +431,7 @@ class InventoryWindow(QDialog):
         self._scanner_controls()
 
     def _scan(self):
+        self._snapshot_sequence += 1
         self._scan_item = None
         self._scan_cached = False
         self._unknown_code = ""
@@ -437,6 +443,67 @@ class InventoryWindow(QDialog):
         self._scanner_controls()
         self.service.scan_code(self.scan_input.text().strip())
         self.scan_input.selectAll()
+
+    def _scan_snapshot(self):
+        """Look up a code in the local reference file, never as live stock."""
+        from pathlib import Path
+        code = self.scan_input.text().strip()
+        self._snapshot_sequence += 1
+        sequence = self._snapshot_sequence
+        self.service.invalidate_scan()
+        self._scan_item = None
+        self._scan_cached = False
+        self._unknown_code = ""
+        self.scan_stock_button.hide()
+        self._scanner_controls()
+        self.scan_input.selectAll()
+        if not code or len(code) > 128 or not all(char.isprintable() for char in code):
+            self.scan_result.setText("Enter a readable part number first")
+            self.scan_detail.clear()
+            return
+        path = Path(self.settings.path).parent / 'parts-catalog.sqlite'
+        if not path.is_file():
+            self.scan_result.setText("No imported catalogue on this PC")
+            self.scan_detail.setText("Import the Famous Twins parts file in Ask Jeffery first.")
+            return
+        self.scan_result.setText("Searching the imported catalogue…")
+        self.scan_detail.clear()
+
+        def lookup(cancel):
+            from parts_catalog import PartsCatalog
+            try:
+                catalog = PartsCatalog(path)
+                metadata, rows = catalog.lookup_exact(code, limit=2)
+                return rows, metadata, ''
+            except Exception as exc:
+                return [], {}, str(exc)[:200]
+
+        def show(result):
+            if sequence != self._snapshot_sequence:
+                return
+            rows, metadata, error = result
+            if error:
+                self.scan_result.setText("Could not read the imported catalogue")
+                self.scan_detail.setText(error)
+            elif not metadata:
+                self.scan_result.setText("No imported catalogue on this PC")
+                self.scan_detail.setText("Import the Famous Twins parts file in Ask Jeffery first.")
+            elif len(rows) > 1:
+                self.scan_result.setText("Several catalogue parts match this code")
+                self.scan_detail.setText("Check the full part number in Ask Jeffery. No stock was changed.")
+            elif not rows:
+                self.scan_result.setText("No exact match in the imported catalogue")
+                self.scan_detail.setText("The file may not include this part or barcode. No stock was changed.")
+            else:
+                row = rows[0]
+                self.scan_result.setText(f"{row['part_number']} · {row.get('description', '')}")
+                bins = ', '.join(row.get(f'store_bin{i}', '') for i in range(1, 4) if row.get(f'store_bin{i}', ''))
+                date = metadata.get('source_date') or 'date unknown'
+                quantity = row.get('store_quantity') or 'not recorded'
+                self.scan_detail.setText(f"Imported catalogue snapshot ({date}) · NOT live inventory\n"
+                    f"Recorded store quantity: {quantity} · Store location: {bins or 'not recorded'}\n"
+                    "Stock actions are disabled for catalogue results. Verify current stock before a sale.")
+        self.service._submit(lookup, show)
 
     def _show_scan(self, result):
         self._scan_item = result.get("item")
@@ -611,6 +678,7 @@ class InventoryWindow(QDialog):
             "Imports, manual edits, receipts, sales, returns, and counts appear here.")
 
     def _clear_scanner(self):
+        self._snapshot_sequence += 1
         self._scan_item = None
         self._scan_cached = False
         self._unknown_code = ""
@@ -939,6 +1007,7 @@ class InventoryWindow(QDialog):
         event.ignore()
 
     def hideEvent(self, event):
+        self._snapshot_sequence += 1
         self.service.invalidate_scan()
         self.service._history_sequence += 1
         self._scan_item = None

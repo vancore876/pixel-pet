@@ -40,6 +40,15 @@ with tempfile.TemporaryDirectory(prefix='jeffery-home-integration-') as director
             buddy.note_service.stop()
             buddy.menu.actions()[0].trigger()
             assert buddy.home.isVisible()
+            buddy.home.daily_stock.click()
+            assert buddy.inventory_window.isVisible() and buddy.inventory_window.low_stock.isChecked()
+            buddy.inventory_window.home_requested.emit()
+            assert buddy.home.isVisible()
+            buddy.inventory_window.close()
+            buddy.home.daily_orders.click()
+            assert buddy.overdue_window.isVisible()
+            buddy.overdue_window.home_requested.emit()
+            buddy.overdue_window.close()
             buddy.home.it_button.click()
             assert buddy.it_window.isVisible()
             assert not buddy.it_window.token
@@ -51,8 +60,15 @@ with tempfile.TemporaryDirectory(prefix='jeffery-home-integration-') as director
             assert window.isVisible() and window.kind.currentData() == 'note'
             window.title.setText('Counter writing')
             window.body.setPlainText('Personal text stays in this Windows profile.')
-            assert window.save_note()
-            identifier = window.editing_id
+            # Plain writing now uses office sync when folder sync is off. A
+            # disconnected save must retain its draft. Seed an existing local
+            # note to keep exercising navigation and draft protection below.
+            assert not window.save_note() and window.dirty
+            assert 'Sign in' in window.status.text()
+            existing = buddy.note_service.save_note(None, 'Counter writing',
+                'Personal text stays in this Windows profile.', 0)
+            identifier = existing['id']
+            window.load_note(identifier)
             assert buddy.home.recent.item(0).data(Qt.UserRole) == identifier
             window.body.setPlainText('This unsaved writing must survive a cancelled switch.')
             with patch('notepad_window.QMessageBox.question', return_value=QMessageBox.Cancel):
@@ -115,4 +131,4 @@ with tempfile.TemporaryDirectory(prefix='jeffery-home-integration-') as director
     buddy.shutdown()
     if errors:
         raise AssertionError('; '.join(errors))
-    print('PASS: Home entry points, scoped navigation, local writing, preserved drafts, blocked offline business save, login status, live appearance, and shutdown.')
+    print('PASS: Home entry points, scoped navigation, local writing, preserved drafts, blocked offline saves, login status, live appearance, and shutdown.')

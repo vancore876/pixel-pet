@@ -161,6 +161,7 @@ class BuddyApp(QObject):
         self.business_sync.session_expired.connect(self.work_chat._clear_session)
         self.order_escalations = OrderEscalationService(self.settings, self.business_sync,
             can_notify=self.order_can_notify, parent=self)
+        self.home.attach_work_services(self.inventory, self.order_escalations, self.team)
         self.overdue_window = OverdueOrdersWindow(self.order_escalations, self.settings)
         self.work_chat.session_changed.connect(self.order_escalations.set_session)
         self.order_escalations.notification.connect(self.deliver_order_escalation)
@@ -952,6 +953,10 @@ class BuddyApp(QObject):
         self.home.activateWindow()
 
     def home_navigate(self, destination):
+        if destination == 'low_stock':
+            self.inventory_window.low_stock.setChecked(True)
+            self.show_inventory()
+            return
         if destination in ('overview', 'writing', 'checklists', 'orders', 'schedule'):
             self.show_business_workspace(destination)
             return

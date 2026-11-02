@@ -46,6 +46,9 @@ class AppSettings:
                    "interface_appearance": ("light", "dark", "system"),
                    "notification_size": ("compact", "expanded"),
                    "roaming_mode": ("bottom", "free"), "character": tuple(key for _, key in CHARACTER_CHOICES),
+                   "pet_personality": ("balanced", "quiet", "playful", "helpful"),
+                   "pet_trick_frequency": ("less", "normal", "more"),
+                   "pet_accessory": ("none", "mechanic", "knight"),
                    "monitor_style": ("medieval", "classic"),
                    "pdf_engine": ("auto", "pdfium", "pypdf"),
                    "mouse_mode": ("off", "watch", "chase", "shy")}

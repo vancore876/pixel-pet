@@ -24,6 +24,7 @@ DEFAULTS = {
     "cpu_alert": 90, "ram_alert": 85, "alert_duration": 10, "alert_cooldown": 120,
     "focus_minutes": 25,
     "character": "robot", "parachute": True, "playful": True,
+    "pet_personality": "balanced", "pet_trick_frequency": "normal", "pet_accessory": "none",
     "note_reminders": True, "note_repeat_minutes": 30,
     "mouse_mode": "watch", "hide_seconds": 12, "folder_play": True,
     "ai_model": "openai/gpt-oss-20b", "ai_share_metrics": True, "ai_share_notes": True,

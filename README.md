@@ -284,6 +284,11 @@ to work with this interface. See [Famous Twins workflow](FAMOUS_TWINS.md) and
 
 ## A more lifelike virtual buddy
 
+Choose **Settings → Your buddy** to set Jeffery's personality, automatic activity
+frequency and optional mechanic or knight accessory. Existing size, walking speed,
+color and low-power options still apply. The accessories use the built-in drawing;
+custom PNG sprites retain their own artwork.
+
 Choose **Robot, Cat, Knight, Dog, Fox, Owl, or Dragon** in **Settings → Your buddy →
 Character**, or **Buddy Controls → Choose Character**. Rounded bodies, shaded
 fur/feathers/scales, expressive eyes, breathing, ear movement, tails, and wings
@@ -294,6 +299,12 @@ Active desktop movement now updates about 30 times a second with time-based
 animation and smooth eye tracking. Low power keeps movement speed consistent
 while reducing updates; resting characters update more slowly and hidden pets
 stop their animation timer.
+
+For offline parts questions, open **Ask Jeffery → Import parts list** and select
+the Famous Twins CSV. Ask by part number or description without Groq; answers
+identify the imported snapshot and do not change shared stock. Import the file on
+each PC and refresh it when the export changes. See [parts inventory](INVENTORY.md)
+for setup and how snapshot values differ from current office inventory.
 
 **Play with Jeffery → Companion Moves** adds head tilting, sniffing, listening,
 knocking, dusting, inspecting, perching, fluttering, fetching, and curling up.
