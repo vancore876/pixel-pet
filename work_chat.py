@@ -471,7 +471,7 @@ class WorkChatWindow(QDialog):
         self._poll_ticks = 0
         self._shutting_down = False
         self.poll_timer = QTimer(self)
-        self.poll_timer.setInterval(2000)
+        self.poll_timer.setInterval(5000)
         self.poll_timer.timeout.connect(self._poll)
         self.setWindowTitle("Coworkers · Jeffery")
         self.resize(960, 730)
