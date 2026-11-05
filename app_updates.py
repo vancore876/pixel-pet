@@ -203,6 +203,8 @@ class UpdateController(QObject):
         self.busy = False
         self.stopped = False
         self.buttons = []
+        self.manual_parent = None
+        self.manual_check = False
         self.frozen = bool(getattr(sys, 'frozen', False))
         self.installed_commit = ''
         self.installed_time = 0
@@ -234,9 +236,11 @@ class UpdateController(QObject):
         if auto_check:
             self.timer.start()
             QTimer.singleShot(3000, self.check)
+        for window in app.topLevelWidgets():
+            self.attach(window)
 
     def eventFilter(self, obj, event):
-        if event.type() == QEvent.Show and isinstance(obj, QWidget) and obj.isWindow() and self.manifest:
+        if event.type() == QEvent.Show and isinstance(obj, QWidget) and obj.isWindow():
             QTimer.singleShot(0, lambda: self.attach(obj))
         return False
 
@@ -245,10 +249,10 @@ class UpdateController(QObject):
             if (not window.isWindow() or isinstance(window, (QFileDialog, QMenu, QMessageBox))
                     or not isinstance(window, QDialog) or window.property('jeffery_update_button')):
                 return
-            button = QPushButton('Update available', window)
+            button = QPushButton('Update available' if self.manifest else 'Check for updates', window)
             button.setObjectName('primary')
             button.setAutoDefault(False)
-            button.clicked.connect(lambda: self.show_update(window))
+            button.clicked.connect(lambda: self.show_update(window) if self.manifest else self.check(manual=True, parent=window))
             layout = window.layout()
             if layout is not None and hasattr(layout, 'insertLayout'):
                 bar = QHBoxLayout()
@@ -265,10 +269,16 @@ class UpdateController(QObject):
         except RuntimeError:
             pass
 
-    def check(self):
-        if self.busy or self.stopped:
+    def check(self, manual=False, parent=None):
+        if self.stopped:
+            return
+        if self.busy:
+            if manual:
+                QMessageBox.information(parent, 'Jeffery updates', 'Jeffery is already checking for updates. Try again in a moment.')
             return
         self.busy = True
+        self.manual_check = bool(manual)
+        self.manual_parent = parent
         def work():
             try:
                 with urllib.request.urlopen(urllib.request.Request(MANIFEST_URL, headers={'User-Agent': 'Jeffery-Updater', 'Cache-Control': 'no-cache'}), timeout=10) as reply:
@@ -284,10 +294,24 @@ class UpdateController(QObject):
         if self.stopped:
             return
         self.busy = False
+        manual, parent = self.manual_check, self.manual_parent
+        self.manual_check, self.manual_parent = False, None
         if value and update_available(value, self.installed_files, self.installed_commit, self.installed_time):
             self.manifest = value
             for window in self.app.topLevelWidgets():
                 self.attach(window)
+            for button in self.buttons:
+                try:
+                    button.setText('Update available')
+                except RuntimeError:
+                    pass
+            if manual:
+                self.show_update(parent)
+        elif manual:
+            if value:
+                QMessageBox.information(parent, 'Jeffery updates', 'Jeffery is up to date.')
+            else:
+                QMessageBox.warning(parent, 'Jeffery updates', 'Could not check for updates. Check your internet connection and try again.')
 
     def show_update(self, parent=None):
         if self.busy or not self.manifest:
