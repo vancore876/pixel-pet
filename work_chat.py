@@ -19,6 +19,8 @@ from PySide6.QtWidgets import (QCheckBox, QDialog, QFormLayout, QFrame, QHBoxLay
 
 from ui_style import window_style, ui_palette, apply_workspace_window_controls
 from message_input import MessageInput
+from supabase_config import (SUPABASE_ANON_KEY, SUPABASE_FUNCTION_URL,
+                             SUPABASE_REGISTER_URL)
 
 MAX_RESPONSE_BYTES = 1024 * 1024
 REQUEST_TIMEOUT_MS = 10_000
@@ -34,6 +36,8 @@ _CURRENT_CONVERSATION = object()
 def normalize_server_url(value: str) -> str:
     """Accept an office IP or origin, restricting HTTP to literal private IPs."""
     value = value.strip()
+    if value.rstrip("/") == SUPABASE_FUNCTION_URL:
+        return SUPABASE_FUNCTION_URL
     if (not value or any(char.isspace() or ord(char) < 32 for char in value)
             or "\\" in value or "%" in value):
         raise ValueError("Enter the office server's IP address, such as 192.168.50.194.")
@@ -103,6 +107,8 @@ class _ApiClient(QObject):
                              QNetworkRequest.AlwaysNetwork)
         request.setAttribute(QNetworkRequest.CacheSaveControlAttribute, False)
         request.setRawHeader(b"Accept", b"application/json")
+        if "supabase.co/functions/v1/jeffery-" in self.base_url:
+            request.setRawHeader(b"apikey", SUPABASE_ANON_KEY.encode("ascii"))
         if token:
             request.setRawHeader(b"Authorization", ("Bearer " + token).encode("ascii"))
         if method in ("POST", "PUT", "DELETE"):
@@ -544,7 +550,7 @@ class WorkChatWindow(QDialog):
         self.confirm_password.setEchoMode(QLineEdit.Password)
         self.confirm_password.setPlaceholderText("Enter your password again")
         self.confirm_password.setAccessibleName("Confirm Work Chat password")
-        for name, widget in (("Office server", self.server), ("Username", self.username), ("Password", self.password)):
+        for name, widget in (("Supabase project", self.server), ("Username", self.username), ("Password", self.password)):
             label = QLabel(name)
             label.setMinimumHeight(18)
             widget.setMinimumHeight(34)
@@ -703,7 +709,10 @@ class WorkChatWindow(QDialog):
         self.setStyleSheet(window_style(self.settings) + f"\nQSplitter::handle {{ background: {colors['bg']}; width: 14px; }} QPlainTextEdit {{ padding: 12px; }}")
         if not self.token and not self._auth_busy:
             values = getattr(self.settings, "values", self.settings)
-            self.server.setText(values.get("work_chat_server", ""))
+            self.server.setText(SUPABASE_FUNCTION_URL)
+            self.server.setReadOnly(True)
+            self.server.setToolTip("Shared Supabase backend used by the Jeffery website and desktop apps.")
+            self.forgot_button.hide()
             self.username.setText(values.get("work_chat_username", ""))
 
     def _set_signup(self, enabled):
@@ -757,7 +766,8 @@ class WorkChatWindow(QDialog):
             self.status.setText("Use a password between 12 and 128 characters.")
             self.password.setFocus()
             return
-        if (self.signup.isChecked() or self._recovery_mode) and password != self.confirm_password.text():
+        cloud_signup = self.signup.isChecked()
+        if (cloud_signup or self._recovery_mode) and password != self.confirm_password.text():
             self.status.setText("The passwords do not match.")
             self.confirm_password.setFocus()
             return
@@ -776,11 +786,11 @@ class WorkChatWindow(QDialog):
         self._session_generation += 1
         generation = self._session_generation
         self.api.cancel_all()
-        self.api.base_url = server
+        self.api.base_url = SUPABASE_REGISTER_URL if cloud_signup else server
         self._set_auth_busy(True)
         resetting = self._recovery_mode
         self.status.setText("Resetting your password…" if resetting else "Creating your account…" if self.signup.isChecked() else "Signing in…")
-        path = "/api/auth/reset-password" if resetting else "/api/auth/register" if self.signup.isChecked() else "/api/auth/login"
+        path = "/api/auth/reset-password" if resetting else "" if cloud_signup else "/api/auth/login"
 
         def received(data, error, status):
             if generation != self._session_generation or self._shutting_down:
@@ -789,6 +799,7 @@ class WorkChatWindow(QDialog):
             self.password.clear()
             self.confirm_password.clear()
             self.recovery_code.clear()
+            self.api.base_url = server
             if error:
                 self.status.setText(error)
                 self.password.setFocus()
@@ -819,7 +830,7 @@ class WorkChatWindow(QDialog):
             if (isinstance(notification_cursor, int) and not isinstance(notification_cursor, bool)
                     and notification_cursor >= 0):
                 session_user["notification_cursor"] = notification_cursor
-            self.session_changed.emit(self.api.base_url, token, session_user)
+            self.session_changed.emit(server, token, session_user)
             self.account_label.setText(f"Signed in as {user['username']}")
             self.pages.setCurrentIndex(1)
             self._peer_id = None
@@ -827,7 +838,7 @@ class WorkChatWindow(QDialog):
             self._reset_messages()
             self._populate_users([])
             self._update_send()
-            self.status.setText("Connected to your office server.")
+            self.status.setText("Connected to Jeffery on Supabase.")
             if self.isVisible():
                 self.poll_timer.start()
                 self.refresh_users()

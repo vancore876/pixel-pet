@@ -110,7 +110,7 @@ class SharedBusinessController(QObject):
         if not token:
             self.status_changed.emit("Sign in to Work Chat to use shared orders and checklists.", False)
             return
-        self.status_changed.emit("Loading Famous Twins orders from the office server…", False)
+        self.status_changed.emit("Loading notes and orders from Supabase…", False)
         self.timer.start()
         self.refresh()
 
@@ -254,14 +254,12 @@ class SharedBusinessController(QObject):
                          None, received, self.token)
 
     def share_existing_notes(self):
-        """Move existing plain Writing notes to the authenticated office, one at a time."""
-        if getattr(self, 'folder_sync_active', lambda: False)():
-            return  # The folder owns new notes; never race it with API migration.
+        """Move existing unshared notes, orders, and checklists to the cloud one at a time."""
         if not self.ready or not self.token or self._writing or self._polling or self._closed:
             return
         note = next((note for note in self.store.notes
-                     if note.get('kind') == 'note' and not note.get('document_id')
-                     and not note.get('team_id') and not note.get('team_workspace_id')
+                     if note.get('kind') in ('note', 'order', 'list') and not note.get('document_id')
+                     and not note.get('team_shared') and not note.get('team_id') and not note.get('team_workspace_id')
                      and note['id'] not in self._cache_ids and note['id'] not in self._records
                      and note['id'] not in self._migration_attempts
                      and note['id'] != self._editing_id), None)
@@ -314,7 +312,7 @@ class SharedBusinessController(QObject):
                     self._write_callback = None
                     callback(None, str(error))
                     return False
-        self.status_changed.emit("Saving to the office server…", True)
+        self.status_changed.emit("Saving to Supabase…", True)
 
         def received(data, error, status):
             if generation != self._generation or self._closed:
@@ -339,7 +337,7 @@ class SharedBusinessController(QObject):
             if error:
                 if status == 422 and ('supported order or checklist fields' in error or
                                       'contains unsupported fields' in error):
-                    message = ('The office server rejected the shared-note format. '
+                    message = ('Supabase rejected the shared-note format. '
                                'The server application and desktop must use the same notebook schema. '
                                'Update the server project files, including server_business_schema.py and work_server/store.py, '
                                'then restart that server process. Your draft and highlights are preserved; no fields were silently discarded.')
@@ -365,10 +363,10 @@ class SharedBusinessController(QObject):
                             saved_entry.get('highlights', []) != entry.get('highlights', [])
                             or saved_entry.get('kind') != entry.get('kind')
                             or saved_entry.get('body') != str(entry.get('body', '')).strip()):
-                        callback(None, 'The office server did not preserve the highlights. '
-                                 'Update and restart the office server, then retry Save. '
+                        callback(None, 'Supabase did not preserve the highlights. '
+                                 'Update and redeploy the Supabase API, then retry Save. '
                                  'The text may already be saved, but the highlights were not confirmed.')
-                        self.status_changed.emit('Highlights not confirmed by the office server; update the server before retrying.', False)
+                        self.status_changed.emit('Highlights not confirmed by Supabase; update the API before retrying.', False)
                         # Do not replace the cache or announce a successful save.
                         # The editor keeps its draft while polling can retrieve
                         # the server revision needed for a later retry.
@@ -379,7 +377,7 @@ class SharedBusinessController(QObject):
                     self._editing_revision = data["revision"]
                 self.service.changed.emit(identifier)
                 callback(note, "")
-                self.status_changed.emit("Saved on the office server · visible to coworkers", True)
+                self.status_changed.emit("Saved to Supabase · visible on all connected desktops and the website", True)
                 # A POST/PUT echo must never skip other people's unseen updates.
                 self.refresh()
             except (OSError, ValueError, TypeError) as failure:
