@@ -1,0 +1,6 @@
+.env
+.env.*
+!.env.example
+bridge-agent.out.log
+bridge-agent.err.log
+__pycache__/

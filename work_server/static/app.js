@@ -1,18 +1,40 @@
 "use strict";
 
 (() => {
+  const pageStartedAt = performance.now();
   const SUPABASE_FUNCTION_URL = window.JEFFERY_SUPABASE_FUNCTION_URL;
   const SUPABASE_REGISTER_URL = window.JEFFERY_SUPABASE_REGISTER_URL;
   const SUPABASE_ANON_KEY = window.JEFFERY_SUPABASE_ANON_KEY;
+  const AUTOMATE_FUNCTION_URL = window.JEFFERY_AUTOMATE_SUPABASE_FUNCTION_URL;
+  const AUTOMATE_ANON_KEY = window.JEFFERY_AUTOMATE_SUPABASE_ANON_KEY;
   if (typeof SUPABASE_FUNCTION_URL !== "string" || typeof SUPABASE_REGISTER_URL !== "string" || typeof SUPABASE_ANON_KEY !== "string") throw new Error("Jeffery cloud configuration is missing.");
   const apiUrl = path => SUPABASE_FUNCTION_URL + path.replace(/^\/api(?=\/|\?|$)/, "");
   const $ = (id) => document.getElementById(id);
   const state = {
     token: "", user: null, users: [], peer: null, cursor: 0, messages: new Map(),
     drafts: new Map(), authEpoch: 0, conversationEpoch: 0, requests: new Set(),
-    pollTimer: null, usersTimer: null, dataTimer: null, pollBusy: null, sending: false, signingUp: false,
-    business: [], businessCursor: 0, businessLoading: false, selectedNoteId: "", selectedOrderId: "", inventory: [], inventorySearchSequence: 0, inventorySearchTimer: null, draftLines: [], receivingMatches: [], receivingPreviewId: "",
+    pollTimer: null, notificationTimer: null, notificationBusy: false, directCursors: new Map(), announcedMessages: new Set(),
+    usersTimer: null, dataTimer: null, pollBusy: null, sending: false, signingUp: false,
+    business: [], businessCursor: 0, businessLoading: false, selectedNoteId: "", selectedOrderId: "", inventory: [], noteParts: null, inventorySearchSequence: 0, inventorySearchTimer: null, draftLines: [], receivingMatches: [], receivingPreviewId: "", automateBusy: false,
   };
+  let messageAudio = null;
+  const themeKey = "jeffery-theme";
+  const savedTheme = localStorage.getItem(themeKey);
+  if (savedTheme === "dark" || savedTheme === "light") document.documentElement.dataset.theme = savedTheme;
+  $("theme").addEventListener("click", () => {
+    const nextTheme = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
+    document.documentElement.dataset.theme = nextTheme;
+    localStorage.setItem(themeKey, nextTheme);
+  });
+  const rotorHoles = $("rotor-holes");
+  for (let index = 0; index < 12; index++) {
+    const angle = index * Math.PI / 6;
+    const dot = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+    dot.setAttribute("cx", String(100 + 46 * Math.cos(angle)));
+    dot.setAttribute("cy", String(100 + 46 * Math.sin(angle)));
+    dot.setAttribute("r", "5");
+    rotorHoles.append(dot);
+  }
   const conversationKey = (peer = state.peer) => peer === null ? "team" : String(peer);
   const newHexId = () => {
     if (window.crypto?.randomUUID) return crypto.randomUUID().replaceAll("-", "");
@@ -20,20 +42,115 @@
   };
   $("server-name").textContent = location.host;
 
+  function unlockMessageAudio() {
+    const AudioContextType = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContextType) return;
+    try {
+      messageAudio ||= new AudioContextType();
+      if (messageAudio.state === "suspended") void messageAudio.resume().catch(() => {});
+    } catch {}
+  }
+
+  function playMessageSound() {
+    if (!messageAudio || messageAudio.state !== "running") return;
+    try {
+      const now = messageAudio.currentTime;
+      for (const [offset, frequency] of [[0, 740], [0.12, 990]]) {
+        const oscillator = messageAudio.createOscillator();
+        const gain = messageAudio.createGain();
+        oscillator.type = "sine";
+        oscillator.frequency.value = frequency;
+        gain.gain.setValueAtTime(0.0001, now + offset);
+        gain.gain.exponentialRampToValueAtTime(0.12, now + offset + 0.015);
+        gain.gain.exponentialRampToValueAtTime(0.0001, now + offset + 0.18);
+        oscillator.connect(gain); gain.connect(messageAudio.destination);
+        oscillator.start(now + offset); oscillator.stop(now + offset + 0.19);
+      }
+    } catch {}
+  }
+
+  function refreshNotificationButton() {
+    const button = $("enable-notifications");
+    if (!("Notification" in window)) { button.hidden = true; return; }
+    button.hidden = false;
+    button.textContent = Notification.permission === "granted" ? "Notifications enabled" :
+      Notification.permission === "denied" ? "Notifications blocked in Chrome" : "Enable notifications";
+    button.title = Notification.permission === "denied"
+      ? "Chrome has blocked this site's prompt. Use the site controls beside the address bar, set Notifications to Allow, then reload."
+      : "Allow desktop alerts for new messages when Jeffery is not open.";
+    button.disabled = Notification.permission === "granted";
+  }
+
+  function requestNotificationPermission() {
+    if (!("Notification" in window) || Notification.permission !== "default") {
+      refreshNotificationButton();
+      return;
+    }
+    try {
+      // Call this directly from the sign-in or button gesture so Chrome can show its prompt.
+      void Notification.requestPermission().then(refreshNotificationButton).catch(refreshNotificationButton);
+    } catch {
+      refreshNotificationButton();
+    }
+  }
+
+  function showMessageToast(message) {
+    const toast = document.createElement("button");
+    toast.type = "button"; toast.className = "message-alert";
+    const title = document.createElement("strong");
+    title.textContent = message.sender_username + (message.recipient_id == null ? " · Team Room" : " sent you a message");
+    const body = document.createElement("span"); body.textContent = message.body.slice(0, 180);
+    toast.append(title, body);
+    toast.addEventListener("click", () => {
+      showPanel("chat-panel");
+      selectConversation(message.recipient_id == null ? null : message.sender_id);
+      toast.remove();
+    });
+    $("message-alerts").append(toast);
+    setTimeout(() => toast.remove(), 9000);
+  }
+
+  function notifyIncomingMessage(message) {
+    if (!state.user || message.sender_id === state.user.id || state.announcedMessages.has(message.id)) return;
+    state.announcedMessages.add(message.id);
+    if (state.announcedMessages.size > 500) state.announcedMessages.delete(state.announcedMessages.values().next().value);
+    playMessageSound();
+    const peer = message.recipient_id == null ? null : message.sender_id;
+    const isOpenConversation = !document.hidden && !$("chat-panel").hidden && state.peer === peer;
+    if (isOpenConversation) return;
+    showMessageToast(message);
+    if ("Notification" in window && Notification.permission === "granted") {
+      try {
+        const notice = new Notification(message.recipient_id == null ? "New Team Room message" : `Message from ${message.sender_username}`, {
+          body: message.body.slice(0, 220), tag: `jeffery-message-${message.id}`,
+        });
+        notice.onclick = () => {
+          window.focus(); showPanel("chat-panel"); selectConversation(peer); notice.close();
+        };
+      } catch {}
+    }
+  }
+
+  $("enable-notifications").addEventListener("click", () => {
+    unlockMessageAudio();
+    requestNotificationPermission();
+  });
+  refreshNotificationButton();
+
   function status(text, error = false) {
     $("connection-status").textContent = text;
     $("connection-status").classList.toggle("error-status", error);
   }
 
-  async function request(path, { method = "GET", body, token = state.token, endpoint = SUPABASE_FUNCTION_URL } = {}) {
+  async function request(path, { method = "GET", body, token = state.token, endpoint = SUPABASE_FUNCTION_URL, apiKey = SUPABASE_ANON_KEY } = {}) {
     const controller = new AbortController();
     state.requests.add(controller);
     const timer = setTimeout(() => controller.abort(), 10000);
     try {
       const headers = { Accept: "application/json" };
       if (body !== undefined) headers["Content-Type"] = "application/json";
-      headers.apikey = SUPABASE_ANON_KEY;
-      headers.Authorization = `Bearer ${token || SUPABASE_ANON_KEY}`;
+      headers.apikey = apiKey;
+      headers.Authorization = `Bearer ${token || apiKey}`;
       const response = await fetch(endpoint === SUPABASE_FUNCTION_URL ? apiUrl(path) : endpoint + path, {
         method, headers, body: body === undefined ? undefined : JSON.stringify(body),
         signal: controller.signal, credentials: "omit", cache: "no-store", redirect: "error",
@@ -96,6 +213,7 @@
     state.authEpoch++;
     state.conversationEpoch++;
     clearTimeout(state.pollTimer);
+    clearTimeout(state.notificationTimer);
     clearInterval(state.usersTimer);
     clearInterval(state.dataTimer);
     for (const controller of state.requests) controller.abort();
@@ -105,6 +223,7 @@
     state.messages.clear();
     state.drafts.clear();
     state.pollBusy = null;
+    state.notificationBusy = false; state.directCursors.clear(); state.announcedMessages.clear();
     state.business = []; state.businessCursor = 0; state.businessLoading = false;
     state.selectedNoteId = ""; state.selectedOrderId = "";
     state.sending = false;
@@ -124,10 +243,12 @@
   $("signup-tab").addEventListener("click", () => accountMode(true));
   $("auth-form").addEventListener("submit", async (event) => {
     event.preventDefault();
+    unlockMessageAudio();
     if (state.signingUp && $("password").value !== $("confirm-password").value) {
       $("auth-error").textContent = "The passwords do not match.";
       return;
     }
+    if (!state.signingUp) requestNotificationPermission();
     const epoch = ++state.authEpoch;
     $("auth-submit").disabled = true;
     $("signin-tab").disabled = true;
@@ -145,17 +266,22 @@
       }
       state.token = data.token;
       state.user = data.user;
+      state.directCursors.clear(); state.announcedMessages.clear();
       $("password").value = "";
       $("confirm-password").value = "";
       $("account-name").textContent = data.user.username;
       $("web-account-name").textContent = data.user.username;
       $("account-avatar").textContent = data.user.username.slice(0, 1).toUpperCase();
+      $("chat-account-name").textContent = data.user.username;
       $("manage-coworkers").hidden = data.user.role !== "admin";
       $("auth-view").hidden = true;
       $("chat-view").hidden = false;
-      showPanel("chat-panel");
+      const requestedPanel = new URLSearchParams(window.location.search).get("panel");
+      const requestedViews = {notes: "notes-panel", orders: "orders-panel", chat: "chat-panel"};
+      showPanel(requestedViews[requestedPanel] || "home-panel");
       selectConversation(null);
       await fetchUsers();
+      void fetchNotifications();
       loadBusiness();
       loadInventory();
       if (epoch === state.authEpoch) state.usersTimer = setInterval(fetchUsers, 15000);
@@ -269,7 +395,7 @@
     if (nearBottom || firstRender) scroll.scrollTop = scroll.scrollHeight;
   }
 
-  function acceptMessages(messages) {
+  function acceptMessages(messages, notify = false) {
     if (!Array.isArray(messages)) throw new Error("The server returned an invalid message list.");
     let changed = false;
     for (const message of messages) {
@@ -278,6 +404,7 @@
       }
       if (!state.messages.has(message.id)) {
         state.messages.set(message.id, message);
+        if (notify) notifyIncomingMessage(message);
         changed = true;
       }
     }
@@ -286,6 +413,7 @@
 
   async function fetchMessages(initial = false) {
     if (!state.token || document.hidden) return;
+    const notifyNew = !initial;
     const epoch = state.authEpoch;
     const conversation = state.conversationEpoch;
     const marker = `${epoch}:${conversation}`;
@@ -301,7 +429,7 @@
         if (!initial || state.cursor > 0) query.set("after_id", String(state.cursor));
         const data = await request(`/api/messages?${query}`);
         if (epoch !== state.authEpoch || conversation !== state.conversationEpoch) return;
-        acceptMessages(data.messages);
+        acceptMessages(data.messages, notifyNew);
         for (const message of data.messages) state.cursor = Math.max(state.cursor, message.id);
         more = data.has_more === true && data.messages.length > 0;
         initial = false;
@@ -314,6 +442,44 @@
       if (epoch === state.authEpoch && conversation === state.conversationEpoch && state.token) {
         state.pollTimer = setTimeout(() => fetchMessages(state.cursor === 0), 5000);
       }
+    }
+  }
+
+  async function pollInboxConversation(key, path) {
+    const epoch = state.authEpoch;
+    const cursor = state.directCursors.get(key) || { id: 0, initialized: false };
+    const data = await request(path + (path.includes("?") ? "&" : "?") + `limit=100${cursor.id ? `&after_id=${cursor.id}` : ""}`);
+    if (epoch !== state.authEpoch || !state.token) return;
+    if (!Array.isArray(data.messages)) throw new Error("Could not check incoming messages.");
+    let lastId = cursor.id;
+    for (const message of data.messages) {
+      if (!Number.isSafeInteger(message.id) || typeof message.body !== "string" || typeof message.sender_username !== "string") {
+        throw new Error("An incoming message could not be read.");
+      }
+      lastId = Math.max(lastId, message.id);
+      if (cursor.initialized) notifyIncomingMessage(message);
+    }
+    state.directCursors.set(key, { id: lastId, initialized: cursor.initialized || data.has_more !== true });
+  }
+
+  async function fetchNotifications() {
+    if (!state.token || state.notificationBusy) return;
+    state.notificationBusy = true;
+    const epoch = state.authEpoch;
+    try {
+      const activeChat = !document.hidden && !$("chat-panel").hidden;
+      if (!activeChat || state.peer !== null) await pollInboxConversation("team", "/api/messages");
+      const peers = state.users.filter(user => user.id !== state.user.id && (!activeChat || state.peer !== user.id));
+      const chunkSize = 5;
+      for (let offset = 0; offset < peers.length; offset += chunkSize) {
+        const batch = peers.slice(offset, offset + chunkSize);
+        await Promise.all(batch.map(user => pollInboxConversation(user.id, `/api/messages?peer_id=${user.id}`)));
+      }
+    } catch (error) {
+      if (epoch === state.authEpoch && state.token) status(error.message, true);
+    } finally {
+      state.notificationBusy = false;
+      if (epoch === state.authEpoch && state.token) state.notificationTimer = setTimeout(fetchNotifications, 5000);
     }
   }
 
@@ -350,13 +516,15 @@
   });
   $("message-body").addEventListener("input", () => state.drafts.set(conversationKey(), $("message-body").value));
   $("message-body").addEventListener("keydown", (event) => {
-    if (event.ctrlKey && event.key === "Enter") { event.preventDefault(); $("message-form").requestSubmit(); }
+    if (event.key === "Enter" && !event.shiftKey && !event.isComposing) { event.preventDefault(); $("message-form").requestSubmit(); }
   });
 
   function showPanel(id) {
-    for (const panel of ["chat-panel", "coworkers-panel", "notes-panel", "orders-panel", "inventory-panel", "receiving-panel", "backup-panel"]) {
+    for (const panel of ["home-panel", "chat-panel", "coworkers-panel", "notes-panel", "orders-panel", "inventory-panel", "receiving-panel", "automate-panel", "backup-panel"]) {
       $(panel).hidden = panel !== id;
     }
+    $("home-panel").hidden = id !== "home-panel";
+    $("app-main").scrollTop = 0;
     document.querySelectorAll(".workspace-tab").forEach(button => {
       const selected = button.dataset.panel === id;
       button.classList.toggle("selected", selected);
@@ -365,6 +533,57 @@
     if (id === "notes-panel" || id === "orders-panel") loadBusiness();
     if (id === "inventory-panel") loadInventory();
   }
+
+  async function queueAutoMateRead(operation, payload) {
+    if (state.automateBusy) return;
+    state.automateBusy = true;
+    const statusNode = $("automate-status");
+    const resultNode = $("automate-result");
+    const buttons = [...$("automate-panel").querySelectorAll("button[type=submit]")];
+    buttons.forEach(button => { button.disabled = true; });
+    resultNode.hidden = true;
+    resultNode.textContent = "";
+    try {
+      statusNode.textContent = "Sending a secure lookup request to the AutoMate bridge…";
+      const created = await request("/jobs", {method: "POST", body: {operation, payload}, endpoint: AUTOMATE_FUNCTION_URL, apiKey: AUTOMATE_ANON_KEY});
+      const jobId = created?.job?.id;
+      if (typeof jobId !== "string") throw new Error("The bridge did not accept this lookup.");
+      const deadline = Date.now() + 120000;
+      while (Date.now() < deadline) {
+        await new Promise(resolve => setTimeout(resolve, 1500));
+        const response = await request(`/jobs/${encodeURIComponent(jobId)}`, {endpoint: AUTOMATE_FUNCTION_URL, apiKey: AUTOMATE_ANON_KEY});
+        const job = response?.job;
+        if (!job) throw new Error("The lookup request could not be found.");
+        if (job.status === "completed") {
+          resultNode.textContent = JSON.stringify(job.result ?? [], null, 2);
+          resultNode.hidden = false;
+          statusNode.textContent = "AutoMate lookup completed.";
+          return;
+        }
+        if (job.status === "failed" || job.status === "expired") throw new Error(`AutoMate could not complete this lookup (${job.error_code || job.status}).`);
+        statusNode.textContent = job.status === "claimed" ? "The local bridge is reading AutoMate…" : "Lookup queued. Waiting for the local bridge…";
+      }
+      statusNode.textContent = "Lookup is still queued. Start or check the local bridge, then submit the lookup again.";
+    } catch (error) {
+      statusNode.textContent = error.message || "Could not connect to the AutoMate bridge.";
+    } finally {
+      state.automateBusy = false;
+      buttons.forEach(button => { button.disabled = false; });
+    }
+  }
+
+  $("automate-part-form").addEventListener("submit", event => {
+    event.preventDefault();
+    const part = $("automate-part-number").value.trim();
+    if (part) queueAutoMateRead("get_inventory_item", {part_number: part});
+  });
+  $("automate-order-form").addEventListener("submit", event => {
+    event.preventDefault();
+    const number = Number($("automate-order-number").value);
+    if (Number.isSafeInteger(number) && number > 0) queueAutoMateRead("get_order", {transaction_number: number});
+  });
+
+  const searchText = value => String(value || "").toLocaleLowerCase("en-US");
 
   function recordLabel(entry) {
     return [entry.order_ref, entry.customer].filter(Boolean).join(" · ");
@@ -413,7 +632,6 @@
 
   function renderBusiness() {
     const records = state.business.slice().sort((a, b) => (b.entry.updated || 0) - (a.entry.updated || 0));
-    const searchText = value => String(value || "").toLocaleLowerCase("en-US");
     const noteQuery = searchText($("notes-search").value.trim());
     const orderQuery = searchText($("orders-search").value.trim());
     const notes = records.filter(record => record.entry.kind === "note");
@@ -427,12 +645,91 @@
     const activeParts = openOrders.reduce((sum, {entry}) => sum + (entry.checklist || []).reduce((n, row) => n + (Number(row.quantity) || 0), 0), 0);
     $("order-summary").replaceChildren(summaryCard(String(openOrders.length), "Open customer orders"), summaryCard(formatMoney(openBalance), "Outstanding balance (JMD)"), summaryCard(String(activeParts), "Parts on open orders"));
 
-    if (!noteRecords.some(record => record.id === state.selectedNoteId)) state.selectedNoteId = noteRecords[0]?.id || "";
-    if (!orderRecords.some(record => record.id === state.selectedOrderId)) state.selectedOrderId = orderRecords[0]?.id || "";
-    renderRecordRail($("notes-list"), noteRecords, state.selectedNoteId, "note");
-    renderRecordRail($("orders-list"), orderRecords, state.selectedOrderId, "order");
-    renderRecordDetail($("note-detail"), notes.find(record => record.id === state.selectedNoteId), "note");
-    renderRecordDetail($("order-detail"), orders.find(record => record.id === state.selectedOrderId), "order");
+    renderNoteCards($("notes-list"), noteRecords);
+    renderOrderBoard($("orders-board"), orderRecords);
+    const homeOpen = orders.filter(({entry}) => entry.kind === "order" && !entry.done && !["delivered", "cancelled"].includes(entry.order_status) && entry.order_type !== "quote");
+    $("home-open-count").textContent = String(homeOpen.length);
+    $("home-ready-count").textContent = String(homeOpen.filter(({entry}) => entry.order_status === "ready").length);
+    $("home-balance").textContent = formatMoney(homeOpen.reduce((sum, {entry}) => sum + orderTotals(entry).balance, 0));
+  }
+
+  function renderNoteCards(host, records) {
+    host.replaceChildren();
+    if (!records.length) {
+      const empty = document.createElement("p"); empty.className = "empty";
+      empty.textContent = $("notes-search").value.trim() ? "No notes match that search." : "No team notes yet. Add one to get started.";
+      host.append(empty); return;
+    }
+    for (const record of records) {
+      const entry = record.entry;
+      const card = document.createElement("article"); card.className = "note";
+      if (entry.pinned) card.classList.add("pin");
+      const meta = document.createElement("small"); meta.textContent = entry.pinned ? "Pinned note" : "Shared with the team";
+      const title = document.createElement("h2"); title.textContent = entry.title || "Untitled note";
+      const content = document.createElement("div"); content.className = "note-content-scroll";
+      if (entry.body) { const body = document.createElement("p"); body.textContent = entry.body; content.append(body); }
+      if ((entry.checklist || []).length) {
+        const lines = document.createElement("div"); lines.className = "note-part-list";
+        for (const row of entry.checklist) {
+          const line = document.createElement("div"); line.className = "note-part-row";
+          const part = document.createElement("span"); part.textContent = [row.text, row.part_number].filter(Boolean).join(" · ") || "Part";
+          const quantity = document.createElement("b"); quantity.textContent = `Qty ${row.quantity || 1}`;
+          line.append(part, quantity); lines.append(line);
+        }
+        content.append(lines);
+      }
+      if (!entry.body && !(entry.checklist || []).length) { const emptyText = document.createElement("p"); emptyText.className = "muted"; emptyText.textContent = "No details yet."; content.append(emptyText); }
+      const actions = document.createElement("div"); actions.className = "note-actions";
+      const jump = document.createElement("button"); jump.type = "button"; jump.className = "note-link"; jump.textContent = "↓ Jump to bottom"; jump.addEventListener("click", () => content.scrollTo({top: content.scrollHeight, behavior: "smooth"}));
+      const edit = document.createElement("button"); edit.type = "button"; edit.className = "note-link"; edit.textContent = "Edit"; edit.addEventListener("click", () => openOrder(record));
+      const remove = document.createElement("button"); remove.type = "button"; remove.className = "note-link danger-link"; remove.textContent = "Delete"; remove.addEventListener("click", () => deleteOrder(record));
+      actions.append(jump, edit, remove);
+      card.append(meta, title, content, actions); host.append(card);
+    }
+  }
+
+  function renderOrderBoard(host, records) {
+    host.replaceChildren();
+    const statuses = [["new", "New"], ["preparing", "Preparing"], ["ready", "Ready"], ["delivered", "Delivered"], ["cancelled", "Cancelled"]];
+    const selectedStage = $("orders-stage-filter")?.value || "all";
+    host.classList.toggle("filtered-status", selectedStage !== "all");
+    for (const [status, labelText] of statuses) {
+      if (selectedStage !== "all" && selectedStage !== status) continue;
+      const matching = records.filter(({entry}) => (entry.order_status || "new").toLowerCase() === status &&
+        (!$("orders-search").value.trim() || searchText([entry.title, entry.customer, entry.order_ref, entry.body, ...(entry.checklist || []).flatMap(row => [row.text, row.part_number])].join(" ")).includes(searchText($("orders-search").value.trim()))));
+      const column = document.createElement("section"); column.className = "col"; column.dataset.status = status;
+      const heading = document.createElement("h2"); heading.textContent = labelText;
+      const count = document.createElement("b"); count.className = "column-count"; count.textContent = String(matching.length); heading.append(count); column.append(heading);
+      if (!matching.length) { const empty = document.createElement("p"); empty.className = "empty"; empty.textContent = "Nothing here yet."; column.append(empty); }
+      for (const record of matching) {
+        const entry = record.entry; const card = document.createElement("article"); card.className = "order-card";
+        const type = document.createElement("span"); type.className = "order-type"; type.textContent = entry.kind === "list" ? "Parts checklist" : "Customer order";
+        const title = document.createElement("h3"); title.textContent = entry.title || "Untitled order";
+        const customer = document.createElement("p"); customer.className = "order-card-meta"; customer.textContent = [entry.customer, entry.order_ref].filter(Boolean).join(" · ") || "No customer reference";
+        const parts = document.createElement("p"); parts.className = "order-card-meta"; parts.textContent = `${(entry.checklist || []).length} parts · Paid ${formatMoney(Number(entry.payment_received_cents) || 0)}`;
+        const totals = orderTotals(entry); const foot = document.createElement("div"); foot.className = "order-card-foot";
+        const due = document.createElement("strong"); due.textContent = totals.credit ? `Credit ${formatMoney(totals.credit)}` : `Due ${formatMoney(totals.balance)}`;
+        const statusSelect = document.createElement("select"); statusSelect.setAttribute("aria-label", `Status for ${entry.title || "order"}`);
+        for (const [value, label] of statuses) { const option = document.createElement("option"); option.value = value; option.textContent = label; option.selected = value === status; statusSelect.append(option); }
+        statusSelect.addEventListener("change", () => updateOrderStatus(record, statusSelect.value));
+        foot.append(due, statusSelect);
+        const actions = document.createElement("div"); actions.className = "order-card-actions";
+        const edit = document.createElement("button"); edit.type = "button"; edit.className = "note-link"; edit.textContent = "Edit"; edit.addEventListener("click", () => openOrder(record));
+        const remove = document.createElement("button"); remove.type = "button"; remove.className = "note-link danger-link"; remove.textContent = "Delete"; remove.addEventListener("click", () => deleteOrder(record));
+        actions.append(edit, remove); card.append(type, title, customer, parts, foot, actions); column.append(card);
+      }
+      host.append(column);
+    }
+    if (!records.length && $("orders-search").value.trim()) { const empty = document.createElement("p"); empty.className = "empty"; empty.textContent = "No orders match that search."; host.append(empty); }
+  }
+
+  async function updateOrderStatus(record, orderStatus) {
+    const entry = {...record.entry, order_status: orderStatus, done: ["delivered", "cancelled"].includes(orderStatus), updated: Date.now() / 1000, written: Date.now() / 1000};
+    try {
+      $("orders-status").textContent = "Updating order…";
+      await request(`/api/business/${record.id}`, {method: "PUT", body: {expected_revision: record.revision, entry}});
+      await loadBusiness();
+    } catch (error) { $("orders-status").textContent = error.message; await loadBusiness(); }
   }
 
   function renderRecordRail(host, records, selectedId, kind) {
@@ -486,9 +783,10 @@
     const meta = document.createElement("p"); meta.className = "detail-meta"; meta.textContent = recordLabel(entry) || "Shared workspace";
     headingText.append(eyebrow, title, meta);
     const actions = document.createElement("div"); actions.className = "detail-actions";
+    const jumpBottom = document.createElement("button"); jumpBottom.type = "button"; jumpBottom.className = "secondary jump-bottom-button"; jumpBottom.textContent = "↓ Bottom"; jumpBottom.title = "Jump to the bottom of this note or list"; jumpBottom.setAttribute("aria-label", "Jump to the bottom of this note or list"); jumpBottom.addEventListener("click", () => host.scrollTo({top: host.scrollHeight, behavior: "smooth"}));
     const edit = document.createElement("button"); edit.type = "button"; edit.className = "secondary"; edit.textContent = "Edit"; edit.addEventListener("click", () => openOrder(record));
     const remove = document.createElement("button"); remove.type = "button"; remove.className = "secondary danger-button"; remove.textContent = "Delete"; remove.addEventListener("click", () => deleteOrder(record));
-    actions.append(edit, remove); heading.append(headingText, actions); host.append(heading);
+    actions.append(jumpBottom, edit, remove); heading.append(headingText, actions); host.append(heading);
 
     if (entry.kind === "order") {
       const totals = orderTotals(entry); const financials = document.createElement("div"); financials.className = "detail-financials";
@@ -556,6 +854,7 @@
     $("order-form").reset();
     $("line-error").textContent = "";
     $("entry-kind").value = kind;
+    $("editor-dialog").classList.toggle("note-editor", kind === "note");
     $("order-form-title").textContent = (record ? "Edit " : "New ") + (kind === "note" ? "note" : kind === "list" ? "parts checklist" : "customer order");
     $("order-id").value = record?.id || "";
     $("order-revision").value = record?.revision || "0";
@@ -568,16 +867,48 @@
     state.draftLines = (entry.checklist || []).map(row => ({...row}));
     updateEntryFields();
     renderDraftLines();
-    const dialog = $("editor-dialog");
-    if (typeof dialog.showModal === "function") dialog.showModal(); else dialog.setAttribute("open", "");
+    if (kind === "note") void populateNotePartOptions();
+    const editor = $("editor-dialog");
+    if (!editor.open) editor.showModal();
     setTimeout(() => $("line-part").focus(), 0);
+  }
+
+  function closeOrderEditor() {
+    const editor = $("editor-dialog");
+    if (editor.open) editor.close();
+    renderBusiness();
   }
 
   function updateEntryFields() {
     const kind = $("entry-kind").value;
     document.querySelectorAll(".business-order-field").forEach(field => { field.hidden = kind !== "order"; });
+    document.querySelectorAll(".note-catalog-field").forEach(field => { field.hidden = kind !== "note"; });
+    $("editor-dialog").classList.toggle("note-editor", kind === "note");
     $("add-line").textContent = kind === "order" ? "Add item" : "Add part";
     updateDraftTotals();
+  }
+
+  async function populateNotePartOptions() {
+    const select = $("note-part-select");
+    select.replaceChildren(new Option("Loading parts…", ""));
+    select.disabled = true;
+    try {
+      if (!state.noteParts) {
+        const catalog = await request("/api/catalog?limit=500&offset=0");
+        if (!Array.isArray(catalog.items)) throw new Error("Cannot read the parts catalogue.");
+        state.noteParts = catalog.items.map(item => ({...item, sku: item.part_number || item.sku || ""}));
+      }
+      select.replaceChildren(new Option("Select a catalog part…", ""));
+      for (const item of state.noteParts) {
+        const partNumber = String(item.sku || item.part_number || "").trim();
+        if (!partNumber) continue;
+        select.add(new Option([partNumber, item.description].filter(Boolean).join(" — "), partNumber));
+      }
+      if (!select.options.length || select.options.length === 1) select.add(new Option("No catalog parts found", ""));
+    } catch (error) {
+      select.replaceChildren(new Option("Parts catalogue unavailable", ""));
+      $("line-error").textContent = error.message;
+    } finally { select.disabled = false; }
   }
 
   function moneyInputToCents(value) {
@@ -605,9 +936,28 @@
     const host = $("draft-lines"); host.replaceChildren();
     for (const [index, row] of state.draftLines.entries()) {
       const line = document.createElement("div"); line.className = "draft-line";
-      const label = document.createElement("span"); label.textContent = (row.quantity || 1) + " x " + row.text + (row.part_number ? " | " + row.part_number : "");
-      line.append(label);
-      if (Number(row.unit_price_cents) > 0) { const price = document.createElement("span"); price.className = "draft-line-price"; price.textContent = formatMoney((Number(row.quantity) || 1) * row.unit_price_cents); line.append(price); }
+      const fields = document.createElement("div"); fields.className = "draft-line-fields";
+      const makeLineInput = (labelText, field, value, type = "text") => {
+        const input = document.createElement("input"); input.type = type; input.value = value ?? ""; input.setAttribute("aria-label", labelText);
+        if (type === "number") { input.min = "1"; input.max = "9999"; input.step = "1"; }
+        input.addEventListener("change", () => {
+          if (field === "quantity") {
+            const quantity = Number(input.value);
+            if (!Number.isInteger(quantity) || quantity < 1 || quantity > 9999) { input.value = String(row.quantity || 1); input.focus(); return; }
+            state.draftLines[index].quantity = quantity;
+          } else state.draftLines[index][field] = input.value.trim();
+          updateDraftTotals();
+        });
+        return input;
+      };
+      fields.append(makeLineInput("Part description", "text", row.text), makeLineInput("Part number", "part_number", row.part_number), makeLineInput("Quantity", "quantity", row.quantity || 1, "number"));
+      if ($("entry-kind").value === "order") {
+        const price = document.createElement("input"); price.type = "number"; price.min = "0"; price.max = "10000000"; price.step = "0.01"; price.inputMode = "decimal";
+        price.value = ((Number(row.unit_price_cents) || 0) / 100).toFixed(2); price.setAttribute("aria-label", "Unit price in JMD");
+        price.addEventListener("change", () => { const cents = moneyInputToCents(price.value); if (cents === null || cents > 1000000000) { price.value = ((Number(row.unit_price_cents) || 0) / 100).toFixed(2); price.focus(); return; } state.draftLines[index].unit_price_cents = cents; updateDraftTotals(); });
+        fields.append(price);
+      }
+      line.append(fields);
       const remove = document.createElement("button"); remove.type = "button"; remove.className = "text-button"; remove.textContent = "Remove";
       remove.addEventListener("click", () => { state.draftLines.splice(index, 1); renderDraftLines(); updateDraftTotals(); });
       line.append(remove); host.append(line);
@@ -618,16 +968,26 @@
   $("entry-kind").addEventListener("change", () => {
     updateEntryFields();
     const kind = $("entry-kind").value;
+    if (kind === "note") void populateNotePartOptions();
     $("order-form-title").textContent = ($("order-id").value ? "Edit " : "New ") + (kind === "note" ? "note" : kind === "list" ? "parts checklist" : "customer order");
   });
   $("order-paid").addEventListener("input", updateDraftTotals);
 
   $("new-order").addEventListener("click", () => openOrder());
   $("new-note").addEventListener("click", () => openOrder({entry: {kind: "note"}}));
-  $("cancel-order").addEventListener("click", () => $("editor-dialog").close?.());
-  $("close-editor").addEventListener("click", () => $("editor-dialog").close?.());
+  $("cancel-order").addEventListener("click", closeOrderEditor);
+  $("close-editor").addEventListener("click", closeOrderEditor);
+  $("editor-dialog").addEventListener("close", renderBusiness);
   $("notes-search").addEventListener("input", renderBusiness);
   $("orders-search").addEventListener("input", renderBusiness);
+  $("orders-stage-filter").addEventListener("change", renderBusiness);
+  $("note-part-select").addEventListener("change", () => {
+    const partNumber = $("note-part-select").value;
+    if (!partNumber) return;
+    const item = (state.noteParts || []).find(row => String(row.sku || row.part_number || "").trim() === partNumber);
+    $("line-part").value = partNumber;
+    if (item?.description) $("line-description").value = item.description;
+  });
   $("add-line").addEventListener("click", () => {
     const kind = $("entry-kind").value;
     const part = $("line-part").value.trim();
@@ -643,7 +1003,7 @@
     if (unitPrice === null || unitPrice > 1000000000) { $("line-error").textContent = "Enter a valid unit price up to JMD 10,000,000.00."; $("line-price").focus(); return; }
     state.draftLines.push({id: newHexId(), text: description, part_number: part,
       quantity, done: false, unit_price_cents: unitPrice});
-    $("line-part").value = ""; $("line-description").value = ""; $("line-quantity").value = "1"; $("line-price").value = "0.00";
+    $("line-part").value = ""; $("line-description").value = ""; $("line-quantity").value = "1"; $("line-price").value = "0.00"; $("note-part-select").value = "";
     renderDraftLines(); $("line-part").focus();
   });
 
@@ -653,6 +1013,9 @@
     const previous = state.business.find(row => row.id === id)?.entry;
     const now = Date.now() / 1000;
     const kind = $("entry-kind").value;
+    if (state.draftLines.some(row => !String(row.text || "").trim() || !Number.isInteger(Number(row.quantity)) || Number(row.quantity) < 1 || Number(row.quantity) > 9999)) {
+      $("line-error").textContent = "Each item needs a description and a quantity from 1 to 9,999."; return;
+    }
     const statusValue = $("order-status").value;
     const paid = kind === "order" ? moneyInputToCents($("order-paid").value) : 0;
     if (paid === null || paid > 100000000000000) { $("order-totals").textContent = "Enter a valid payment amount."; $("order-paid").focus(); return; }
@@ -668,7 +1031,7 @@
       $(statusHost).textContent = "Saving to Supabase...";
       await request("/api/business/" + id, {method: "PUT", body: {expected_revision: Number($("order-revision").value), entry}});
       if (kind === "note") state.selectedNoteId = id; else state.selectedOrderId = id;
-      $("editor-dialog").close?.();
+      closeOrderEditor();
       await loadBusiness();
     } catch (error) { $(kind === "note" ? "notes-status" : "orders-status").textContent = error.message + " Refresh before trying again."; }
   });
@@ -678,7 +1041,7 @@
     try {
       await request(`/api/business/${record.id}`, {method: "DELETE", body: {expected_revision: record.revision}});
       await loadBusiness();
-    } catch (error) { $("orders-status").textContent = error.message; }
+    } catch (error) { $(record.entry.kind === "note" ? "notes-status" : "orders-status").textContent = error.message; }
   }
 
   async function loadInventory() {
@@ -749,15 +1112,15 @@
     const file = $("receiving-file").files[0];
     const manual = $("manual-parts").value.trim();
     if (!file && !manual) { $("receiving-status").textContent = "Choose a file or enter part numbers."; return; }
-    $("preview-receiving").disabled = true; $("receiving-status").textContent = "Reading upload and matching exact order part numbers…";
+    $("preview-receiving").disabled = true; $("receiving-status").textContent = "Reading upload and matching exact part numbers in notes, checklists, and open orders…";
     try {
       const result = file ? await uploadForPreview(file.name, file) : await uploadForPreview("received.txt", new Blob([manual]));
       state.receivingMatches = result.matches || [];
       state.receivingPreviewId = result.preview_id || "";
       renderReceivingMatches();
       $("receiving-preview").hidden = false;
-      $("receiving-status").textContent = `${result.matched_row_count} matching order rows found in ${result.filename}.`;
-      if (!result.matched_row_count) $("receiving-status").textContent = "No exact part number matches were found in open orders.";
+      $("receiving-status").textContent = `${result.matched_row_count} matching rows found in notes, checklists, and open orders in ${result.filename}. Review them below before removing.`;
+      if (!result.matched_row_count) $("receiving-status").textContent = "No exact part number matches were found in notes, checklists, or open orders.";
     } catch (error) { $("receiving-status").textContent = error.message; }
     finally { $("preview-receiving").disabled = false; }
   });
@@ -766,7 +1129,9 @@
     const host = $("receiving-matches"); host.replaceChildren();
     for (const match of state.receivingMatches) {
       const group = document.createElement("article"); group.className = "record-card";
-      const title = document.createElement("h3"); title.textContent = [match.title, match.order_ref, match.customer].filter(Boolean).join(" · "); group.append(title);
+      const kind = document.createElement("span"); kind.className = "receive-kind";
+      kind.textContent = match.kind === "note" ? "Shared note" : match.kind === "list" ? "Parts checklist" : "Customer order";
+      const title = document.createElement("h3"); title.textContent = [match.title, match.order_ref, match.customer].filter(Boolean).join(" · "); group.append(kind, title);
       for (const row of match.rows) {
         const label = document.createElement("label"); label.className = "receive-row";
         const checkbox = document.createElement("input"); checkbox.type = "checkbox"; checkbox.checked = true;
@@ -791,7 +1156,9 @@
       const result = await request("/api/receiving/confirm", {method: "POST", body: {
         preview_id: state.receivingPreviewId,
         source: $("receiving-file").files[0]?.name || "Manual received-parts list", removals}});
-      $("receiving-status").textContent = `Removed ${result.removed_rows} received part rows from ${result.changed_entries} orders.`;
+      const kinds = (result.entries || []).reduce((counts, entry) => { counts[entry.kind || "order"] = (counts[entry.kind || "order"] || 0) + 1; return counts; }, {});
+      const places = [["note", "notes"], ["list", "checklists"], ["order", "orders"]].filter(([kind]) => kinds[kind]).map(([kind, label]) => `${kinds[kind]} ${label}`);
+      $("receiving-status").textContent = `Removed ${result.removed_rows} received part rows from ${places.join(", ") || `${result.changed_entries} entries`}.`;
       $("receiving-preview").hidden = true; $("receiving-file").value = ""; $("manual-parts").value = "";
       await loadBusiness();
     } catch (error) { $("receiving-status").textContent = error.message; }
@@ -810,7 +1177,7 @@
     } catch (error) { $("backup-location").textContent = error.message; }
   }
   $("download-backup").addEventListener("click", downloadBackup);
-  document.querySelectorAll(".workspace-tab").forEach(button => button.addEventListener("click", () => showPanel(button.dataset.panel)));
+  document.querySelectorAll(".workspace-tab, .shortcut-card").forEach(button => button.addEventListener("click", () => showPanel(button.dataset.panel)));
 
   $("team-room").addEventListener("click", () => selectConversation(null));
   $("people-search").addEventListener("input", renderUsers);
@@ -836,7 +1203,27 @@
     } catch (error) { $("coworker-status").textContent = error.message; }
   });
   document.addEventListener("visibilitychange", () => {
-    if (!document.hidden && state.token) { fetchUsers(); fetchMessages(state.cursor === 0); }
+    if (!document.hidden && state.token) { fetchUsers(); fetchMessages(state.cursor === 0); fetchNotifications(); }
     else clearTimeout(state.pollTimer);
   });
+  const bootStages = [
+    [350, "Calibrating Jeffery's workspace", "SYSTEM STARTUP · 01"],
+    [1150, "Mapping chat, notes and order tools", "WORKSPACE MAP · 02"],
+    [2000, "Preparing parts and receiving desk", "PARTS NETWORK · 03"],
+    [2800, "Bringing your workday into focus", "READY SEQUENCE · 04"],
+  ];
+  for (const [at, message, step] of bootStages) {
+    window.setTimeout(() => {
+      const statusLine = $("loading-status");
+      const stepLine = $("loading-step");
+      if (statusLine) statusLine.textContent = message;
+      if (stepLine) stepLine.textContent = step;
+    }, Math.max(0, at - (performance.now() - pageStartedAt)));
+  }
+  window.setTimeout(() => {
+    const loader = $("loading-screen");
+    if (!loader) return;
+    loader.classList.add("is-hidden");
+    window.setTimeout(() => loader.remove(), 650);
+  }, Math.max(0, 3600 - (performance.now() - pageStartedAt)));
 })();

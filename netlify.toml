@@ -1,0 +1,36 @@
+[build]
+publish = "work_server/static"
+
+[[redirects]]
+  from = "/static/*"
+  to = "/:splat"
+  status = 200
+
+[[headers]]
+for = "/*"
+  [headers.values]
+  X-Content-Type-Options = "nosniff"
+  X-Frame-Options = "DENY"
+  Referrer-Policy = "no-referrer"
+  Permissions-Policy = "camera=(), microphone=(), geolocation=()"
+  Content-Security-Policy = "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self' https://tsidowtkxvozeczwhadz.supabase.co https://mholmzbdgteqewxsqszm.supabase.co; img-src 'self' data:; worker-src 'self' blob:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
+
+[[headers]]
+for = "/"
+  [headers.values]
+  Cache-Control = "no-cache"
+
+[[headers]]
+for = "/static/*"
+  [headers.values]
+  Cache-Control = "no-cache"
+
+[[headers]]
+for = "/*.js"
+  [headers.values]
+  Cache-Control = "no-cache"
+
+[[headers]]
+for = "/*.css"
+  [headers.values]
+  Cache-Control = "no-cache"

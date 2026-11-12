@@ -3,50 +3,130 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <meta name="color-scheme" content="light">
-  <title>Coworkers · Jeffery</title>
+  <meta name="color-scheme" content="light dark">
+  <title>Coworkers Â· Jeffery</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=Figtree:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/static/style.css">
+  <script src="/static/supabase-config.js" defer></script>
   <script src="/static/app.js" defer></script>
 </head>
 <body>
+  <div id="loading-screen" class="loading-screen" role="status" aria-live="polite" aria-label="Starting Jeffery">
+    <div class="boot-console">
+      <div class="boot-orbit" aria-hidden="true"><span class="orbit orbit-one"></span><span class="orbit orbit-two"></span><span class="orbit orbit-three"></span><span class="orbit-core">J</span><i class="orbit-signal"></i></div>
+      <div class="boot-copy"><p class="loading-kicker">FAMOUS TWINS <span>Â·</span> JEFFERY SYSTEM</p><h1>Bringing Jeffery online.</h1><p id="loading-status" class="loading-caption">Starting your workspace</p>
+        <div class="loading-track" aria-hidden="true"><span></span></div>
+        <div class="boot-readout"><span id="loading-step">SYSTEM STARTUP Â· 01</span><span><i></i> SECURE SESSION</span></div>
+      </div>
+      <div class="boot-footer"><span>SMART WORKSPACE</span><span>TEAM Â· NOTES Â· ORDERS Â· PARTS</span><span>JAMAICA</span></div>
+    </div>
+  </div>
   <main id="auth-view" class="auth-shell">
     <aside class="welcome">
       <div class="brand"><span class="buddy-mark" aria-hidden="true">J</span><span>JEFFERY <small>COWORKERS</small></span></div>
       <div class="welcome-copy"><span class="eyebrow">A MORE CONNECTED WORKDAY</span><h1>A little hello.<br>A stronger team.</h1><p>Keep the parts counter moving. Catch up with everyone or send a coworker a quick message.</p><div class="welcome-points"><span>A team room for the whole workplace</span><span>Direct messages between coworkers</span><span>A separate login for every person</span></div></div>
-      <div class="network-note"><span class="status-dot"></span><span>Hosted on your work server<br><small id="server-name"></small></span></div>
+      <div class="network-note"><span class="status-dot"></span><span>Hosted online with Supabase<br><small id="server-name"></small></span></div>
     </aside>
     <section class="auth-panel" aria-labelledby="auth-title">
       <div class="auth-card">
+        <div class="auth-brand"><span class="buddy-mark" aria-hidden="true">J</span><span>JEFFERY <small>COWORKERS</small></span></div>
         <span class="eyebrow">WELCOME TO YOUR TEAM</span><h2 id="auth-title">Good to see you.</h2><p class="muted" id="auth-subtitle">Sign in to join your coworkers.</p>
-        <div class="auth-tabs" aria-label="Account action"><button id="signin-tab" type="button" class="selected" aria-pressed="true">Sign in</button><button id="signup-tab" type="button" aria-pressed="false">Create account</button></div>
+        <div class="auth-tabs" aria-label="Account action"><button id="signin-tab" type="button" class="selected" aria-pressed="true">Sign in</button><button id="signup-tab" type="button" aria-pressed="false">Sign up</button></div>
         <form id="auth-form">
           <label for="username">Username</label><input id="username" name="username" autocomplete="username" minlength="3" maxlength="32" pattern="[A-Za-z0-9_.\-]{3,32}" required spellcheck="false" placeholder="Your username">
           <label for="password">Password</label><input id="password" name="password" type="password" autocomplete="current-password" maxlength="128" required>
           <div id="confirm-field" hidden><label for="confirm-password">Confirm password</label><input id="confirm-password" type="password" autocomplete="new-password" maxlength="128"></div>
-          <p id="signup-hint" class="field-hint" hidden>Use 3–32 letters, numbers, dots, dashes, or underscores for your username, and at least 12 characters for your password.</p>
+          <p id="signup-hint" class="field-hint" hidden>Use 3â€“32 letters, numbers, dots, dashes, or underscores for your username, and at least 12 characters for your password.</p>
           <p id="auth-error" class="error" role="alert"></p><button id="auth-submit" class="primary" type="submit">Sign in</button>
         </form>
-        <p class="field-hint">Your account belongs to this work server. Chat messages stay on the server; they are separate from Jeffery’s AI conversations.</p>
+        <p class="field-hint">Sign up with a username and password, or use your existing Jeffery account. New accounts join as team members.</p>
       </div>
     </section>
   </main>
-  <main id="chat-view" class="chat-shell" hidden>
-    <aside class="sidebar">
-      <div class="brand"><span class="buddy-mark" aria-hidden="true">J</span><span>JEFFERY <small>COWORKERS</small></span></div>
-      <div class="sidebar-section"><span class="eyebrow">YOUR WORKSPACE</span><button id="team-room" class="conversation selected" type="button"><span class="room-icon" aria-hidden="true">#</span><span>Team Room<small>Everyone in your workplace</small></span></button></div>
-      <div class="people-heading"><span class="eyebrow">DIRECT MESSAGES</span><button id="refresh-users" class="icon-button" type="button" aria-label="Refresh coworkers">↻</button></div>
-      <label class="sr-only" for="people-search">Find a coworker</label><input id="people-search" class="people-search" type="search" placeholder="Find a coworker…" autocomplete="off">
-      <div id="people-list" class="people-list" aria-label="Coworkers"></div>
-      <p id="people-empty" class="field-hint">Coworkers will appear here after they create an account.</p>
-      <div class="account"><div class="avatar" id="account-avatar" aria-hidden="true"></div><div><strong id="account-name"></strong><small>Signed in</small></div><button id="signout" type="button" class="text-button">Sign out</button></div>
+  <div id="chat-view" class="app-view" hidden>
+   <div class="app-layout">
+    <aside class="app-sidebar">
+     <div class="brand"><i class="brand-mark">J</i><span>Jeffery<small>Coworkers</small></span></div>
+     <nav class="app-navigation" aria-label="Workspace sections">
+      <span class="nav-label">WORKSPACE</span>
+      <button class="workspace-tab tab selected" data-panel="home-panel" type="button" aria-pressed="true">âŒ‚ <span>Home</span></button>
+      <button class="workspace-tab tab" data-panel="orders-panel" type="button" aria-pressed="false">â–¤ <span>Orders</span></button>
+      <button class="workspace-tab tab" data-panel="notes-panel" type="button" aria-pressed="false">â–§ <span>Notes</span></button>
+      <button class="workspace-tab tab" data-panel="chat-panel" type="button" aria-pressed="false">â—Œ <span>Team room</span></button>
+      <button class="workspace-tab tab" data-panel="automate-panel" type="button" aria-pressed="false">AutoMate</button>
+      <details class="nav-tools"><summary>More tools</summary>
+       <button class="workspace-tab tab" data-panel="inventory-panel" type="button">â–¦ <span>Parts</span></button>
+       <button class="workspace-tab tab" data-panel="receiving-panel" type="button">â†“ <span>Received / invoices</span></button>
+       <button id="manage-coworkers" class="workspace-tab tab" data-panel="coworkers-panel" type="button" hidden>â™§ <span>Coworkers</span></button>
+       <button class="workspace-tab tab" data-panel="backup-panel" type="button">â–£ <span>Backups</span></button>
+      </details>
+     </nav>
+     <div class="who"><span>Signed in as</span><b id="account-name">Coworker</b><button id="signout" class="signout-button" type="button">Sign out</button></div>
     </aside>
-    <section class="conversation-panel" aria-labelledby="conversation-title">
-      <header class="conversation-header"><div><span class="eyebrow">WORKSPACE CHAT</span><h1 id="conversation-title">Team Room</h1><p id="conversation-subtitle">A shared space for your team.</p></div><button id="refresh-messages" class="secondary" type="button">Refresh</button></header>
-      <div id="connection-status" class="connection-status" role="status">Connecting…</div>
-      <div id="messages-scroll" class="messages-scroll"><div id="empty-conversation" class="empty-conversation"><span class="empty-mark" aria-hidden="true">✦</span><h2>Start the conversation.</h2><p>A quick hello is a good place to begin.</p></div><ol id="messages" class="messages" aria-label="Messages" aria-live="polite" aria-relevant="additions"></ol></div>
-      <form id="message-form" class="composer"><label class="sr-only" for="message-body">Message</label><textarea id="message-body" rows="3" maxlength="4000" placeholder="Message the team…" required></textarea><div class="composer-footer"><span id="message-hint">Ctrl+Enter to send · Latest 50 messages on opening</span><button id="send-message" class="primary" type="submit">Send message <span aria-hidden="true">↗</span></button></div></form>
+    <main id="app-main" class="app-main">
+     <header class="main-topbar"><span class="topbar-caption">FAMOUS TWINS <span>Â·</span> JEFFERY WORKSPACE</span><div class="topbar-actions"><span id="web-account-name" class="web-account"></span><button id="theme" class="btn theme-button" type="button" aria-label="Switch between light and dark theme"><span class="theme-moon">â—</span><span class="theme-sun">â˜¼</span></button></div></header>
+     <section id="home-panel" class="workspace-panel home-panel">
+      <div class="hero"><div class="hero-copy"><span class="eyebrow">YOUR TEAM WORKSPACE</span><h1>Keep the parts counter moving.</h1><p>One place for customer orders, shared notes, and quick messages between coworkers.</p><div id="home-stats" class="stats"><div class="stat"><b id="home-open-count">0</b><span>Orders in progress</span></div><div class="stat"><b id="home-ready-count">0</b><span>Ready for pickup</span></div><div class="stat"><b id="home-balance">JMD 0.00</b><span>Balance to collect</span></div></div></div>
+       <svg class="rotor" viewBox="0 0 200 200" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle class="rotor-ring" pathLength="1" cx="100" cy="100" r="92"/><circle class="rotor-core-ring" pathLength="1" cx="100" cy="100" r="30" stroke-width="3"/><circle class="rotor-ring inner" pathLength="1" cx="100" cy="100" r="62" opacity=".5"/><g class="rotor-spin" id="rotor-holes"></g><circle cx="100" cy="100" r="8" fill="currentColor" stroke="none"/></svg>
+      </div>
+      <div class="home-shortcuts"><button class="shortcut-card" type="button" data-panel="orders-panel"><span class="shortcut-icon">â–¤</span><strong>View orders</strong><span>Track work and balances</span></button><button class="shortcut-card" type="button" data-panel="notes-panel"><span class="shortcut-icon">â–§</span><strong>Open team notes</strong><span>Find parts and shared details</span></button><button class="shortcut-card" type="button" data-panel="chat-panel"><span class="shortcut-icon">â—Œ</span><strong>Message your team</strong><span>Catch up with coworkers</span></button></div>
+     </section>
+     <section id="orders-panel" class="workspace-panel" hidden>
+      <div class="bar"><div><span class="eyebrow">CUSTOMER WORK</span><h1>Shared orders</h1><p>Follow each order from the counter through pickup.</p></div><button id="new-order" class="btn pri" type="button">+ New order</button></div>
+      <div id="order-summary" class="summary-cards"></div><div class="panel-toolbar orders-toolbar"><label class="search-label">Find an order<input id="orders-search" type="search" placeholder="Search customer, reference, or part number"></label><label class="order-stage-filter">Show stage<select id="orders-stage-filter"><option value="all">All stages</option><option value="new">New</option><option value="preparing">Preparing</option><option value="ready">Ready</option><option value="delivered">Delivered</option><option value="cancelled">Cancelled</option></select></label><span id="orders-status" class="panel-status" role="status"></span></div>
+      <div id="orders-board" class="board" aria-label="Orders by status"></div>
+     </section>
+     <section id="notes-panel" class="workspace-panel" hidden>
+      <div class="bar"><div><span class="eyebrow">SHARED NOTES</span><h1>Team notes</h1><p>Shared part numbers, reminders, and detailsâ€”kept separate from orders.</p></div><button id="new-note" class="btn pri" type="button">+ New note</button></div>
+      <div class="panel-toolbar"><label class="search-label">Find a note<input id="notes-search" type="search" placeholder="Search titles, part numbers, or details"></label><span id="notes-status" class="panel-status" role="status"></span></div>
+      <div id="notes-list" class="notes-grid" aria-label="Notes"></div>
+     </section>
+     <section id="chat-panel" class="workspace-panel chat-page" hidden>
+      <div class="bar"><div><span class="eyebrow">COWORKER MESSAGES</span><h1>Team room</h1><p>Send a quick message to your coworkers.</p></div></div>
+      <div class="chat-shell">
+       <aside class="sidebar"><div class="sidebar-section"><span class="eyebrow">YOUR WORKSPACE</span><button id="team-room" class="conversation selected" type="button"><span class="room-icon">#</span><span>Team Room<small>Everyone in your workplace</small></span></button></div><div class="people-heading"><span class="eyebrow">DIRECT MESSAGES</span><button id="refresh-users" class="icon-button" type="button" aria-label="Refresh coworkers">â†»</button></div><label class="sr-only" for="people-search">Find a coworker</label><input id="people-search" class="people-search" type="search" placeholder="Find a coworkerâ€¦" autocomplete="off"><div id="people-list" class="people-list" aria-label="Coworkers"></div><p id="people-empty" class="field-hint">Coworkers will appear here after they create an account.</p><div class="account"><div class="avatar" id="account-avatar" aria-hidden="true"></div><div><strong id="chat-account-name"></strong><small>Signed in</small></div></div></aside>
+       <section class="conversation-panel" aria-labelledby="conversation-title"><header class="conversation-header"><div><span class="eyebrow">WORKSPACE CHAT</span><h2 id="conversation-title">Team Room</h2><p id="conversation-subtitle">A shared space for your team.</p></div><div class="conversation-actions"><button id="enable-notifications" class="btn" type="button">Enable notifications</button><button id="refresh-messages" class="btn" type="button">Refresh</button></div></header><div id="connection-status" class="connection-status" role="status">Connectingâ€¦</div><div id="messages-scroll" class="messages-scroll"><div id="empty-conversation" class="empty-conversation"><span class="empty-mark">âœ¦</span><h2>Start the conversation.</h2><p>A quick hello is a good place to begin.</p></div><ol id="messages" class="messages" aria-label="Messages" aria-live="polite" aria-relevant="additions"></ol></div><form id="message-form" class="composer"><label class="sr-only" for="message-body">Message</label><textarea id="message-body" rows="3" maxlength="4000" placeholder="Message the teamâ€¦" required></textarea><div class="composer-footer"><span id="message-hint">Enter to send Â· Shift+Enter for a new line</span><button id="send-message" class="btn pri" type="submit">Send message <span aria-hidden="true">â†—</span></button></div></form></section>
+      </div>
+     </section>
+     <section id="inventory-panel" class="workspace-panel" hidden><div class="bar"><div><span class="eyebrow">SERVER INVENTORY</span><h1>Parts</h1><p>Search current quantities and part numbers.</p></div><button id="refresh-inventory" class="btn" type="button">Refresh</button></div><div id="inventory-summary" class="summary-cards"></div><label class="search-label">Search parts<input id="inventory-search" type="search" placeholder="Part number, description, supplierâ€¦"></label><div id="inventory-status" class="panel-status" role="status"></div><div class="table-wrap"><table><thead><tr><th>Part number</th><th>Description</th><th>Quantity</th><th>Location</th><th>Supplier</th></tr></thead><tbody id="inventory-rows"></tbody></table></div></section>
+     <section id="receiving-panel" class="workspace-panel" hidden><div class="bar"><div><span class="eyebrow">RECEIVING</span><h1>Clear received parts</h1><p>Upload a received-parts list or invoice. Jeffery finds exact part numbers in shared notes, parts checklists, and open orders, then previews each row before removal.</p></div></div><div class="form-card"><div class="form-grid"><label>Upload type<select id="receiving-kind"><option value="received">What we received</option><option value="invoice">Invoice</option></select></label><label>Excel, CSV, text, or PDF<input id="receiving-file" type="file" accept=".xlsx,.xlsm,.xls,.csv,.txt,.pdf"></label></div><label>Or enter part numbers manually<input id="manual-parts" placeholder="Example: BP-42, AF-10"></label><button id="preview-receiving" class="btn pri" type="button">Find matching part numbers</button><p id="receiving-status" class="panel-status" role="status"></p></div><div id="receiving-preview" class="form-card" hidden><h2>Review matching parts</h2><p class="muted">Selected rows will be removed from their notes, checklists, or open orders after you confirm.</p><div id="receiving-matches" class="record-list"></div><button id="confirm-receiving" class="btn pri" type="button">Confirm received parts</button></div></section>
+     <section id="automate-panel" class="workspace-panel" hidden>
+      <div class="bar"><div><span class="eyebrow">AUTOMATE BRIDGE</span><h1>AutoMate lookup</h1><p>Read part and order details from the AutoMate staging copy.</p></div></div>
+      <div class="form-card"><p class="muted">This connection is read-only. It does not import AutoMate passwords, PINs, or hashes. The local bridge must be running on the AutoMate network.</p>
+       <div class="form-grid">
+        <form id="automate-part-form"><label for="automate-part-number">Part number</label><input id="automate-part-number" maxlength="80" required placeholder="Enter exact part number"><button class="btn pri" type="submit">Look up part</button></form>
+        <form id="automate-order-form"><label for="automate-order-number">AutoMate order number</label><input id="automate-order-number" type="number" min="1" step="1" required placeholder="Enter order number"><button class="btn pri" type="submit">Look up order</button></form>
+       </div>
+       <p id="automate-status" class="panel-status" role="status">Waiting for a lookup.</p><pre id="automate-result" class="automate-result" hidden></pre>
+      </div>
+     </section>     <section id="coworkers-panel" class="workspace-panel" hidden><div class="bar"><div><span class="eyebrow">TEAM ACCESS</span><h1>Coworkers</h1><p>Create username and password accounts for your team.</p></div></div><div class="form-card"><form id="coworker-form"><div class="form-grid"><label>Username<input id="coworker-username" minlength="3" maxlength="32" pattern="[A-Za-z0-9_.-]{3,32}" required></label><label>Temporary password<input id="coworker-password" type="password" minlength="12" maxlength="128" required></label></div><button class="btn pri" type="submit">Create coworker account</button></form><p id="coworker-status" class="panel-status" role="status"></p></div></section>
+     <section id="backup-panel" class="workspace-panel" hidden><div class="bar"><div><span class="eyebrow">SUPABASE BACKUP</span><h1>Backups</h1><p>Download a text backup of notes, orders, and inventory.</p></div></div><div class="form-card"><p id="backup-location">The text file is generated from your cloud data when downloaded.</p><a id="download-backup" class="btn pri link-button" href="#">Download Jeffery text backup</a></div></section>
+    </main>
+   </div>
+  </div>
+  <dialog id="editor-dialog" class="editor-dialog" aria-labelledby="order-form-title">
+   <form id="order-form" class="editor-form">
+    <header class="editor-header"><div><span class="eyebrow">SHARED WORKSPACE</span><h2 id="order-form-title">New order</h2></div><button id="close-editor" class="icon-button" type="button" aria-label="Close editor">Ã—</button></header>
+    <input id="order-id" type="hidden"><input id="order-revision" type="hidden">
+    <div class="form-grid editor-fields">
+     <label>Type<select id="entry-kind"><option value="order">Customer order</option><option value="list">Parts checklist</option><option value="note">Note</option></select></label>
+     <label class="wide-field">Title<input id="order-title" maxlength="100" required placeholder="Give this a clear title"></label>
+     <label class="business-order-field">Customer<input id="order-customer" maxlength="100" placeholder="Customer name"></label>
+     <label class="business-order-field">Order reference<input id="order-ref" maxlength="80" placeholder="Invoice or order number"></label>
+     <label class="business-order-field">Status<select id="order-status"><option value="new">New</option><option value="preparing">Preparing</option><option value="ready">Ready</option><option value="delivered">Delivered</option><option value="cancelled">Cancelled</option></select></label>
+     <label class="business-order-field">Payment received (JMD)<input id="order-paid" type="number" min="0" max="1000000000000" step="0.01" value="0.00" inputmode="decimal"></label>
+    </div>
+    <section class="line-entry-section"><div class="section-title"><div><h3>Add a part</h3><p>Part number is ready here as soon as the editor opens.</p></div><span class="step-badge">PARTS</span></div>
+     <div class="part-entry"><label class="note-catalog-field" hidden>Choose from parts<select id="note-part-select"><option value="">Select a catalog partâ€¦</option></select></label><label>Part number<input id="line-part" maxlength="80" placeholder="Scan or type part #" autocomplete="off"></label><label>Description<input id="line-description" maxlength="200" placeholder="Part description"></label><label>Qty<input id="line-quantity" type="number" min="1" max="9999" value="1"></label><label class="business-order-field">Unit price (JMD)<input id="line-price" type="number" min="0" max="10000000" step="0.01" value="0.00" inputmode="decimal"></label><button id="add-line" class="primary" type="button">Add part</button></div><p id="line-error" class="error" role="alert"></p>
     </section>
-  </main>
+    <div id="draft-lines" class="draft-lines"></div><div id="order-totals" class="order-totals"></div>
+    <label class="body-field">Details<textarea id="order-body" maxlength="10000" rows="3" placeholder="Add notes or context"></textarea></label>
+    <footer class="editor-footer"><button id="cancel-order" class="secondary" type="button">Cancel</button><button class="primary" type="submit">Save to shared workspace</button></footer>
+   </form>
+  </dialog>
+  <div id="message-alerts" class="message-alerts" aria-live="polite" aria-relevant="additions"></div>
   <noscript>Enable JavaScript to use Work Chat.</noscript>
 </body>
 </html>
