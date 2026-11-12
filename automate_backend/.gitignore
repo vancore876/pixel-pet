@@ -4,3 +4,4 @@
 bridge-agent.out.log
 bridge-agent.err.log
 __pycache__/
+.temp/
