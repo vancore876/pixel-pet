@@ -873,6 +873,21 @@
     setTimeout(() => $("line-part").focus(), 0);
   }
 
+  function normalizedPartNumber(value) {
+    return String(value || "").normalize("NFKC").trim().toLocaleLowerCase("en-US");
+  }
+
+  function existingNotePart(partNumber, exceptId = "") {
+    const key = normalizedPartNumber(partNumber);
+    if (!key) return null;
+    for (const record of state.business) {
+      if (record.id === exceptId || record.deleted || !["note", "list"].includes(record.entry?.kind)) continue;
+      const match = (record.entry?.checklist || []).find(row => normalizedPartNumber(row.part_number) === key);
+      if (match) return record;
+    }
+    return null;
+  }
+
   function closeOrderEditor() {
     const editor = $("editor-dialog");
     if (editor.open) editor.close();
@@ -990,6 +1005,7 @@
   });
   $("add-line").addEventListener("click", () => {
     const kind = $("entry-kind").value;
+    if (state.draftLines.length >= 2000) { $("line-error").textContent = "A note or order can contain at most 2,000 parts. Start another entry for additional parts."; return; }
     const part = $("line-part").value.trim();
     const description = $("line-description").value.trim();
     const quantity = Number($("line-quantity").value);
@@ -998,6 +1014,13 @@
     if (!description) { $("line-error").textContent = "Add a short description for this part."; $("line-description").focus(); return; }
     if (part && state.draftLines.some(row => String(row.part_number || "").trim().toLocaleLowerCase("en-US") === part.toLocaleLowerCase("en-US"))) {
       $("line-error").textContent = "Number can't be added. This exact part number is already on this note or order."; $("line-part").focus(); return;
+    }
+    if (part && ["note", "list"].includes(kind)) {
+      const previous = existingNotePart(part, $("order-id").value);
+      if (previous) {
+        $("line-error").textContent = `Number can't be added. ${part} is already on “${previous.entry.title || "another note"}”. Remove it there first.`;
+        $("line-part").focus(); return;
+      }
     }
     if (!Number.isInteger(quantity) || quantity < 1 || quantity > 9999) { $("line-error").textContent = "Quantity must be between 1 and 9,999."; $("line-quantity").focus(); return; }
     if (unitPrice === null || unitPrice > 1000000000) { $("line-error").textContent = "Enter a valid unit price up to JMD 10,000,000.00."; $("line-price").focus(); return; }
@@ -1070,12 +1093,13 @@
       state.inventory = merged;
       const summary = stock.summary || {};
       $("inventory-summary").replaceChildren();
-      for (const [label, value] of [["Catalog parts", catalog.total || catalog.items.length], ["Stocked parts", summary.item_count || stock.items.length], ["Low stock", summary.low_stock_count || 0]]) {
+      const catalogCount = catalog.has_more ? `${catalog.items.length}+` : catalog.items.length.toLocaleString();
+      for (const [label, value] of [["Catalog parts", catalogCount], ["Stocked parts", (summary.item_count ?? stock.items.length).toLocaleString()], ["Low stock", (summary.low_stock_count ?? 0).toLocaleString()]]) {
         const card = document.createElement("div"); card.className = "summary-card";
-        const number = document.createElement("strong"); number.textContent = Number(value).toLocaleString();
+        const number = document.createElement("strong"); number.textContent = String(value);
         const caption = document.createElement("span"); caption.textContent = label; card.append(number, caption); $("inventory-summary").append(card);
       }
-      renderInventory(); $("inventory-status").textContent = `${catalog.total.toLocaleString()} catalog matches · ${stock.items.length.toLocaleString()} stocked matches`;
+      renderInventory(); $("inventory-status").textContent = `${catalogCount} catalog matches · ${stock.has_more ? `${stock.items.length}+` : stock.items.length.toLocaleString()} stocked matches`;
     } catch (error) { if (sequence === state.inventorySearchSequence) $("inventory-status").textContent = error.message; }
   }
 
