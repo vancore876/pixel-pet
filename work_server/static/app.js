@@ -13,7 +13,7 @@
   const state = {
     token: "", user: null, users: [], peer: null, cursor: 0, messages: new Map(),
     drafts: new Map(), authEpoch: 0, conversationEpoch: 0, requests: new Set(),
-    pollTimer: null, notificationTimer: null, notificationBusy: false, directCursors: new Map(), announcedMessages: new Set(),
+    pollTimer: null, notificationTimer: null, notificationBusy: false, notificationCursor: null, notificationFailures: 0, messageFailures: 0, businessWriteBusy: false, announcedMessages: new Set(),
     usersTimer: null, dataTimer: null, pollBusy: null, sending: false, signingUp: false,
     business: [], businessCursor: 0, businessLoading: false, selectedNoteId: "", selectedOrderId: "", inventory: [], noteParts: null, inventorySearchSequence: 0, inventorySearchTimer: null, draftLines: [], receivingMatches: [], receivingPreviewId: "", automateBusy: false,
   };
@@ -223,7 +223,7 @@
     state.messages.clear();
     state.drafts.clear();
     state.pollBusy = null;
-    state.notificationBusy = false; state.directCursors.clear(); state.announcedMessages.clear();
+    state.notificationBusy = false; state.notificationCursor = null; state.notificationFailures = 0; state.messageFailures = 0; state.businessWriteBusy = false; state.announcedMessages.clear();
     state.business = []; state.businessCursor = 0; state.businessLoading = false;
     state.selectedNoteId = ""; state.selectedOrderId = "";
     state.sending = false;
@@ -266,7 +266,7 @@
       }
       state.token = data.token;
       state.user = data.user;
-      state.directCursors.clear(); state.announcedMessages.clear();
+      state.notificationCursor = null; state.notificationFailures = 0; state.messageFailures = 0; state.announcedMessages.clear();
       $("password").value = "";
       $("confirm-password").value = "";
       $("account-name").textContent = data.user.username;
@@ -284,10 +284,10 @@
       void fetchNotifications();
       loadBusiness();
       loadInventory();
-      if (epoch === state.authEpoch) state.usersTimer = setInterval(fetchUsers, 15000);
+      if (epoch === state.authEpoch) state.usersTimer = setInterval(() => { if (!document.hidden) fetchUsers(); }, 60000);
       if (epoch === state.authEpoch) state.dataTimer = setInterval(() => {
-        if (!document.hidden && state.token) loadBusiness();
-      }, 5000);
+        if (!document.hidden && state.token && (!$("notes-panel").hidden || !$("orders-panel").hidden)) loadBusiness();
+      }, 15000);
     } catch (error) {
       if (epoch === state.authEpoch) $("auth-error").textContent = error.message;
     } finally {
@@ -434,52 +434,48 @@
         more = data.has_more === true && data.messages.length > 0;
         initial = false;
       }
+      state.messageFailures = 0;
       status("Connected · New messages update automatically");
     } catch (error) {
+      if (epoch === state.authEpoch && conversation === state.conversationEpoch) state.messageFailures = Math.min(5, state.messageFailures + 1);
       if (epoch === state.authEpoch && conversation === state.conversationEpoch && state.token) status(`${error.message} Retrying…`, true);
     } finally {
       if (state.pollBusy === marker) state.pollBusy = null;
       if (epoch === state.authEpoch && conversation === state.conversationEpoch && state.token) {
-        state.pollTimer = setTimeout(() => fetchMessages(state.cursor === 0), 5000);
+        if (!$("chat-panel").hidden && !document.hidden) state.pollTimer = setTimeout(() => fetchMessages(state.cursor === 0), Math.min(120000, 5000 * 2 ** state.messageFailures));
       }
     }
   }
 
-  async function pollInboxConversation(key, path) {
-    const epoch = state.authEpoch;
-    const cursor = state.directCursors.get(key) || { id: 0, initialized: false };
-    const data = await request(path + (path.includes("?") ? "&" : "?") + `limit=100${cursor.id ? `&after_id=${cursor.id}` : ""}`);
-    if (epoch !== state.authEpoch || !state.token) return;
-    if (!Array.isArray(data.messages)) throw new Error("Could not check incoming messages.");
-    let lastId = cursor.id;
-    for (const message of data.messages) {
-      if (!Number.isSafeInteger(message.id) || typeof message.body !== "string" || typeof message.sender_username !== "string") {
-        throw new Error("An incoming message could not be read.");
-      }
-      lastId = Math.max(lastId, message.id);
-      if (cursor.initialized) notifyIncomingMessage(message);
-    }
-    state.directCursors.set(key, { id: lastId, initialized: cursor.initialized || data.has_more !== true });
-  }
-
+  // One authenticated feed for all conversations, independent of coworker count.
   async function fetchNotifications() {
     if (!state.token || state.notificationBusy) return;
+    clearTimeout(state.notificationTimer);
     state.notificationBusy = true;
     const epoch = state.authEpoch;
+    let more = false;
     try {
-      const activeChat = !document.hidden && !$("chat-panel").hidden;
-      if (!activeChat || state.peer !== null) await pollInboxConversation("team", "/api/messages");
-      const peers = state.users.filter(user => user.id !== state.user.id && (!activeChat || state.peer !== user.id));
-      const chunkSize = 5;
-      for (let offset = 0; offset < peers.length; offset += chunkSize) {
-        const batch = peers.slice(offset, offset + chunkSize);
-        await Promise.all(batch.map(user => pollInboxConversation(user.id, `/api/messages?peer_id=${user.id}`)));
-      }
+      const query = new URLSearchParams({limit: "100"});
+      if (state.notificationCursor !== null) query.set("after_id", String(state.notificationCursor));
+      const data = await request("/api/notifications?" + query);
+      if (epoch !== state.authEpoch || !state.token) return;
+      if (!Array.isArray(data?.messages) || !Number.isSafeInteger(data.cursor) ||
+          data.cursor < (state.notificationCursor ?? 0)) throw new Error("Could not check incoming messages.");
+      for (const message of data.messages) notifyIncomingMessage(message);
+      state.notificationCursor = data.cursor;
+      state.notificationFailures = 0;
+      more = data.has_more === true;
     } catch (error) {
-      if (epoch === state.authEpoch && state.token) status(error.message, true);
+      if (epoch === state.authEpoch && state.token) {
+        state.notificationFailures = Math.min(5, state.notificationFailures + 1);
+        status(error.message, true);
+      }
     } finally {
-      state.notificationBusy = false;
-      if (epoch === state.authEpoch && state.token) state.notificationTimer = setTimeout(fetchNotifications, 5000);
+      if (epoch === state.authEpoch && state.token) {
+        state.notificationBusy = false;
+        state.notificationTimer = setTimeout(fetchNotifications,
+          more ? 1000 : Math.min(120000, (document.hidden ? 15000 : 5000) * 2 ** state.notificationFailures));
+      }
     }
   }
 
@@ -530,6 +526,8 @@
       button.classList.toggle("selected", selected);
       button.setAttribute("aria-pressed", String(selected));
     });
+    if (id === "chat-panel") fetchMessages(state.cursor === 0);
+    else clearTimeout(state.pollTimer);
     if (id === "notes-panel" || id === "orders-panel") loadBusiness();
     if (id === "inventory-panel") loadInventory();
   }
@@ -609,9 +607,9 @@
             byId.set(record.id, record);
           }
         }
-        if (!data.has_more) break;
-        if (data.cursor <= cursor) throw new Error("The shared notebook returned an invalid cursor.");
+        if (!Number.isSafeInteger(data.cursor) || data.cursor < cursor || (data.has_more && data.cursor === cursor)) throw new Error("The shared notebook returned an invalid cursor.");
         cursor = data.cursor;
+        if (!data.has_more) break;
       }
       state.businessCursor = Math.max(cursor, state.businessCursor);
       if (recordsChanged || state.business.length === 0) {
@@ -1032,6 +1030,7 @@
 
   $("order-form").addEventListener("submit", async event => {
     event.preventDefault();
+    if (state.businessWriteBusy) return;
     const id = $("order-id").value || newHexId();
     const previous = state.business.find(row => row.id === id)?.entry;
     const now = Date.now() / 1000;
@@ -1049,6 +1048,7 @@
       updated: now, written: now, repeat_minutes: 0, next_due: null, priority: previous?.priority || "normal",
       order_type: previous?.order_type || "order", currency: "JMD", payment_received_cents: paid,
       highlights: previous?.highlights || []};
+    state.businessWriteBusy = true;
     try {
       const statusHost = kind === "note" ? "notes-status" : "orders-status";
       $(statusHost).textContent = "Saving to Supabase...";
@@ -1057,6 +1057,7 @@
       closeOrderEditor();
       await loadBusiness();
     } catch (error) { $(kind === "note" ? "notes-status" : "orders-status").textContent = error.message + " Refresh before trying again."; }
+    finally { state.businessWriteBusy = false; }
   });
 
   async function deleteOrder(record) {
@@ -1227,7 +1228,7 @@
     } catch (error) { $("coworker-status").textContent = error.message; }
   });
   document.addEventListener("visibilitychange", () => {
-    if (!document.hidden && state.token) { fetchUsers(); fetchMessages(state.cursor === 0); fetchNotifications(); }
+    if (!document.hidden && state.token) { fetchUsers(); if (!$("chat-panel").hidden) fetchMessages(state.cursor === 0); fetchNotifications(); }
     else clearTimeout(state.pollTimer);
   });
   const bootStages = [
